@@ -1,0 +1,112 @@
+---
+title: 'Tooling, Testing & Deployment'
+description: 'A module-level overview comparing the Astro toolchain with the Next.js/React toolchain for experienced React developers.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+If you have shipped a Next.js application you already own the mental model for this module: a CLI that drives dev/build/preview, TypeScript checking, a configuration file, an integration ecosystem, and a deployment target. Astro maps one-to-one to every one of those tools — the commands and file names just change.
+
+## The toolchain at a glance
+
+| Next.js / React | Astro equivalent |
+|---|---|
+| `next dev` | `astro dev` |
+| `next build` | `astro build` |
+| `next start` | `astro preview` |
+| `next lint` | `astro check` (type-checks `.astro` files) |
+| `next.config.js` | `astro.config.mjs` |
+| Next.js plugins (webpack) | Astro integrations (`@astrojs/*`) |
+| `npm install @next/bundle-analyzer` | `npx astro add react` / `npx astro add tailwind` |
+| Vercel / Netlify for Next.js | Vercel / Netlify adapters for Astro |
+| `tsc --noEmit` | `astro check` covers `.astro` + `.ts` |
+| Jest / Vitest | Vitest (same config; Astro has no test runner) |
+
+## Lessons in this module
+
+| Lesson | What you will learn |
+|---|---|
+| **Astro CLI** | `astro dev` / `build` / `preview` / `add` / `check`; `package.json` scripts |
+| **Integrations** | `npx astro add`, `astro.config.mjs`, the integration ecosystem |
+| **`astro check`** | Type-checking `.astro` files, editor tooling, vs `tsc`/ESLint |
+| **Static vs SSR** | `output: 'static'` vs `output: 'server'`, adapters, `prerender` |
+| **Deploy** | `astro build`, static hosts, SSR adapters, GitHub Actions CI |
+
+export const overviewNext = `// next.config.js
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  images: { domains: ['cdn.example.com'] },
+};
+module.exports = nextConfig;
+
+// package.json scripts (typical Next project)
+// "dev":   "next dev"
+// "build": "next build"
+// "start": "next start"
+// "lint":  "next lint"
+// "type-check": "tsc --noEmit"`;
+
+export const overviewAstro = `// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+import tailwind from '@astrojs/tailwind';
+
+export default defineConfig({
+  integrations: [react(), tailwind()],
+});
+
+// package.json scripts (typical Astro project)
+// "dev":     "astro dev"
+// "build":   "astro build"
+// "preview": "astro preview"
+// "check":   "astro check"`;
+
+<ReactAstro client:visible react={overviewNext} astro={overviewAstro} reactTitle="Next.js config" astroTitle="Astro config" />
+
+<Diff title="Next.js toolchain vs Astro toolchain">
+- Both use Vite under the hood (Astro v3+) and standard `npm`/`pnpm`/`yarn` scripts.
+- `astro check` replaces the combination of `tsc --noEmit` + an ESLint rule for `.astro` syntax.
+- `astro build` always outputs to `dist/` — no `.next/` cache directory to clean.
+- Adapters (Vercel, Netlify, Node) replace the concept of Next.js deployment targets.
+</Diff>
+
+export const quizToolingIndex = [
+  {
+    q: "Which Astro CLI command is the closest equivalent to `next build`?",
+    options: [
+      "`astro preview`",
+      "`astro check`",
+      "`astro build`",
+      "`astro start`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What does `astro check` do that has no single Next.js equivalent?",
+    options: [
+      "Runs unit tests against your components",
+      "Type-checks both `.astro` files and `.ts` files in one pass",
+      "Lints CSS inside Astro components",
+      "Validates your `astro.config.mjs` schema",
+    ],
+    answer: 1,
+  },
+  {
+    q: "In Astro, where does the build output land by default?",
+    options: [
+      "`.next/`",
+      "`build/`",
+      "`out/`",
+      "`dist/`",
+    ],
+    answer: 3,
+  },
+];
+
+<Quiz client:visible id="tooling/index" questions={quizToolingIndex} />
+
+<ProgressTracker client:visible id="tooling/index" />

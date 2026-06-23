@@ -1,0 +1,149 @@
+---
+title: 'Content Collections'
+description: 'Use src/content/, defineCollection, and zod schemas in src/content.config.ts for type-safe MD/MDX — versus MDX and contentlayer in Next.js.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In Next.js you often reach for `contentlayer` or raw `fs` + `gray-matter` to load MDX files with type safety. Astro has content collections built in: put MD/MDX files in `src/content/<collection>/`, define a schema with zod in `src/content.config.ts`, and use `getCollection('blog')` anywhere in your project — fully typed, no third-party library required.
+
+> Needs a full Astro project to run. Use `npm create astro@latest` to scaffold one.
+
+## Defining a collection: contentlayer vs Astro
+
+export const collectionReact = `// contentlayer.config.ts (Next.js)
+import { defineDocumentType, makeSource } from 'contentlayer/source-files';
+
+export const Post = defineDocumentType(() => ({
+  name: 'Post',
+  filePathPattern: 'blog/**/*.mdx',
+  contentType: 'mdx',
+  fields: {
+    title: { type: 'string', required: true },
+    date:  { type: 'date',   required: true },
+    tags:  { type: 'list', of: { type: 'string' } },
+  },
+}));
+
+export default makeSource({ contentDirPath: 'content', documentTypes: [Post] });
+
+// In a page:
+// import { allPosts } from 'contentlayer/generated';`;
+
+export const collectionAstro = `// src/content.config.ts (Astro)
+import { defineCollection, z } from 'astro:content';
+
+const blog = defineCollection({
+  type: 'content',
+  schema: z.object({
+    title: z.string(),
+    date:  z.coerce.date(),
+    tags:  z.array(z.string()).optional(),
+  }),
+});
+
+export const collections = { blog };
+
+// In a page:
+// import { getCollection } from 'astro:content';
+// const posts = await getCollection('blog');`;
+
+<ReactAstro client:visible react={collectionReact} astro={collectionAstro} />
+
+The schema lives in `src/content.config.ts` — Astro validates every file in the collection at build time and surfaces type errors in your editor.
+
+## content.config.ts
+
+```ts
+// src/content.config.ts
+import { defineCollection, z } from 'astro:content';
+
+const blog = defineCollection({
+  type: 'content', // 'content' for MD/MDX, 'data' for JSON/YAML
+  schema: z.object({
+    title:       z.string(),
+    description: z.string().optional(),
+    date:        z.coerce.date(),
+    draft:       z.boolean().default(false),
+    tags:        z.array(z.string()).default([]),
+  }),
+});
+
+export const collections = { blog };
+```
+
+## Listing collection entries
+
+```astro
+---
+// src/pages/blog/index.astro
+import { getCollection } from 'astro:content';
+
+const posts = await getCollection('blog', ({ data }) => !data.draft);
+const sorted = posts.sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Blog</title></head>
+  <body>
+    <h1>Blog</h1>
+    <ul>
+      {sorted.map((post) => (
+        <li>
+          <a href={`/blog/${post.slug}/`}>{post.data.title}</a>
+          <time>{post.data.date.toLocaleDateString()}</time>
+        </li>
+      ))}
+    </ul>
+  </body>
+</html>
+```
+
+The second argument to `getCollection` is an optional filter function — here it removes drafts. `post.data` is fully typed from the zod schema.
+
+<Diff title="contentlayer vs Astro content collections">
+- contentlayer: third-party library, separate config file, generates types into `contentlayer/generated` — requires a build step.
+- Astro: **built in** — `src/content.config.ts` + `astro:content` module, no external dependency.
+- Both validate frontmatter fields at build time with type safety.
+- Astro collections support a **filter callback** in `getCollection()` — no need to filter after the fact.
+- contentlayer is Next.js-specific; Astro collections work with any Astro adapter (static, Node, Vercel, Cloudflare…).
+</Diff>
+
+export const quizContentCollections = [
+  {
+    q: "Where do you define the schema for a content collection?",
+    options: [
+      "In each MDX file's frontmatter",
+      "In `astro.config.mjs`",
+      "In `src/content.config.ts` using `defineCollection` and zod",
+      "In a `schema.json` file",
+    ],
+    answer: 2,
+  },
+  {
+    q: "How do you retrieve all entries from a collection named 'blog'?",
+    options: [
+      "`import { allPosts } from 'contentlayer/generated'`",
+      "`await getCollection('blog')`",
+      "`Astro.glob('./blog/*.md')`",
+      "`fetch('/api/blog')`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What is the main advantage of content collections over raw `fs` + `gray-matter`?",
+    options: [
+      "Full TypeScript type safety and validation via zod schemas",
+      "Faster build times",
+      "Support for remote MDX files",
+      "Automatic CSS scoping",
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content/content-collections" questions={quizContentCollections} />
+
+<ProgressTracker client:visible id="content/content-collections" />

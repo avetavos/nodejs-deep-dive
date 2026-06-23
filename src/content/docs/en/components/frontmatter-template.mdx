@@ -1,0 +1,131 @@
+---
+title: Frontmatter & Template
+description: The --- frontmatter block runs at build/server time. The HTML template renders to static markup.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+A React component has two logical sections: the **function body** (where you declare variables, call hooks, and run logic) and the **returned JSX** (what renders). An Astro component mirrors this split with an explicit fence.
+
+```
+---
+// frontmatter: JS/TS that runs at build or server time
+---
+<!-- template: HTML-first markup rendered to static HTML -->
+```
+
+The `---` pair is called the **component script** or **frontmatter**. Everything between the fences is plain TypeScript/JavaScript. Everything after the closing `---` is the template — an HTML superset where you can embed expressions with `{...}`.
+
+## Frontmatter: the component script
+
+Think of the frontmatter as the top of a React function, minus hooks and event handlers. You can:
+
+- Import other components, utilities, and data files.
+- Fetch data with `await` (the entire component runs on the server/build).
+- Destructure props from `Astro.props`.
+- Declare local variables that the template reads.
+
+export const frontmatterReact = `// Card.jsx  (function body = "frontmatter")
+import { formatDate } from './utils';
+
+export default function Card({ title, date }) {
+  // runs in the browser on every render
+  const formatted = formatDate(date);
+
+  return (
+    <div className="card">
+      <h2>{title}</h2>
+      <time>{formatted}</time>
+    </div>
+  );
+}`;
+
+export const frontmatterAstro = `---
+// Card.astro  (frontmatter = component script)
+import { formatDate } from './utils';
+
+// runs ONCE at build time — never in the browser
+const { title, date } = Astro.props;
+const formatted = formatDate(date);
+---
+<div class="card">
+  <h2>{title}</h2>
+  <time>{formatted}</time>
+</div>`;
+
+<ReactAstro client:visible react={frontmatterReact} astro={frontmatterAstro} />
+
+## The HTML template
+
+After the closing `---` you write HTML. It is **not** JSX:
+
+- Use `class` not `className`.
+- Boolean attributes work the standard HTML way.
+- Self-closing tags follow HTML rules (but Astro is lenient — both `<img />` and `<img>` work).
+- Embed any JavaScript expression with `{expr}`.
+
+export const templateCode = `---
+const items = ["Astro", "React", "TypeScript"];
+const hero = { title: "Welcome", subtitle: "Zero JS by default" };
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>{hero.title}</title></head>
+  <body>
+    <h1>{hero.title}</h1>
+    <p>{hero.subtitle}</p>
+    <ul>
+      {items.map((item) => <li>{item}</li>)}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={templateCode} />
+
+<Diff title="React function body vs Astro frontmatter">
+- React function body runs **in the browser** on every render; hooks (`useState`, `useEffect`) live here.
+- Astro frontmatter runs **at build/server time** — never in the browser. No hooks, no browser APIs.
+- React template is JSX: `className`, `htmlFor`, camelCase events.
+- Astro template is HTML-first: `class`, `for`, standard HTML attributes.
+- Both support `{expr}` for dynamic values; Astro's template expressions render **once** — no reactivity.
+</Diff>
+
+export const quizFrontmatter = [
+  {
+    q: "Where would you write `const data = await fetch('/api/posts')` in an Astro component?",
+    options: [
+      "Inside a useEffect hook",
+      "In the --- frontmatter block",
+      "Directly in the HTML template",
+      "In a separate .js file only",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which attribute name is correct in an Astro HTML template?",
+    options: ["`className=\"btn\"`", "`class=\"btn\"`", "`cls=\"btn\"`", "`htmlClass=\"btn\"`"],
+    answer: 1,
+  },
+  {
+    q: "Can you call React hooks like useState inside an Astro frontmatter block?",
+    options: [
+      "Yes, Astro supports all React hooks",
+      "Yes, but only useState and useEffect",
+      "No — frontmatter runs at build time; hooks require a browser runtime",
+      "Only if you import React explicitly",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What is the closing delimiter of the Astro frontmatter block?",
+    options: ["`*/`", "`---`", "`###`", "`</script>`"],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/frontmatter-template" questions={quizFrontmatter} />
+
+<ProgressTracker client:visible id="components/frontmatter-template" />

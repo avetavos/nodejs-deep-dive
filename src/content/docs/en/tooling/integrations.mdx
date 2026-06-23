@@ -1,0 +1,173 @@
+---
+title: Integrations
+description: 'Add React, Tailwind, sitemap, and more with npx astro add. Understand astro.config.mjs and how it compares to next.config.js.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In Next.js you extend the framework through `next.config.js` — webpack plugins, Babel transforms, `rewrites`, `redirects`, and third-party packages that patch into the build pipeline. Astro has a first-class concept called **integrations** that covers the same surface area but is more explicit: each integration is an npm package that is registered in `astro.config.mjs` and can touch the build pipeline, dev server, and output.
+
+## `astro.config.mjs` vs `next.config.js`
+
+export const configNext = `// next.config.js
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+});
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  swcMinify: true,
+  images: {
+    domains: ['images.unsplash.com'],
+  },
+  async redirects() {
+    return [
+      { source: '/old', destination: '/new', permanent: true },
+    ];
+  },
+};
+
+module.exports = withBundleAnalyzer(nextConfig);`;
+
+export const configAstro = `// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+import tailwind from '@astrojs/tailwind';
+import sitemap from '@astrojs/sitemap';
+import vercel from '@astrojs/vercel/serverless';
+
+export default defineConfig({
+  site: 'https://example.com',
+  integrations: [
+    react(),
+    tailwind(),
+    sitemap(),
+  ],
+  adapter: vercel(),
+  redirects: {
+    '/old': '/new',
+  },
+});`;
+
+<ReactAstro client:visible react={configNext} astro={configAstro} reactTitle="next.config.js" astroTitle="astro.config.mjs" />
+
+The `defineConfig` helper gives you full TypeScript autocomplete in your editor. All integrations are listed in the `integrations` array — there is no wrapping/composing pattern like `withBundleAnalyzer(nextConfig)`.
+
+## Adding integrations with `astro add`
+
+```bash
+# UI framework integrations
+npx astro add react          # @astrojs/react — enables .tsx islands
+npx astro add preact         # @astrojs/preact — lighter React-compatible alternative
+npx astro add svelte         # @astrojs/svelte
+npx astro add vue            # @astrojs/vue
+
+# Styling
+npx astro add tailwind       # @astrojs/tailwind — auto-injects Tailwind into every page
+
+# Site utilities
+npx astro add sitemap        # @astrojs/sitemap — generates sitemap.xml at build
+npx astro add mdx            # @astrojs/mdx    — MDX support for content pages
+
+# SSR adapters (pick one)
+npx astro add vercel         # @astrojs/vercel
+npx astro add netlify        # @astrojs/netlify
+npx astro add node           # @astrojs/node (self-hosted Node.js)
+npx astro add cloudflare     # @astrojs/cloudflare
+```
+
+Each command installs the package **and** edits `astro.config.mjs` for you. You can always edit the config by hand afterwards.
+
+## Integration shape
+
+An Astro integration is just a function that returns a config object. Here is what a minimal custom integration looks like:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+
+function myPlugin() {
+  return {
+    name: 'my-plugin',
+    hooks: {
+      'astro:build:done': ({ dir }) => {
+        console.log('Build finished. Output:', dir.pathname);
+      },
+    },
+  };
+}
+
+export default defineConfig({
+  integrations: [myPlugin()],
+});
+```
+
+You will rarely write custom integrations — the official `@astrojs/*` packages cover the common cases — but understanding the shape helps when you read integration source code.
+
+## Passing options to integrations
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+import tailwind from '@astrojs/tailwind';
+
+export default defineConfig({
+  integrations: [
+    react({
+      include: ['**/interactive/**'],  // only hydrate components in this dir
+    }),
+    tailwind({
+      applyBaseStyles: false,          // skip Tailwind's base reset
+    }),
+  ],
+});
+```
+
+<Diff title="next.config.js vs astro.config.mjs">
+- Next.js uses CommonJS `module.exports`; Astro uses ESM `export default defineConfig()`.
+- Next.js wraps plugins with HOF pattern (`withX(nextConfig)`); Astro pushes everything into the `integrations: []` array.
+- `npx astro add` automates installation + config; Next.js plugins require manual `require()` + wrap.
+- Both support `redirects`, `rewrites`, and environment variable injection at the config layer.
+</Diff>
+
+export const quizIntegrations = [
+  {
+    q: "How do you add the React integration to an Astro project?",
+    options: [
+      "`npm install react react-dom` only — Astro auto-detects it",
+      "`npx astro add react` — installs the package and updates `astro.config.mjs`",
+      "Add `jsx: 'react'` to `tsconfig.json`",
+      "Import React inside your `.astro` frontmatter",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What is the Astro equivalent of the Next.js `withBundleAnalyzer(nextConfig)` HOF composition pattern?",
+    options: [
+      "Wrap `defineConfig` with a custom function",
+      "Add the integration to the `integrations: []` array in `defineConfig`",
+      "Use `astro.config.ts` instead of `.mjs` to enable composition",
+      "There is no equivalent — Astro does not support plugins",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which file does `npx astro add tailwind` modify automatically?",
+    options: [
+      "`tailwind.config.js`",
+      "`package.json`",
+      "`astro.config.mjs`",
+      "`src/styles/global.css`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="tooling/integrations" questions={quizIntegrations} />
+
+<ProgressTracker client:visible id="tooling/integrations" />

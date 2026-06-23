@@ -1,0 +1,161 @@
+---
+title: Using React in Astro
+description: 'Add the React integration, drop your .jsx components into .astro files, and they work as-is.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+This is the headline feature: **your existing React components work inside Astro with zero modifications.** No rewriting, no converting to `.astro`. Add the integration, import the file, add a directive — done.
+
+## Step 1: Add the React integration
+
+Run this in your Astro project:
+
+```bash
+npx astro add react
+```
+
+This installs `@astrojs/react`, `react`, and `react-dom`, then patches `astro.config.mjs` for you automatically.
+
+> **Run locally after `npx astro add react`.** React islands require the `@astrojs/react` integration and a separate `.jsx`/`.tsx` file — they cannot run in the minimal StackBlitz playground used by this course.
+
+## Step 2: Write a React component
+
+Your React components are plain `.jsx` or `.tsx` files. Nothing special needed:
+
+```jsx
+// src/components/Counter.jsx
+import { useState } from 'react';
+
+export default function Counter({ start = 0 }) {
+  const [count, setCount] = useState(start);
+  return (
+    <div>
+      <p>Count: {count}</p>
+      <button onClick={() => setCount(count + 1)}>+1</button>
+    </div>
+  );
+}
+```
+
+## Step 3: Use it in an .astro page
+
+Import the `.jsx` file into a `.astro` page and add a `client:` directive:
+
+```astro
+---
+import Counter from '../components/Counter.jsx';
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Counter demo</title></head>
+  <body>
+    <h1>My Page</h1>
+    <p>This heading is static HTML — zero JS.</p>
+    <Counter client:load start={5} />
+  </body>
+</html>
+```
+
+Without `client:load` the component renders to **static HTML** (no interactivity). Add the directive and Astro ships the React runtime + your component JS to the browser and hydrates it.
+
+## Side by side: React app vs Astro page with a React island
+
+export const usingReactApp = `// React app — everything in one tree
+// src/App.jsx
+import Counter from './Counter';
+import Header from './Header';
+
+export default function App() {
+  return (
+    <>
+      <Header />         {/* part of React tree */}
+      <Counter start={5} />  {/* part of React tree */}
+    </>
+  );
+}`;
+
+export const usingReactAstro = `---
+// Astro page — Header is .astro (zero JS),
+// Counter is a React island
+import Header from '../components/Header.astro';
+import Counter from '../components/Counter.jsx';
+---
+<html lang="en">
+  <body>
+    <Header />                    <!-- static HTML -->
+    <Counter client:load start={5} /> <!-- React island -->
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={usingReactApp} astro={usingReactAstro} />
+
+## Your whole React codebase can move over
+
+Hooks, context, third-party React libraries, component composition — all of it works inside a React island exactly as it does in a React app. You are not giving anything up; you are just choosing which parts of the page need it.
+
+```jsx
+// src/components/SearchBar.jsx — a real-world island
+import { useState, useCallback } from 'react';
+import { useDebounce } from 'use-debounce'; // third-party hook
+
+export default function SearchBar({ onSearch }) {
+  const [query, setQuery] = useState('');
+  const [debouncedQuery] = useDebounce(query, 300);
+
+  // useEffect, context, custom hooks — all fine inside an island
+  return (
+    <input
+      value={query}
+      onChange={e => setQuery(e.target.value)}
+      placeholder="Search..."
+    />
+  );
+}
+```
+
+<Diff title="React component in a React app vs as an Astro island">
+- The `.jsx` file is **identical** — no changes needed.
+- In React: imported and used inside another React component; part of one tree.
+- In Astro: imported inside a `.astro` file; becomes an island with `client:*`.
+- Hooks, context, third-party libraries all work inside the island exactly as before.
+</Diff>
+
+export const quizUsingReact = [
+  {
+    q: "What command adds React support to an Astro project?",
+    options: [
+      "`npm install react react-dom`",
+      "`npx astro add react`",
+      "`npx create-react-app .`",
+      "`astro install @astrojs/react`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What happens if you import a React component into an .astro file but omit the `client:*` directive?",
+    options: [
+      "Astro throws a build error",
+      "The component hydrates with React's default behavior",
+      "The component renders to static HTML with no JavaScript shipped",
+      "The component is ignored entirely",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Do you need to modify your existing React .jsx components to use them as Astro islands?",
+    options: [
+      "Yes — rename them to .astro",
+      "Yes — replace hooks with Astro equivalents",
+      "No — they work as-is; just import and add a client directive",
+      "Only if they use useState",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="islands/using-react" questions={quizUsingReact} />
+
+<ProgressTracker client:visible id="islands/using-react" />

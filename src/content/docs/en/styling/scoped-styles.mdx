@@ -1,0 +1,170 @@
+---
+title: 'Scoped Styles'
+description: 'A plain <style> block in .astro is auto-scoped to that component by the compiler — no CSS Modules or styled-components setup needed.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In React you scope styles to a component by naming your file `Button.module.css` and importing it — the bundler rewrites class names to unique hashes at build time. In Astro you write plain CSS inside a `<style>` block in the same `.astro` file. The compiler adds a unique data attribute hash to every selector and every HTML element in that component, producing the same effect with zero configuration.
+
+## Side-by-side comparison
+
+export const scopedReact = `// Button.tsx  +  Button.module.css
+// Button.module.css
+.button { background: #6366f1; color: #fff; border-radius: 6px; padding: .5rem 1rem; border: none; cursor: pointer; }
+.button:hover { background: #4f46e5; }
+
+// Button.tsx
+import styles from './Button.module.css';
+export default function Button({ label }: { label: string }) {
+  return <button className={styles.button}>{label}</button>;
+}`;
+
+export const scopedAstro = `---
+// Button.astro
+const { label } = Astro.props;
+---
+<button class="button">{label}</button>
+
+<style>
+  .button { background: #6366f1; color: #fff; border-radius: 6px; padding: .5rem 1rem; border: none; cursor: pointer; }
+  .button:hover { background: #4f46e5; }
+</style>`;
+
+<ReactAstro client:visible react={scopedReact} astro={scopedAstro} />
+
+What the Astro compiler produces under the hood:
+
+```html
+<!-- compiled output — you never write this manually -->
+<button class="button astro-aBcD1234">Click me</button>
+
+<style>
+  .button.astro-aBcD1234 { background: #6366f1; ... }
+</style>
+```
+
+The hash suffix (`astro-aBcD1234`) is injected automatically. A `.button` rule in a different component gets a different hash, so the styles never collide.
+
+## What can go inside the style block
+
+The `<style>` block accepts standard CSS — custom properties, media queries, pseudo-selectors, nesting, `@keyframes`, anything your target browsers support. No CSS-in-JS API to learn.
+
+export const scopedFeaturesReact = `// Card.module.css
+.card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; transition: transform .15s; }
+.card:hover { transform: translateY(-2px); }
+@media (max-width: 480px) { .card { padding: .75rem; } }
+
+// Card.tsx
+import styles from './Card.module.css';
+export default function Card({ title }: { title: string }) {
+  return <div className={styles.card}><h2>{title}</h2></div>;
+}`;
+
+export const scopedFeaturesAstro = `---
+// Card.astro
+const { title } = Astro.props;
+---
+<div class="card"><h2>{title}</h2></div>
+
+<style>
+  .card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; transition: transform .15s; }
+  .card:hover { transform: translateY(-2px); }
+  @media (max-width: 480px) { .card { padding: .75rem; } }
+</style>`;
+
+<ReactAstro client:visible react={scopedFeaturesReact} astro={scopedFeaturesAstro} />
+
+## Runnable example
+
+export const scopedCode = `---
+const items = ["Dashboard", "Projects", "Settings"];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Scoped styles</title></head>
+  <body>
+    <nav>
+      {items.map(item => (
+        <a href="#" class="nav-link">{item}</a>
+      ))}
+    </nav>
+    <main>
+      <div class="card">
+        <h1>Scoped Styles Demo</h1>
+        <p>The <code>.card</code> and <code>.nav-link</code> styles live in this file and are scoped here by the Astro compiler — they cannot bleed into other components.</p>
+      </div>
+    </main>
+  </body>
+</html>
+
+<style>
+  body { font-family: sans-serif; margin: 0; background: #f8fafc; }
+  nav { background: #1e293b; padding: .75rem 1.5rem; display: flex; gap: 1rem; }
+  .nav-link { color: #94a3b8; text-decoration: none; font-size: .875rem; }
+  .nav-link:hover { color: #fff; }
+  main { padding: 2rem; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1.5rem; max-width: 480px; }
+  .card h1 { font-size: 1.25rem; margin: 0 0 .75rem; color: #1e293b; }
+  .card p { color: #64748b; line-height: 1.6; margin: 0; }
+  code { background: #f1f5f9; padding: .1em .35em; border-radius: 4px; font-size: .875em; }
+</style>`;
+
+<AstroPlayground client:visible code={scopedCode} />
+
+<Diff title="CSS Modules vs Astro scoped styles">
+- CSS Modules: separate `.module.css` file, `import styles from ...`, `className={styles.button}`.
+- Astro: `<style>` block in the same `.astro` file, plain `class="button"`, no import needed.
+- Both: compiler adds a unique hash so class names never collide across components.
+- Astro advantage: plain CSS syntax — no camelCase property access, no template literal API.
+</Diff>
+
+export const quizScoped = [
+  {
+    q: "How does Astro prevent styles in one component from affecting another?",
+    options: [
+      "You must use CSS Modules — plain CSS is always global",
+      "The compiler adds a unique data-attribute hash to selectors and elements in each component",
+      "Astro uses Shadow DOM to isolate styles",
+      "You must prefix every class with the component name manually",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which CSS features can you use inside an Astro `<style>` block?",
+    options: [
+      "Only class selectors — IDs and pseudo-selectors are not supported",
+      "A subset: no media queries or keyframes",
+      "Any standard CSS — media queries, pseudo-selectors, keyframes, custom properties",
+      "Only inline property declarations, no rules",
+    ],
+    answer: 2,
+  },
+  {
+    q: "In Astro you write `class=\"card\"`. What does the compiled HTML attribute look like?",
+    options: [
+      "`class=\"card\"` — unchanged",
+      "`data-astro-card=\"true\"`",
+      "`class=\"card astro-XXXX\"` where XXXX is a per-component hash",
+      "`className=\"card__scoped\"`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "You need a hover transition on a card. Where do you write it in Astro?",
+    options: [
+      "In a separate `.module.css` file imported at the top of the .astro file",
+      "As an inline `style` attribute using JavaScript",
+      "Inside the `<style>` block in the same `.astro` file — plain CSS, no special syntax",
+      "In a global stylesheet — local styles do not support pseudo-selectors",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="styling/scoped-styles" questions={quizScoped} />
+
+<ProgressTracker client:visible id="styling/scoped-styles" />

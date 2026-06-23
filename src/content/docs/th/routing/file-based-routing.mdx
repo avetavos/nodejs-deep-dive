@@ -1,0 +1,156 @@
+---
+title: 'File-based Routing'
+description: 'วิธีที่ src/pages/*.astro แมปกับ URL รวมถึง index file และ nested folder'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน Next.js App Router ทุก `page.tsx` ภายใน `app/` จะกลายเป็น route ใน Astro หลักการเดียวกันนี้ใช้ได้แต่ convention เรียบง่ายกว่า: **ไฟล์ `.astro` ใดก็ตามภายใน `src/pages/` จะแมปกับ URL โดยตรง** ชื่อไฟล์คือ path segment
+
+> Multi-page routing ต้องการหลายไฟล์ — รัน example เหล่านี้ใน Astro project เต็มรูปแบบ (`npm create astro@latest`) ในเครื่องของคุณ
+
+## การแมปไฟล์ → URL
+
+ตารางด้านล่างแสดงวิธีที่ path ภายใน `src/pages/` กลายเป็น URL ซึ่งสะท้อน Next.js Pages Router convention — ถ้าคุณรู้จัก `/pages` อยู่แล้ว ก็รู้จัก Astro routing แล้ว
+
+| File path | URL |
+|---|---|
+| `src/pages/index.astro` | `/` |
+| `src/pages/about.astro` | `/about` |
+| `src/pages/blog/index.astro` | `/blog` |
+| `src/pages/blog/first-post.astro` | `/blog/first-post` |
+| `src/pages/contact.astro` | `/contact` |
+
+## การเปรียบเทียบแบบ side-by-side
+
+export const fileRoutingReact = `// Next.js App Router
+app/
+  page.tsx           → /
+  about/
+    page.tsx         → /about
+  blog/
+    page.tsx         → /blog
+    first-post/
+      page.tsx       → /blog/first-post
+
+// Next.js Pages Router
+pages/
+  index.tsx          → /
+  about.tsx          → /about
+  blog/
+    index.tsx        → /blog
+    first-post.tsx   → /blog/first-post`;
+
+export const fileRoutingAstro = `// Astro src/pages/
+src/pages/
+  index.astro        → /
+  about.astro        → /about
+  blog/
+    index.astro      → /blog
+    first-post.astro → /blog/first-post
+
+// ไม่ต้องมี page.tsx wrapper
+// ไฟล์ .astro คือ page นั้นเลย`;
+
+<ReactAstro client:visible react={fileRoutingReact} astro={fileRoutingAstro} reactTitle="Next.js" />
+
+## หน้าตาของไฟล์ page
+
+ไฟล์ page `.astro` ก็คือ `.astro` component ธรรมดา ความแตกต่างอยู่ที่ตำแหน่ง — ไฟล์ใน `src/pages/` จะถูกใช้เป็น route
+
+export const pageFileReact = `// app/about/page.tsx  (Next.js App Router)
+export default function AboutPage() {
+  return (
+    <main>
+      <h1>About</h1>
+      <p>Welcome to the about page.</p>
+    </main>
+  );
+}`;
+
+export const pageFileAstro = `---
+// src/pages/about.astro
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="About">
+  <main>
+    <h1>About</h1>
+    <p>Welcome to the about page.</p>
+  </main>
+</Layout>`;
+
+<ReactAstro client:visible react={pageFileReact} astro={pageFileAstro} reactTitle="Next.js" />
+
+## File tree ของ project
+
+นี่คือหน้าตาทั่วไปของ Astro project หลังเพิ่ม route สองสามเส้น:
+
+```
+src/
+├── layouts/
+│   └── Layout.astro          ← shared wrapper (ดูบทเรียน Layouts)
+└── pages/
+    ├── index.astro            → /
+    ├── about.astro            → /about
+    └── blog/
+        ├── index.astro        → /blog
+        └── first-post.astro   → /blog/first-post
+```
+
+<Diff title="Next.js pages vs Astro pages">
+- Next.js App Router: ทุก directory ต้องมีไฟล์ `page.tsx` จึงจะกลายเป็น route
+- Next.js Pages Router: `pages/index.tsx` → `/`; สะท้อน Astro ได้ใกล้เคียงที่สุด
+- Astro: ไฟล์ `.astro` ใดก็ได้ใน `src/pages/` กลายเป็น route — ไม่ต้องมี folder wrapper
+- ทั้งคู่: `index.astro` / `index.tsx` แมปกับ path ของ parent directory (`/blog` ไม่ใช่ `/blog/index`)
+- Astro ยังรองรับไฟล์ `.md` และ `.mdx` ใน `src/pages/` เป็น route ด้วย — มีประโยชน์มากสำหรับ content site
+</Diff>
+
+export const quizFileBased = [
+  {
+    q: "จะวางไฟล์ .astro ไว้ที่ใดเพื่อให้กลายเป็น route ใน Astro?",
+    options: [
+      "src/components/",
+      "src/layouts/",
+      "src/pages/",
+      "src/routes/",
+    ],
+    answer: 2,
+  },
+  {
+    q: "`src/pages/blog/index.astro` แมปกับ URL ใด?",
+    options: [
+      "/blog/index",
+      "/blog/index.astro",
+      "/blog/",
+      "/pages/blog/",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Next.js router convention ใดที่ใกล้เคียงกับ Astro file-based routing มากที่สุด?",
+    options: [
+      "App Router (app/feature/page.tsx)",
+      "Pages Router (pages/feature.tsx)",
+      "react-router `<Routes>` config",
+      "getServerSideProps dynamic routing",
+    ],
+    answer: 1,
+  },
+  {
+    q: "นอกจากไฟล์ .astro แล้ว ไฟล์ชนิดใดอีกที่วางใน src/pages/ แล้วสร้าง route ได้?",
+    options: [
+      ".jsx และ .tsx เท่านั้น",
+      ".html เท่านั้น",
+      "ไฟล์ .md และ .mdx",
+      "ไม่รองรับไฟล์ชนิดอื่น",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="routing/file-based-routing" questions={quizFileBased} />
+
+<ProgressTracker client:visible id="routing/file-based-routing" />

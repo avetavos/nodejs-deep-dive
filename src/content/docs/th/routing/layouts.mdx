@@ -1,0 +1,192 @@
+---
+title: Layouts
+description: 'ครอบหน้าด้วย layout ที่ใช้ซ้ำได้โดยใช้ src/layouts/Layout.astro และ <slot /> เทียบกับ layout.tsx และ _app ของ Next.js'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน Next.js App Router คุณสร้าง `layout.tsx` ไว้ข้างๆ หน้าและ React จะครอบ children ผ่านมันโดยอัตโนมัติ ใน Astro ไม่มีการครอบ layout อัตโนมัติ — คุณสร้าง layout component ใน `src/layouts/` และ **import ใช้อย่างชัดเจน** ภายในแต่ละหน้า layout รับเนื้อหาของหน้าผ่าน `<slot />` ซึ่งเทียบเท่ากับ `children` prop ของ React
+
+> Layout ต้องการ project หลายไฟล์เพื่อสังเกตผล — รัน example เหล่านี้ใน Astro project เต็มรูปแบบ (`npm create astro@latest`) ในเครื่องของคุณ
+
+## การกำหนด layout
+
+export const layoutDefReact = `// app/layout.tsx  (Next.js App Router)
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <head>
+        <title>My Site</title>
+      </head>
+      <body>
+        <nav>My Nav</nav>
+        <main>{children}</main>
+        <footer>My Footer</footer>
+      </body>
+    </html>
+  );
+}`;
+
+export const layoutDefAstro = `---
+// src/layouts/Layout.astro
+interface Props {
+  title?: string;
+}
+const { title = 'My Site' } = Astro.props;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <nav>My Nav</nav>
+    <main>
+      <slot />  <!-- เนื้อหาของหน้าจะแสดงที่นี่ -->
+    </main>
+    <footer>My Footer</footer>
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={layoutDefReact} astro={layoutDefAstro} reactTitle="Next.js" />
+
+## การใช้ layout ในหน้า
+
+export const layoutUseReact = `// app/about/page.tsx  (Next.js App Router)
+// layout.tsx ครอบโดยอัตโนมัติ — ไม่ต้อง import
+export default function AboutPage() {
+  return <h1>About</h1>;
+}
+
+// -----------------------------------------
+// pages/_app.tsx  (Next.js Pages Router)
+// import type { AppProps } from 'next/app';
+// export default function App({ Component, pageProps }: AppProps) {
+//   return <Layout><Component {...pageProps} /></Layout>;
+// }`;
+
+export const layoutUseAstro = `---
+// src/pages/about.astro
+// Layout ต้อง import อย่างชัดเจนในทุกหน้า
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="About">
+  <h1>About</h1>
+  <p>Welcome to the about page.</p>
+</Layout>`;
+
+<ReactAstro client:visible react={layoutUseReact} astro={layoutUseAstro} reactTitle="Next.js" />
+
+## Named slots
+
+Astro รองรับ **named slot** สำหรับการฉีดเนื้อหาเข้าไปยังพื้นที่เฉพาะของ layout — คล้ายกับ named children pattern ใน React (ใช้ render prop หรือ portal) แต่ built into ภาษา
+
+export const namedSlotReact = `// React named-area pattern (render props)
+function Layout({ nav, main }: {
+  nav: React.ReactNode;
+  main: React.ReactNode;
+}) {
+  return (
+    <div>
+      <aside>{nav}</aside>
+      <main>{main}</main>
+    </div>
+  );
+}
+
+// Usage
+<Layout
+  nav={<NavLinks />}
+  main={<ArticleContent />}
+/>`;
+
+export const namedSlotAstro = `---
+// src/layouts/TwoColumn.astro
+---
+<div>
+  <aside>
+    <slot name="sidebar" />  <!-- named slot -->
+  </aside>
+  <main>
+    <slot />                 <!-- default slot -->
+  </main>
+</div>
+
+<!-- การใช้ในหน้า -->
+---
+import TwoColumn from '../layouts/TwoColumn.astro';
+---
+<TwoColumn>
+  <nav slot="sidebar">
+    <a href="/a">Link A</a>
+  </nav>
+  <article>เนื้อหาหลักที่นี่</article>
+</TwoColumn>`;
+
+<ReactAstro client:visible react={namedSlotReact} astro={namedSlotAstro} />
+
+## File tree ของ project
+
+```
+src/
+├── layouts/
+│   ├── Layout.astro      ← HTML shell หลัก (head, nav, footer)
+│   └── BlogLayout.astro  ← ขยายจาก Layout เพิ่ม sidebar
+└── pages/
+    ├── index.astro        ← import Layout from '../layouts/Layout.astro'
+    ├── about.astro        ← import Layout from '../layouts/Layout.astro'
+    └── blog/
+        └── [slug].astro   ← import BlogLayout from '../../layouts/BlogLayout.astro'
+```
+
+<Diff title="Next.js layout vs Astro layout">
+- Next.js App Router: `layout.tsx` ในไดเรกทอรี **ครอบทุกหน้าในนั้นโดยอัตโนมัติ** — ไม่ต้อง import ในหน้า
+- Next.js Pages Router: `_app.tsx` ครอบทุกหน้า globally; nested layout ต้องใช้ pattern `getLayout`
+- Astro: layout คือ `.astro` component ปกติใน `src/layouts/`; คุณต้อง **import และครอบแต่ละหน้าอย่างชัดเจน** — verbose กว่าแต่ชัดเจนกว่า
+- `children` prop (React) → `<slot />` (Astro) Named slot เป็น primitive ใน Astro ต่างจาก render-prop pattern ของ React
+- Astro layout รับ typed prop (`interface Props`) ได้เหมือน `.astro` component ทั่วไป
+</Diff>
+
+export const quizLayouts = [
+  {
+    q: "element ใดของ Astro ที่เทียบเท่ากับ `children` prop ของ React ภายใน layout?",
+    options: [
+      "`<children />`",
+      "`{children}`",
+      "`<slot />`",
+      "`<outlet />`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Astro ใช้ layout กับหน้าอย่างไร เมื่อเทียบกับ Next.js App Router?",
+    options: [
+      "Astro ครอบทุกหน้าด้วย layout.astro ที่อยู่ใกล้ที่สุดโดยอัตโนมัติ เหมือน Next.js",
+      "คุณต้อง import และครอบแต่ละหน้าด้วย layout component อย่างชัดเจน",
+      "ลงทะเบียน layout ใน astro.config.mjs",
+      "Layout ถูกใช้งานผ่าน frontmatter key `layout:`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ตำแหน่งที่นิยมใช้วาง layout component ใน Astro project คือที่ใด?",
+    options: [
+      "src/pages/",
+      "src/components/",
+      "src/layouts/",
+      "src/templates/",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="routing/layouts" questions={quizLayouts} />
+
+<ProgressTracker client:visible id="routing/layouts" />

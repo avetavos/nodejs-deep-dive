@@ -1,0 +1,105 @@
+---
+title: 'Routing & Layouts'
+description: 'Astro file-based routing and layouts compared to react-router and the Next.js App Router.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+React gives you a blank canvas — you add a router yourself (react-router, TanStack Router, or the Next.js conventions). Astro takes a different approach: routing is **built into the file system**. Drop a `.astro` file into `src/pages/` and it becomes a URL. No configuration, no `<Route>` components, no provider wrapping.
+
+This module maps every routing and layout concept you already know from react-router or Next.js to the Astro equivalent.
+
+## Module lessons
+
+| Lesson | What you'll learn |
+|---|---|
+| [File-based routing](/astro-for-react-developers/en/routing/file-based-routing/) | `src/pages/*.astro` → URL segments |
+| [Dynamic routes](/astro-for-react-developers/en/routing/dynamic-routes/) | `[slug].astro` + `getStaticPaths()` vs `generateStaticParams` |
+| [Layouts](/astro-for-react-developers/en/routing/layouts/) | `src/layouts/Layout.astro` + `<slot />` vs `layout.tsx` |
+| [Navigation](/astro-for-react-developers/en/routing/navigation/) | Plain `<a href>` MPA model + `Astro.url` vs `<Link>` / `useRouter` |
+
+## The MPA model
+
+Coming from a React SPA or Next.js you might expect a client-side router. Astro uses a **Multi-Page Application (MPA)** model by default: every navigation triggers a full page request and the server returns fully-rendered HTML. This is identical to how the web worked before SPAs — and it makes Astro extremely fast by default.
+
+export const mpaReact = `// React SPA — client-side navigation
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+
+function App() {
+  return (
+    <BrowserRouter>
+      <nav>
+        <Link to="/">Home</Link>
+        <Link to="/about">About</Link>
+      </nav>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/about" element={<About />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}`;
+
+export const mpaAstro = `<!-- Astro MPA — no router, no JS needed -->
+<!-- src/pages/index.astro -->
+---
+import Layout from '../layouts/Layout.astro';
+---
+<Layout>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/about">About</a>
+  </nav>
+  <h1>Home</h1>
+</Layout>
+
+<!-- src/pages/about.astro  →  /about -->`;
+
+<ReactAstro client:visible react={mpaReact} astro={mpaAstro} />
+
+<Diff title="React SPA router vs Astro MPA routing">
+- React SPA: routing happens **in the browser** — `BrowserRouter` intercepts clicks and swaps components without a page reload.
+- Astro MPA: routing happens **on the server** — each URL maps to a `.astro` file that renders to HTML; navigation is a regular HTTP request.
+- Both: support nested paths, dynamic segments, and layouts.
+- Astro add-on: enable `ViewTransitions` for SPA-like animated transitions while keeping the MPA model (covered in Navigation).
+</Diff>
+
+export const quizRoutingIndex = [
+  {
+    q: "What is the default routing model in Astro?",
+    options: [
+      "Client-side SPA routing via a built-in router",
+      "Multi-Page Application (MPA) — each URL maps to a .astro file",
+      "Hash-based routing (#/path)",
+      "Server-side routing powered by React Router",
+    ],
+    answer: 1,
+  },
+  {
+    q: "How do you create a new route in Astro?",
+    options: [
+      "Add a `<Route path>` entry to a router config",
+      "Register the path in astro.config.mjs",
+      "Create a .astro file inside src/pages/",
+      "Export a route object from any component",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Which component does Astro use for client-side navigation by default?",
+    options: [
+      "`<Link>`",
+      "`<NavLink>`",
+      "`<router-link>`",
+      "Plain `<a href>` — no special component needed",
+    ],
+    answer: 3,
+  },
+];
+
+<Quiz client:visible id="routing/index" questions={quizRoutingIndex} />
+
+<ProgressTracker client:visible id="routing/index" />

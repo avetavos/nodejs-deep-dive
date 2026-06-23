@@ -1,0 +1,192 @@
+---
+title: When to Use an Island
+description: 'Default to static; island only the interactive parts. Islands are isolated — no shared React context across them.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The central Astro philosophy is simple: **start static, opt into JS only when you need it.** This is the opposite of a React SPA where everything is JavaScript until you work to remove it.
+
+## The default-static rule
+
+Ask this question for every component on your page:
+
+> "Does this component respond to user interaction or change over time in the browser?"
+
+If **yes** — make it an island with the right `client:*` directive.
+If **no** — keep it as a `.astro` component or a React component without a directive (rendered to static HTML).
+
+export const whenToIslandReact = `// In a React/Next.js app everything is a component.
+// Making something "static" requires extra effort.
+export default function BlogPage({ post, related }) {
+  return (
+    <div>
+      {/* These are all in the React tree, all hydrated */}
+      <Header />           {/* purely presentational */}
+      <ArticleContent post={post} />  {/* purely presentational */}
+      <LikeButton postId={post.id} /> {/* interactive */}
+      <ShareMenu url={post.url} />    {/* interactive */}
+      <RelatedPosts posts={related} />{/* purely presentational */}
+    </div>
+  );
+}`;
+
+export const whenToIslandAstro = `---
+// In Astro, ask "does this need JS?" for each piece.
+import Header from '../components/Header.astro';       // no JS
+import ArticleContent from '../components/ArticleContent.astro'; // no JS
+import LikeButton from '../components/LikeButton.jsx'; // needs JS
+import ShareMenu from '../components/ShareMenu.jsx';   // needs JS
+import RelatedPosts from '../components/RelatedPosts.astro';     // no JS
+const { post, related } = Astro.props;
+---
+<Header />
+<ArticleContent post={post} />
+<LikeButton client:visible postId={post.id} />
+<ShareMenu client:idle url={post.url} />
+<RelatedPosts posts={related} />`;
+
+<ReactAstro client:visible react={whenToIslandReact} astro={whenToIslandAstro} />
+
+On a typical blog post page, two islands (`LikeButton` and `ShareMenu`) ship JavaScript. Everything else is zero-JS HTML.
+
+## Islands are isolated
+
+This is the most important architectural difference from a React SPA. In a React app there is **one component tree**. React Context flows from a top-level Provider down to any descendant, no matter how deep.
+
+In Astro, each island is a separate React root. Context does not cross island boundaries.
+
+```jsx
+// This does NOT work across islands:
+//
+// .astro page:
+//   <ThemeProvider client:load>   ← island A
+//   <ThemedButton client:load />  ← island B (separate root!)
+//
+// ThemeProvider's context is not visible to ThemedButton.
+```
+
+### Working around isolation
+
+**Option 1 — Wrap both in a single island:**
+
+```astro
+---
+import ThemedApp from '../components/ThemedApp.jsx';
+---
+<ThemedApp client:load />
+```
+
+```jsx
+// ThemedApp.jsx — one island, one React root, context works
+import { ThemeProvider } from './ThemeContext';
+import ThemedButton from './ThemedButton';
+
+export default function ThemedApp() {
+  return (
+    <ThemeProvider>
+      <ThemedButton />
+    </ThemeProvider>
+  );
+}
+```
+
+**Option 2 — Use a shared signal/store outside React:**
+
+Libraries like `nanostores` (Astro's recommended tiny store) let islands share state without a common React root:
+
+```js
+// src/stores/theme.js
+import { atom } from 'nanostores';
+export const theme = atom('light');
+```
+
+```jsx
+// island A
+import { useStore } from '@nanostores/react';
+import { theme } from '../stores/theme';
+export default function ThemeToggle() {
+  const t = useStore(theme);
+  return <button onClick={() => theme.set(t === 'light' ? 'dark' : 'light')}>{t}</button>;
+}
+```
+
+```jsx
+// island B — reads the same store
+import { useStore } from '@nanostores/react';
+import { theme } from '../stores/theme';
+export default function ThemedButton() {
+  const t = useStore(theme);
+  return <button class={t}>Click me</button>;
+}
+```
+
+## The decision checklist
+
+| Component | Needs hydration? | What to use |
+|---|---|---|
+| Navigation header | No (links only) | `.astro` component |
+| Hero image | No | `<img>` in `.astro` |
+| Article body | No | `.astro` component |
+| Like / upvote button | Yes — click handler | React island `client:visible` |
+| Comments section | Yes — fetch + render | React island `client:visible` |
+| Mobile menu toggle | Yes — open/close state | React island `client:media` |
+| Page layout | No | `.astro` layout |
+| Date formatter | No (build-time) | `.astro` or static React |
+
+<Diff title="React SPA tree vs Astro island isolation">
+- React SPA: **one tree**, context flows everywhere, any component can subscribe to global state.
+- Astro: **one root per island**, React context is scoped to that island only.
+- Cross-island state: use a tiny external store (nanostores, Zustand) shared between islands.
+- Default posture: `.astro` first; add `client:*` only when interactivity is required.
+</Diff>
+
+export const quizWhenToIsland = [
+  {
+    q: "A navigation bar that only renders links — no dropdowns, no state. What should it be in Astro?",
+    options: [
+      "A React island with `client:load`",
+      "A React island with `client:idle`",
+      "A plain `.astro` component — no JS needed",
+      "A React island with `client:only`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Two separate React islands on the same Astro page need to share theme state. What is the correct approach?",
+    options: [
+      "Wrap both in a parent React island with a shared Context Provider",
+      "Use `client:share` directive",
+      "Add `global:true` to the Context creation",
+      "Islands automatically share context when they import the same context file",
+    ],
+    answer: 0,
+  },
+  {
+    q: "Why does React Context NOT work across two separate islands by default?",
+    options: [
+      "Astro strips React Context during the build",
+      "Each island is mounted as an independent React root; they do not share a component tree",
+      "React Context requires a server to work",
+      "Astro only supports Zustand for state sharing",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What is the recommended Astro-native solution for sharing reactive state between multiple islands?",
+    options: [
+      "Redux with a global store",
+      "nanostores (or a similar tiny store) shared as a JS module",
+      "localStorage polling",
+      "Passing props down through `.astro` layout files",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/when-to-island" questions={quizWhenToIsland} />
+
+<ProgressTracker client:visible id="islands/when-to-island" />

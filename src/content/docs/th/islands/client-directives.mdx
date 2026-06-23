@@ -1,0 +1,182 @@
+---
+title: Client Directives
+description: 'client:load, client:idle, client:visible, client:media, client:only — แต่ละอันทำอะไรและใช้เมื่อไหร่'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ในแอป React ทุก component hydrate ทันทีที่ bundle โหลด Astro ให้การควบคุมที่ละเอียด: **แต่ละ island ประกาศว่าควร hydrate เมื่อใด** ผ่าน `client:*` directive หากไม่มี directive component จะ render เป็น HTML แบบ static และไม่ส่ง JavaScript
+
+## ห้า directives
+
+### `client:load`
+
+Hydrate ทันทีเมื่อเพจโหลด ใช้กับ component ที่ต้องโต้ตอบได้ทันที — navigation menu, login form, widget ที่อยู่ above-the-fold
+
+```astro
+<SearchBar client:load />
+```
+
+นี่คือ equivalent ตรงๆ ของ React component ใน Next.js page — hydrate ตอนโหลด ใช้อย่างระมัดระวัง ทุก `client:load` island เพิ่มให้ JS budget เริ่มต้น
+
+### `client:idle`
+
+Hydrate หลังจากเบราว์เซอร์ยิง `requestIdleCallback` — เมื่อ main thread ว่าง ใช้กับ interactive components ที่สำคัญแต่ไม่ต้องการทันที
+
+```astro
+<NewsletterSignup client:idle />
+```
+
+ในแอป React ไม่มี equivalent — ทุกอย่างโหลดแบบ eager `client:idle` คือ performance win ฟรีสำหรับ secondary widgets
+
+### `client:visible`
+
+Hydrate เมื่อ root element ของ component เข้ามาใน viewport (ใช้ `IntersectionObserver`) เหมาะสำหรับ islands ที่อยู่ below-the-fold: comment sections, carousels, interactive charts
+
+```astro
+<CommentThread client:visible />
+<PricingTable client:visible />
+```
+
+ผู้ใช้ที่ไม่เลื่อนลงไปไม่มีวันดาวน์โหลด JS นี่คือ directive ที่ส่งผลมากที่สุดสำหรับเพจยาวๆ
+
+### `client:media`
+
+Hydrate เมื่อ CSS media query ตรงกัน ใช้กับ islands ที่มีอยู่เฉพาะใน layout บางอย่าง — mobile bottom nav, desktop sidebar filter
+
+```astro
+<MobileMenu client:media="(max-width: 768px)" />
+<DesktopFilter client:media="(min-width: 1024px)" />
+```
+
+ผู้ใช้ desktop ไม่เคยดาวน์โหลด JS ของ mobile component; ผู้ใช้ mobile ไม่เคยดาวน์โหลด JS ของ desktop
+
+### `client:only`
+
+ข้าม server-side rendering ทั้งหมดและ render เฉพาะในเบราว์เซอร์ ต้องส่งชื่อ framework เป็น value ใช้กับ component ที่เรียกใช้ browser-only APIs (`window`, `localStorage`, WebGL) ที่จะ crash ระหว่าง SSR
+
+```astro
+<ThreeScene client:only="react" />
+<MapWidget client:only="react" />
+```
+
+> หากไม่มี `client:only` Astro ยังรัน React component บน server เพื่อสร้าง HTML เริ่มต้น ถ้า component เรียก `window` หรือ `document` ที่ top level ขั้นตอน SSR จะ throw `client:only` ข้ามขั้นตอนนั้น
+
+## ทั้งห้า directives เคียงข้างกัน
+
+export const directivesReact = `// React/Next.js — no directive system.
+// All components hydrate on load.
+// Lazy loading is manual (React.lazy + Suspense).
+import dynamic from 'next/dynamic';
+
+const HeavyChart = dynamic(() => import('./HeavyChart'), {
+  ssr: false,  // skip SSR — closest to client:only
+});
+
+export default function Page() {
+  return (
+    <>
+      <SearchBar />    {/* eager hydration */}
+      <HeavyChart />   {/* ssr:false ~ client:only */}
+      {/* No built-in idle/visible/media support */}
+    </>
+  );
+}`;
+
+export const directivesAstro = `---
+import SearchBar from '../components/SearchBar.jsx';
+import NewsletterSignup from '../components/NewsletterSignup.jsx';
+import CommentThread from '../components/CommentThread.jsx';
+import MobileMenu from '../components/MobileMenu.jsx';
+import ThreeScene from '../components/ThreeScene.jsx';
+---
+<!-- Hydrate immediately -->
+<SearchBar client:load />
+
+<!-- Hydrate when browser is idle -->
+<NewsletterSignup client:idle />
+
+<!-- Hydrate when scrolled into view -->
+<CommentThread client:visible />
+
+<!-- Hydrate only on mobile -->
+<MobileMenu client:media="(max-width: 768px)" />
+
+<!-- Browser-only, skip SSR -->
+<ThreeScene client:only="react" />`;
+
+<ReactAstro client:visible react={directivesReact} astro={directivesAstro} />
+
+## ไม่มี directive = HTML แบบ static
+
+สิ่งที่สำคัญที่สุดที่ต้องจำ: **React component ที่ไม่มี directive คือ HTML แบบ static** Astro รันมันบน server render output เป็น HTML และไม่ส่งอะไรไปยังเบราว์เซอร์
+
+```astro
+---
+import ProductCard from '../components/ProductCard.jsx';
+---
+<!-- No client: directive → static HTML, zero JS -->
+<ProductCard title="Widget" price={29} />
+```
+
+นี่เป็นเจตนา Astro ส่งเสริมให้ถามว่า: "component นี้จำเป็นต้อง interactive จริงหรือไม่?" ถ้า React component แค่แสดงข้อมูล มันสามารถเป็น static ได้
+
+<Diff title="React hydration vs Astro client directives">
+- React: **ทุก component hydrate ตอนโหลด** — ไม่มี idle/visible/media strategy built-in
+- Astro `client:load`: hydrate ทันที (เหมือน React default)
+- Astro `client:idle`: hydrate เมื่อ main thread ว่าง (ไม่มี React equivalent)
+- Astro `client:visible`: hydrate เมื่อ scroll เข้า view (ไม่มี React equivalent)
+- Astro `client:media`: hydrate เมื่อ media query ตรงกัน (ไม่มี React equivalent)
+- Astro `client:only`: ข้าม SSR browser-only (คล้าย Next.js `dynamic({ ssr: false })`)
+- ไม่มี directive: **HTML แบบ static, ไม่มี JS** — ไม่มี React equivalent
+</Diff>
+
+export const quizClientDirectives = [
+  {
+    q: "ควรใช้ directive ใดสำหรับ comment section ที่อยู่ 1000px ต่ำกว่า fold?",
+    options: [
+      "`client:load`",
+      "`client:idle`",
+      "`client:visible`",
+      "`client:only`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "`client:only=\"react\"` ทำอะไรแตกต่างจาก directives อื่น?",
+    options: [
+      "Hydrate เร็วกว่า `client:load`",
+      "ข้าม server-side rendering และ render component เฉพาะในเบราว์เซอร์",
+      "ส่ง component เฉพาะให้ React Native clients",
+      "เลื่อน hydration จนกว่า React จะ idle",
+    ],
+    answer: 1,
+  },
+  {
+    q: "React component ถูก import เข้า .astro file โดยไม่มี `client:*` directive จะเกิดอะไรขึ้น?",
+    options: [
+      "Astro ขึ้น build-time error",
+      "Component hydrate ด้วย `client:load` โดยค่าเริ่มต้น",
+      "Component render เป็น HTML แบบ static ไม่ส่ง JavaScript",
+      "Component ถูกข้ามและไม่มีอะไร render",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Directive ใดเหมาะที่สุดสำหรับ mobile navigation menu ที่ไม่ควรโหลดบน desktop?",
+    options: [
+      "`client:only`",
+      "`client:media=\"(max-width: 768px)\"`",
+      "`client:visible`",
+      "`client:idle`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/client-directives" questions={quizClientDirectives} />
+
+<ProgressTracker client:visible id="islands/client-directives" />

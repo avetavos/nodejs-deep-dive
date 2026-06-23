@@ -1,0 +1,185 @@
+---
+title: Navigation
+description: 'Plain <a href> MPA navigation, Astro.url for active links, and ViewTransitions for SPA-like animations — compared to <Link> and useRouter.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In React you reach for `<Link>` from react-router or Next.js to get client-side navigation and `usePathname()` / `useRouter()` to read the current URL. Astro's MPA model means **plain HTML `<a href>` links work perfectly** — no special component needed. For the current URL, use `Astro.url` (a standard `URL` object available in every `.astro` file).
+
+## Basic navigation
+
+export const navReact = `// React / Next.js  — needs <Link> for client-side nav
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+
+export default function Nav() {
+  const pathname = usePathname();
+  const links = ['/', '/about', '/blog'];
+
+  return (
+    <nav>
+      {links.map((href) => (
+        <Link
+          key={href}
+          href={href}
+          className={pathname === href ? 'active' : ''}
+        >
+          {href === '/' ? 'Home' : href.slice(1)}
+        </Link>
+      ))}
+    </nav>
+  );
+}`;
+
+export const navAstro = `---
+// src/components/Nav.astro
+// Astro.url is a native URL object — no hook needed
+const pathname = Astro.url.pathname;
+const links = ['/', '/about', '/blog'];
+---
+<nav>
+  {links.map((href) => (
+    <a
+      href={href}
+      class={pathname === href ? 'active' : ''}
+    >
+      {href === '/' ? 'Home' : href.slice(1)}
+    </a>
+  ))}
+</nav>`;
+
+<ReactAstro client:visible react={navReact} astro={navAstro} reactTitle="Next.js" />
+
+Key points:
+
+1. `Astro.url` is a standard `URL` object — use `.pathname`, `.origin`, `.searchParams`, etc.
+2. Active-link detection is pure string comparison — no special hook required.
+3. Plain `<a href>` triggers a full page request (MPA model). The browser handles the navigation natively.
+
+## Runnable example — current path display
+
+This self-contained page demonstrates `Astro.url` at work. Open it in StackBlitz and note that the current pathname is rendered server-side.
+
+export const navCode = `---
+const url = Astro.url;
+const links = ['/', '/about', '/blog', '/contact'];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Navigation demo</title>
+    <style>
+      body { font-family: sans-serif; padding: 2rem; }
+      nav { display: flex; gap: 1rem; margin-bottom: 2rem; }
+      a { color: #6366f1; text-decoration: none; padding: 0.25rem 0.75rem;
+          border-radius: 4px; border: 1px solid #6366f1; }
+      a.active { background: #6366f1; color: #fff; }
+      .info { background: #f1f5f9; padding: 1rem; border-radius: 6px; }
+      code { background: #e2e8f0; padding: 0.1rem 0.4rem; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      {links.map((href) => (
+        <a href={href} class={url.pathname === href ? 'active' : ''}>{href}</a>
+      ))}
+    </nav>
+    <div class="info">
+      <p><strong>Astro.url.pathname:</strong> <code>{url.pathname}</code></p>
+      <p><strong>Astro.url.origin:</strong> <code>{url.origin}</code></p>
+    </div>
+    <p>Click a link — the active state is set at build/render time, not in JS.</p>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={navCode} />
+
+## ViewTransitions — SPA-like animations
+
+Astro ships a built-in `<ViewTransitions />` component that wraps the browser's View Transitions API. Adding it to your layout gives you smooth, animated page transitions without converting your site to an SPA.
+
+export const vtReact = `// Next.js — page transitions need a library
+// e.g. framer-motion AnimatePresence or next-view-transitions
+import { ViewTransitions } from 'next-view-transitions';
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <ViewTransitions>
+          {children}
+        </ViewTransitions>
+      </body>
+    </html>
+  );
+}`;
+
+export const vtAstro = `---
+// src/layouts/Layout.astro
+import { ViewTransitions } from 'astro:transitions';
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>My Site</title>
+    <!-- Add this ONE line to get SPA-like transitions -->
+    <ViewTransitions />
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={vtReact} astro={vtAstro} reactTitle="Next.js" />
+
+With `<ViewTransitions />` Astro intercepts link clicks and uses the native browser View Transitions API to animate between pages. You keep the MPA mental model — no client-side router, no JavaScript bundle for routing logic.
+
+<Diff title="React/Next.js navigation vs Astro navigation">
+- Next.js `<Link>`: prefetches, handles client-side navigation, updates the browser URL without a full reload.
+- Astro plain `<a href>`: full HTTP request per navigation — simpler, no JS overhead, works without JavaScript.
+- `usePathname()` / `useRouter()` (React) → `Astro.url.pathname` (Astro, server-side only).
+- SPA transitions: Next.js has first-class support via the App Router; Astro uses `<ViewTransitions />` (one import).
+- `Astro.url` is only available at build/server time — it cannot change in response to client-side events.
+</Diff>
+
+export const quizNavigation = [
+  {
+    q: "Which component do you use for navigation links in a default Astro MPA site?",
+    options: [
+      "`<Link href>`",
+      "`<NavLink to>`",
+      "Plain `<a href>` HTML element",
+      "`<AstroLink href>`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "How do you read the current page pathname server-side in an Astro component?",
+    options: [
+      "`usePathname()` hook",
+      "`Astro.url.pathname`",
+      "`Astro.request.path`",
+      "`import { pathname } from 'astro:router'`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What does adding `<ViewTransitions />` to an Astro layout do?",
+    options: [
+      "Converts the site to a full SPA with a client-side router",
+      "Enables smooth animated transitions between pages using the browser's View Transitions API",
+      "Adds React Router navigation to all pages",
+      "Prefetches all internal links on page load",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="routing/navigation" questions={quizNavigation} />
+
+<ProgressTracker client:visible id="routing/navigation" />

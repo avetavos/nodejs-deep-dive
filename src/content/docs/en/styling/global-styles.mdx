@@ -1,0 +1,167 @@
+---
+title: 'Global Styles'
+description: 'Use <style is:global> or import a CSS file at the layout level to apply styles across the whole site — equivalent to importing in _app.tsx.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In Next.js you put your CSS reset, base typography, and design-token custom properties in `styles/globals.css` and import that file once in `_app.tsx`. Every page inherits those styles automatically.
+
+Astro has two equivalent mechanisms. You can drop a `<style is:global>` block anywhere in a `.astro` file — the `is:global` directive tells the compiler to skip scoping. Or you can create a plain `.css` file and import it at the layout level, which is the most common pattern for production sites.
+
+## `is:global` — inline global styles
+
+export const globalIsGlobalReact = `// _app.tsx  (Next.js)
+// Global CSS goes in a separate file, imported here:
+import '../styles/globals.css';
+
+export default function App({ Component, pageProps }) {
+  return <Component {...pageProps} />;
+}
+
+// styles/globals.css
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; }
+:root { --color-primary: #6366f1; }`;
+
+export const globalIsGlobalAstro = `---
+// Layout.astro  (or any .astro file)
+---
+<html lang="en">
+  <head><meta charset="utf-8" /></head>
+  <body><slot /></body>
+</html>
+
+<style is:global>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; }
+  :root { --color-primary: #6366f1; }
+</style>`;
+
+<ReactAstro client:visible react={globalIsGlobalReact} astro={globalIsGlobalAstro} />
+
+`is:global` is useful for small amounts of base CSS that live next to your layout markup. For larger style sheets, prefer a standalone `.css` import.
+
+## Importing a global stylesheet
+
+export const globalImportReact = `// _app.tsx  (Next.js)
+import '../styles/globals.css';   // one import, applied to every page
+
+export default function App({ Component, pageProps }) {
+  return <Component {...pageProps} />;
+}`;
+
+export const globalImportAstro = `---
+// src/layouts/BaseLayout.astro
+import '../styles/globals.css';   // same idea — imported once at the layout level
+const { title } = Astro.props;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={globalImportReact} astro={globalImportAstro} />
+
+Vite processes the imported CSS file — PostCSS, `@import` chains, and custom properties all work without extra configuration.
+
+## Runnable example
+
+The playground below uses `is:global` to define CSS custom properties on `:root` and a reset, then uses those variables in scoped component styles.
+
+export const globalCode = `---
+const sections = ["About", "Work", "Contact"];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Global styles demo</title></head>
+  <body>
+    <header>
+      <nav>
+        {sections.map(s => <a href="#" class="link">{s}</a>)}
+      </nav>
+    </header>
+    <main>
+      <h1>Global + Scoped</h1>
+      <p>Custom properties from <code>:root</code> are global. The <code>.link</code> style is scoped.</p>
+      <button class="btn">Primary action</button>
+    </main>
+  </body>
+</html>
+
+<style is:global>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f8fafc; color: #1e293b; }
+  :root {
+    --color-primary: #6366f1;
+    --color-primary-dark: #4f46e5;
+    --radius: 8px;
+  }
+</style>
+
+<style>
+  header { background: #1e293b; padding: .75rem 1.5rem; }
+  nav { display: flex; gap: 1rem; }
+  .link { color: #94a3b8; text-decoration: none; font-size: .9rem; }
+  .link:hover { color: #fff; }
+  main { padding: 2rem; }
+  h1 { color: var(--color-primary); margin: 0 0 .5rem; }
+  p { color: #64748b; margin: 0 0 1.5rem; }
+  code { background: #e2e8f0; padding: .1em .35em; border-radius: 4px; font-size: .875em; }
+  .btn { background: var(--color-primary); color: #fff; border: none; border-radius: var(--radius); padding: .6rem 1.25rem; cursor: pointer; font-size: .95rem; }
+  .btn:hover { background: var(--color-primary-dark); }
+</style>`;
+
+<AstroPlayground client:visible code={globalCode} />
+
+<Diff title="Next.js global CSS vs Astro global CSS">
+- Next.js: `import '../styles/globals.css'` in `_app.tsx` — required entry point for global styles.
+- Astro: `import './globals.css'` in a layout `.astro` file, **or** a `<style is:global>` block in any `.astro` file.
+- Both: CSS custom properties on `:root` work the same way and are accessible in all scoped styles.
+- Astro extra: you can mix `<style is:global>` (reset/tokens) and a plain `<style>` (scoped) **in the same file**.
+</Diff>
+
+export const quizGlobal = [
+  {
+    q: "What directive makes an Astro `<style>` block apply globally instead of being scoped?",
+    options: [
+      "`<style scope:none>`",
+      "`<style global>`",
+      "`<style is:global>`",
+      "`<style module={false}>`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Where is the most common place to import a global `.css` file in an Astro project?",
+    options: [
+      "In every `.astro` page file individually",
+      "In a shared layout `.astro` component that wraps every page",
+      "In `astro.config.mjs` under the `css` option",
+      "In `src/env.d.ts`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Can you have both `<style is:global>` and a plain `<style>` block in the same `.astro` file?",
+    options: [
+      "No — only one style block per component is allowed",
+      "Yes — the global block sets tokens/resets, the scoped block styles local elements",
+      "Yes — but only if the global block comes after the scoped block",
+      "No — use either `is:global` or scoped, not both",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="styling/global-styles" questions={quizGlobal} />
+
+<ProgressTracker client:visible id="styling/global-styles" />

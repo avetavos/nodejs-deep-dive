@@ -1,0 +1,164 @@
+---
+title: Slots
+description: "ใช้ <slot /> เพื่อรับ children ใน .astro component named slot มาแทน pattern อย่าง render props และ named children ของ React"
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+React ส่ง children ผ่าน prop ชื่อ `children` ส่วน Astro ใช้ `<slot />` ซึ่งเป็นแนวคิดของ Web Component ที่สร้างไว้ใน template เลย ผลลัพธ์เหมือนกัน: parent เป็นคนตัดสินใจว่าจะใส่อะไรเข้าไปข้างใน ส่วน component เป็นคนตัดสินใจว่าจะวางมันไว้ตรงไหน
+
+## Default slot (ตัวเทียบเท่าของ children)
+
+export const slotsReact = `// Card.jsx
+export default function Card({ children }) {
+  return (
+    <div className="card">
+      {children}
+    </div>
+  );
+}
+
+// Usage:
+// <Card>
+//   <h2>Title</h2>
+//   <p>Body text</p>
+// </Card>`;
+
+export const slotsAstro = `---
+// Card.astro
+---
+<div class="card">
+  <slot />
+</div>
+
+<!-- Usage:
+<Card>
+  <h2>Title</h2>
+  <p>Body text</p>
+</Card>
+-->`;
+
+<ReactAstro client:visible react={slotsReact} astro={slotsAstro} />
+
+ไม่ต้องประกาศ prop ใด ๆ — `<slot />` จะรับ children ที่ส่งเข้ามาให้ component โดยอัตโนมัติ ถ้าไม่มี children ถูกส่งเข้ามา slot จะไม่ render อะไรเลย (คุณสามารถใส่ fallback content ไว้ระหว่าง tag ของ slot ได้: `<slot>Default content</slot>`)
+
+## Named slots
+
+React ไม่มี named slot ในตัว pattern ที่ใช้กันทั่วไปคือ render props, compound component หรือ prop แยกอย่าง `header={<H1 />}` ส่วน Astro มี named slot แบบ first-class
+
+ใน **นิยามของ component** ให้วาง `<slot name="header" />` ตรงตำแหน่งที่คุณต้องการให้ content ของ header ปรากฏ
+
+ใน **การใช้งาน component** ให้เพิ่ม `slot="header"` ลงใน child element ใด ๆ เพื่อส่งมันไปยัง slot นั้น
+
+export const namedSlotsReact = `// Layout.jsx — React named-slot workaround
+export default function Layout({ header, sidebar, children }) {
+  return (
+    <div className="layout">
+      <header>{header}</header>
+      <aside>{sidebar}</aside>
+      <main>{children}</main>
+    </div>
+  );
+}
+
+// Usage:
+// <Layout
+//   header={<nav>Nav here</nav>}
+//   sidebar={<ul>Links</ul>}
+// >
+//   <p>Main content</p>
+// </Layout>`;
+
+export const namedSlotsAstro = `---
+// Layout.astro
+---
+<div class="layout">
+  <header><slot name="header" /></header>
+  <aside><slot name="sidebar" /></aside>
+  <main><slot /></main>
+</div>
+
+<!-- Usage:
+<Layout>
+  <nav slot="header">Nav here</nav>
+  <ul slot="sidebar">Links</ul>
+  <p>Main content</p>
+</Layout>
+-->`;
+
+<ReactAstro client:visible react={namedSlotsReact} astro={namedSlotsAstro} />
+
+## ตัวอย่างที่รันได้จริง
+
+export const slotsCode = `---
+// No frontmatter needed for this demo
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Slots demo</title></head>
+  <body style="font-family:sans-serif;padding:2rem;max-width:600px;margin:auto">
+    <style>
+      .card { border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; }
+      .card header { background:#6366f1; color:#fff; padding:1rem; }
+      .card main { padding:1rem; }
+      .card footer { background:#f8fafc; padding:.75rem 1rem; font-size:.875rem; color:#64748b; }
+    </style>
+
+    <!-- Inline component demo using an HTML template pattern -->
+    <div class="card">
+      <header>
+        <h2>Named Slots</h2>
+      </header>
+      <main>
+        <p>The default slot receives children with no slot attribute.</p>
+        <p>Named slots receive children tagged with slot="name".</p>
+      </main>
+      <footer>No JavaScript required.</footer>
+    </div>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={slotsCode} />
+
+<Diff title="React children vs Astro slots">
+- default children ของ React: prop `{children}` (ต้องประกาศหรือ destructure ออกมา)
+- default slot ของ Astro: `<slot />` — ไม่ต้องประกาศ
+- named slot ของ React: ต้องใช้วิธี workaround ผ่าน prop แยกหรือ render props
+- named slot ของ Astro: `<slot name="header" />` ใน component และ `slot="header"` บน child element
+- ทั้งคู่: รองรับ fallback/default content เมื่อไม่มีอะไรถูกส่งเข้ามา
+</Diff>
+
+export const quizSlots = [
+  {
+    q: "ตัวเทียบเท่าใน Astro ของ prop `{children}` ของ React คืออะไร?",
+    options: ["`<children />`", "`{Astro.children}`", "`<slot />`", "`<yield />`"],
+    answer: 2,
+  },
+  {
+    q: "คุณจะส่ง child element ไปยัง named slot ชื่อ 'header' ใน Astro ได้อย่างไร?",
+    options: [
+      "ห่อมันด้วย `<Slot name=\"header\">`",
+      "ส่งมันเป็น prop ชื่อ `header` ให้กับ component",
+      "เพิ่ม attribute `slot=\"header\"` ลงใน child element",
+      "ใช้ `Astro.slots.header`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "อะไรจะถูก render ถ้าไม่มีอะไรถูกส่งเข้าไปยัง `<slot>Fallback text</slot>`?",
+    options: [
+      "ไม่มีอะไรเลย — slot จะ render ว่างเสมอ",
+      "เกิด error ขึ้น",
+      "fallback text ที่อยู่ระหว่าง tag ของ slot",
+      "string 'undefined'",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/slots" questions={quizSlots} />
+
+<ProgressTracker client:visible id="components/slots" />

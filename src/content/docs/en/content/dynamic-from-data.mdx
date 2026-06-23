@@ -1,0 +1,190 @@
+---
+title: 'Dynamic Pages from Data'
+description: 'Generate static pages from a content collection using getStaticPaths() in src/pages/blog/[slug].astro — versus generateStaticParams in Next.js App Router.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Next.js App Router uses `generateStaticParams()` to enumerate dynamic routes at build time. Next Pages Router uses `getStaticPaths()`. Astro uses `getStaticPaths()` in a `[slug].astro` file — same name as Pages Router, but you return an array of objects with a `params` key (optionally a `props` key too) and access them via `Astro.props` and `Astro.params` in the frontmatter.
+
+> Needs a full Astro project to run. Use `npm create astro@latest` to scaffold one.
+
+## App Router generateStaticParams vs Astro getStaticPaths
+
+export const appRouterReact = `// app/blog/[slug]/page.tsx (Next.js App Router)
+import { allPosts } from 'contentlayer/generated';
+
+export async function generateStaticParams() {
+  return allPosts.map(post => ({ slug: post.slug }));
+}
+
+export default function PostPage({ params }) {
+  const post = allPosts.find(p => p.slug === params.slug);
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <p>{post.description}</p>
+    </article>
+  );
+}`;
+
+export const appRouterAstro = `---
+// src/pages/blog/[slug].astro (Astro)
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map(post => ({
+    params: { slug: post.slug },
+    props:  { post },
+  }));
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <Content />
+</article>`;
+
+<ReactAstro client:visible react={appRouterReact} astro={appRouterAstro} />
+
+In Astro, `getStaticPaths` and the page template live in the same file. The `props` key lets you pass the full collection entry directly — no second lookup needed.
+
+## Pages Router getStaticPaths vs Astro
+
+export const pagesRouterReact = `// pages/blog/[slug].tsx (Next.js Pages Router)
+export async function getStaticPaths() {
+  const posts = await fetchAllPosts(); // or contentlayer
+  return {
+    paths: posts.map(p => ({ params: { slug: p.slug } })),
+    fallback: false,
+  };
+}
+
+export async function getStaticProps({ params }) {
+  const post = await fetchPost(params.slug);
+  return { props: { post } };
+}
+
+export default function PostPage({ post }) {
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <div dangerouslySetInnerHTML={{ __html: post.contentHtml }} />
+    </article>
+  );
+}`;
+
+export const pagesRouterAstro = `---
+// src/pages/blog/[slug].astro (Astro)
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  // params defines the URL; props pass data to the page
+  return posts.map(post => ({
+    params: { slug: post.slug },
+    props:  { post },
+  }));
+}
+
+// Both params and props land here — no second getStaticProps needed
+const { post } = Astro.props;
+const { Content } = await render(post);
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <Content />
+</article>`;
+
+<ReactAstro client:visible react={pagesRouterReact} astro={pagesRouterAstro} />
+
+Next Pages Router splits path enumeration (`getStaticPaths`) from data fetching (`getStaticProps`). Astro merges them: pass `props` inside `getStaticPaths` and skip the second round-trip.
+
+## Complete dynamic route page
+
+```astro
+---
+// src/pages/blog/[slug].astro
+import { getCollection, render } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog', ({ data }) => !data.draft);
+  return posts.map((post) => ({
+    params: { slug: post.slug },
+    props:  { post },
+  }));
+}
+
+const { post } = Astro.props;
+const { Content, headings } = await render(post);
+const { title, date, tags = [] } = post.data;
+---
+<BaseLayout title={title}>
+  <article>
+    <header>
+      <h1>{title}</h1>
+      <time datetime={date.toISOString()}>
+        {date.toLocaleDateString('en-US', { dateStyle: 'long' })}
+      </time>
+      {tags.length > 0 && (
+        <ul class="tags">
+          {tags.map((tag) => <li>{tag}</li>)}
+        </ul>
+      )}
+    </header>
+    <Content />
+  </article>
+</BaseLayout>
+```
+
+<Diff title="Next generateStaticParams / getStaticPaths vs Astro getStaticPaths">
+- Next App Router: `generateStaticParams` returns only params; data is re-fetched inside the page component.
+- Next Pages Router: `getStaticPaths` returns params, then `getStaticProps` fetches data — **two separate functions**.
+- Astro: **one function** — return `{ params, props }` together; `props` arrive on `Astro.props`.
+- Astro has no `fallback` option — static output only generates the listed paths. (SSR handles unknown slugs at runtime.)
+- Astro filters drafts inside `getCollection()` callback — no post-processing step needed.
+</Diff>
+
+export const quizDynamicFromData = [
+  {
+    q: "Where does `getStaticPaths()` live in an Astro project?",
+    options: [
+      "In `src/content.config.ts`",
+      "In `astro.config.mjs`",
+      "Inside a dynamic route file like `src/pages/blog/[slug].astro`",
+      "In a separate `paths.ts` file",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What does each object in the `getStaticPaths` return array represent?",
+    options: [
+      "A collection entry schema",
+      "One page to generate, with `{ params }` defining the URL segment",
+      "A redirect rule",
+      "A server-side request handler",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What is the Astro equivalent of Next App Router's `generateStaticParams`?",
+    options: [
+      "`getStaticPaths()` exported from the `.astro` page file",
+      "`Astro.params` in the frontmatter",
+      "`getCollection()` called at the top level",
+      "`export const paths` array",
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content/dynamic-from-data" questions={quizDynamicFromData} />
+
+<ProgressTracker client:visible id="content/dynamic-from-data" />

@@ -1,0 +1,126 @@
+---
+title: 'การจัดสไตล์ใน Astro'
+description: 'ภาพรวมของโมดูล Styling — scoped styles, global styles, CSS variables, class:list และ Tailwind เทียบกับแนวทาง React และ Next.js'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน React เราเลือกใช้ CSS Modules, styled-components, emotion หรือ Tailwind แล้วจัดการ global CSS ผ่าน `_app.tsx` หรือ layout component การสลับ class ต้องอาศัย `clsx(...)` หรือ ternary บน `className`
+
+Astro ใช้ CSS เดิมที่คุณรู้จักอยู่แล้ว ไม่มี syntax ใหม่ให้เรียน สิ่งที่เปลี่ยนคือ *ที่อยู่* ของ style และ *วิธีกำหนดขอบเขต* `<style>` block ภายในไฟล์ `.astro` จะถูก **scoped อัตโนมัติ** โดย compiler ส่วน global CSS ใช้ `<style is:global>` หรือ import stylesheet ที่ระดับ layout และ Tailwind ก็ทำงานเหมือน Next เลย หลังจากเพิ่ม integration
+
+โมดูลนี้จะพาคุณผ่านแต่ละแนวทางโดยยึดโยงกับสิ่งที่คุณรู้จาก React อยู่แล้ว
+
+## บทเรียนในโมดูล
+
+| บทเรียน | สิ่งที่จะได้เรียนรู้ |
+|---|---|
+| [Scoped Styles](/astro-for-react-developers/th/styling/scoped-styles/) | `<style>` auto-scoped เทียบกับ CSS Modules |
+| [Global Styles](/astro-for-react-developers/th/styling/global-styles/) | `is:global` และ stylesheet imports เทียบกับ `_app.tsx` |
+| [CSS Variables และ class:list](/astro-for-react-developers/th/styling/css-variables-classlist/) | `define:vars` และ `class:list` เทียบกับ clsx / inline styles |
+| [Tailwind](/astro-for-react-developers/th/styling/tailwind/) | เพิ่ม Tailwind ใน Astro เทียบกับ Tailwind ใน Next |
+
+## ตัวอย่องเปรียบเทียบ
+
+export const indexReact = `// Card.jsx  (CSS Modules)
+import styles from './Card.module.css';
+import clsx from 'clsx';
+
+export default function Card({ title, featured }) {
+  return (
+    <div className={clsx(styles.card, featured && styles.featured)}>
+      <h2 className={styles.title}>{title}</h2>
+    </div>
+  );
+}`;
+
+export const indexAstro = `---
+// Card.astro
+const { title, featured } = Astro.props;
+---
+<div class:list={["card", { featured }]}>
+  <h2 class="title">{title}</h2>
+</div>
+
+<style>
+  .card  { border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; }
+  .title { font-size: 1.25rem; margin: 0; }
+  .featured { border-color: #6366f1; background: #eef2ff; }
+</style>`;
+
+<ReactAstro client:visible react={indexReact} astro={indexAstro} />
+
+สังเกตสิ่งที่หายไป: ไม่ต้อง import CSS Module ไม่ต้อง import `clsx` ไม่ต้องมีไฟล์ `.module.css` แยก `<style>` block อยู่คู่กับ component และ compiler จัดการ scoping ให้อัตโนมัติ
+
+## ตัวอย่างที่รันได้
+
+export const indexCode = `---
+const title = "Astro Styling Overview";
+const featured = true;
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Styling</title></head>
+  <body>
+    <div class:list={["card", { featured }]}>
+      <h2 class="title">{title}</h2>
+      <p>Styles are scoped to this component automatically.</p>
+    </div>
+  </body>
+</html>
+
+<style>
+  body { font-family: sans-serif; padding: 2rem; background: #f8fafc; }
+  .card { border: 2px solid #e2e8f0; border-radius: 8px; padding: 1.5rem; max-width: 360px; }
+  .title { font-size: 1.4rem; margin: 0 0 .5rem; }
+  .featured { border-color: #6366f1; background: #eef2ff; }
+</style>`;
+
+<AstroPlayground client:visible code={indexCode} />
+
+<Diff title="React styling vs Astro styling">
+- React: เลือกกลยุทธ์ (CSS Modules, styled-components, Tailwind) แล้วตั้งค่าให้โปรเจกต์
+- Astro: ทุกไฟล์ `.astro` มี `<style>` block ที่ **scoped อัตโนมัติ** — ไม่ต้องตั้งค่าใดๆ
+- เหมือนกัน: Tailwind utility classes ทำงานเหมือนกันทุกประการ เมื่อติดตั้ง integration แล้ว
+- ความต่างหลัก: ไม่มี `className` ไม่ต้อง import `clsx` ไม่มีไฟล์ `.module.css` แยก — `class:list` และ `<style>` มีมาให้ครบใน Astro
+</Diff>
+
+export const quizIndex = [
+  {
+    q: "เกิดอะไรขึ้นกับ `<style>` block ธรรมดาภายในไฟล์ .astro โดยค่าเริ่มต้น?",
+    options: [
+      "ถูกนำไปใช้กับทั้งหน้าเว็บแบบ global",
+      "ถูก scoped อัตโนมัติเฉพาะ component นั้นโดย compiler",
+      "ต้องใช้นามสกุล CSS Module จึงจะทำงานได้",
+      "ถูกละเว้น ต้องเพิ่ม `is:scoped` ก่อน",
+    ],
+    answer: 1,
+  },
+  {
+    q: "อะไรคือ Astro equivalent ของ `clsx(styles.card, active && styles.active)`?",
+    options: [
+      "`className={styles.card + (active ? ' ' + styles.active : '')}`",
+      "`class:list={['card', { active }]}`",
+      "`class={clsx('card', { active })}`",
+      "`classList={{ card: true, active }}`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "วิธีใดใช้นำ style ไปใช้แบบ global ใน Astro component?",
+    options: [
+      "ใช้ `<style>` block ธรรมดา — เป็น global อยู่แล้วโดยค่าเริ่มต้น",
+      "ใช้ `<style module>` เพื่อยกเว้น scoping",
+      "ใช้ `<style is:global>` หรือ import CSS file ที่ระดับ layout",
+      "ส่ง prop `global` ให้ tag `<style>`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="styling/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="styling/index" />

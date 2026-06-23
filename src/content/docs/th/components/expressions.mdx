@@ -1,0 +1,167 @@
+---
+title: Expressions
+description: ฝังค่า เงื่อนไข และ list ใน .astro template ด้วย {expr} ซึ่ง render ครั้งเดียวตอน build time ไม่มี reactivity
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+template expression ของ Astro หน้าตาแทบจะเหมือน JSX เลย คุณใช้ `{expr}` เพื่อฝัง JavaScript expression ใด ๆ ความแตกต่างที่สำคัญ: Astro ประเมินมัน **ครั้งเดียว** ตอน build/server time แล้วเขียนออกมาเป็น static HTML ไม่มี virtual DOM ไม่มีการ re-render ไม่มีการอัปเดตแบบ reactive
+
+## การฝังค่า
+
+export const expressionsReact = `// Stats.jsx
+export default function Stats({ count, label }) {
+  const doubled = count * 2;
+  return (
+    <div>
+      <span>{label}: {count}</span>
+      <span>Doubled: {doubled}</span>
+    </div>
+  );
+}`;
+
+export const expressionsAstro = `---
+// Stats.astro
+const { count, label } = Astro.props;
+const doubled = count * 2;
+---
+<div>
+  <span>{label}: {count}</span>
+  <span>Doubled: {doubled}</span>
+</div>`;
+
+<ReactAstro client:visible react={expressionsReact} astro={expressionsAstro} />
+
+## เงื่อนไข (Conditionals)
+
+JSX ใช้ `{condition && <El />}` และ ternary ส่วน Astro ก็ใช้ syntax เดียวกันเป๊ะ
+
+export const conditionalsReact = `// Alert.jsx
+export default function Alert({ type, message }) {
+  return (
+    <div>
+      {type === "error" && (
+        <p className="error">{message}</p>
+      )}
+      {type !== "error" && (
+        <p className="info">{message}</p>
+      )}
+    </div>
+  );
+}`;
+
+export const conditionalsAstro = `---
+// Alert.astro
+const { type, message } = Astro.props;
+---
+<div>
+  {type === "error" && (
+    <p class="error">{message}</p>
+  )}
+  {type !== "error" && (
+    <p class="info">{message}</p>
+  )}
+</div>`;
+
+<ReactAstro client:visible react={conditionalsReact} astro={conditionalsAstro} />
+
+ternary ทำงานเหมือนกันทุกประการ: `{isLoggedIn ? <Dashboard /> : <Login />}`
+
+## การ render list
+
+export const listsReact = `// TagList.jsx
+export default function TagList({ tags }) {
+  return (
+    <ul>
+      {tags.map((tag) => (
+        <li key={tag}>{tag}</li>
+      ))}
+    </ul>
+  );
+}`;
+
+export const listsAstro = `---
+// TagList.astro
+const { tags } = Astro.props;
+---
+<ul>
+  {tags.map((tag) => (
+    <li>{tag}</li>
+  ))}
+</ul>`;
+
+<ReactAstro client:visible react={listsReact} astro={listsAstro} />
+
+Astro **ไม่** ต้องการ prop `key` บน item ของ list เพราะไม่มีการ diff แบบ virtual DOM list จะถูก render ออกมาเป็น HTML ครั้งเดียวแล้วจบ
+
+## ตัวอย่างที่รันได้จริง
+
+export const expressionsCode = `---
+const fruits = ["Apple", "Banana", "Cherry", "Date"];
+const today = new Date().toLocaleDateString("en-US", { weekday: "long" });
+const isWeekend = [0, 6].includes(new Date().getDay());
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Expressions demo</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <h1>Today is {today}</h1>
+    {isWeekend && <p style="color:green">It is the weekend!</p>}
+    {!isWeekend && <p style="color:#555">It is a weekday.</p>}
+    <h2>Fruits ({fruits.length})</h2>
+    <ul>
+      {fruits.map((fruit) => <li>{fruit}</li>)}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={expressionsCode} />
+
+<Diff title="JSX expressions vs Astro template expressions">
+- syntax เหมือนกัน: `{expr}`, `{cond && <El />}`, ternary, `.map()`
+- React: expression ทำงาน **ทุกครั้งที่ render** ในเบราว์เซอร์ และเป็นตัวขับเคลื่อน reactivity
+- Astro: expression ทำงาน **ครั้งเดียวตอน build/server time** ผลลัพธ์ถูก bake ลงใน HTML
+- item ของ list ใน React ต้องการ prop `key` เพื่อทำ reconciliation ของ virtual DOM
+- item ของ list ใน Astro **ไม่** ต้องการ `key` เพราะไม่มีอะไรให้ reconcile
+- Astro ไม่สามารถตอบสนองต่อการเปลี่ยน state ใน `.astro` template ได้ ความ interactive ต้องใช้ island (component ของ framework)
+</Diff>
+
+export const quizExpressions = [
+  {
+    q: "คุณเขียน `{items.map((i) => <li>{i}</li>)}` ใน Astro template โค้ดนี้ทำงานเมื่อใด?",
+    options: [
+      "ในเบราว์เซอร์ ทุกครั้งที่ component re-render",
+      "ครั้งเดียวตอน build หรือ server time ผลลัพธ์เป็น static HTML",
+      "ใน Web Worker ตอนโหลดหน้า",
+      "ทุกครั้งที่เกิด event scroll",
+    ],
+    answer: 1,
+  },
+  {
+    q: "item ของ list ใน Astro ที่ render ด้วย `.map()` ต้องการ prop `key` หรือไม่?",
+    options: [
+      "ต้องการเสมอ — Astro ใช้ virtual DOM",
+      "เฉพาะ array ที่ยาวเกิน 10 item เท่านั้น",
+      "ไม่ต้องการ — ไม่มี virtual DOM ให้ reconcile",
+      "เฉพาะตอนที่ list สามารถเปลี่ยนแปลงได้ขณะ runtime เท่านั้น",
+    ],
+    answer: 2,
+  },
+  {
+    q: "expression ใด render paragraph เฉพาะเมื่อ `isAdmin` เป็น true ใน Astro template ได้อย่างถูกต้อง?",
+    options: [
+      "`<p v-if=\"isAdmin\">Admin</p>`",
+      "`{# if isAdmin}<p>Admin</p>{/if}`",
+      "`{isAdmin && <p>Admin</p>}`",
+      "`<?= isAdmin ? '<p>Admin</p>' : '' ?>`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/expressions" questions={quizExpressions} />
+
+<ProgressTracker client:visible id="components/expressions" />

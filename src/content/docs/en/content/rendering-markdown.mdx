@@ -1,0 +1,168 @@
+---
+title: 'Rendering Markdown'
+description: 'Render a content collection entry with render(entry) or entry.render(), and list entries — versus MDX components in Next.js.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In Next.js with contentlayer you import the MDX component directly. In Astro you call `render(entry)` (Astro 5+) to get a `Content` component, then drop `<Content />` into your template. The frontmatter fields live on `entry.data`, the rendered body comes from `Content`.
+
+> Needs a full Astro project to run. Use `npm create astro@latest` to scaffold one.
+
+## Rendering an entry: contentlayer vs Astro
+
+export const renderReact = `// app/blog/[slug]/page.tsx (Next.js App Router + contentlayer)
+import { allPosts } from 'contentlayer/generated';
+import { useMDXComponent } from 'next-contentlayer/hooks';
+
+export default function PostPage({ params }) {
+  const post = allPosts.find(p => p.slug === params.slug);
+  const MDXContent = useMDXComponent(post.body.code);
+
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <MDXContent />
+    </article>
+  );
+}`;
+
+export const renderAstro = `---
+// src/pages/blog/[slug].astro (Astro 5+)
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map(post => ({ params: { slug: post.slug }, props: { post } }));
+}
+
+const { post } = Astro.props;
+const { Content, headings } = await render(post);
+---
+<article>
+  <h1>{post.data.title}</h1>
+  <Content />
+</article>`;
+
+<ReactAstro client:visible react={renderReact} astro={renderAstro} />
+
+`render(entry)` returns `{ Content, headings, remarkPluginFrontmatter }`. `Content` is a component you render directly — no hooks, no client-side MDX compilation.
+
+## Full blog post page
+
+```astro
+---
+// src/pages/blog/[slug].astro
+import { getCollection, render } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog', ({ data }) => !data.draft);
+  return posts.map((post) => ({
+    params: { slug: post.slug },
+    props:  { post },
+  }));
+}
+
+const { post } = Astro.props;
+const { Content, headings } = await render(post);
+---
+<BaseLayout title={post.data.title}>
+  <article>
+    <header>
+      <h1>{post.data.title}</h1>
+      <time datetime={post.data.date.toISOString()}>
+        {post.data.date.toLocaleDateString('en-US', { dateStyle: 'long' })}
+      </time>
+    </header>
+    <Content />
+  </article>
+</BaseLayout>
+```
+
+## Listing entries
+
+export const listReact = `// app/blog/page.tsx (Next.js App Router + contentlayer)
+import { allPosts } from 'contentlayer/generated';
+
+export default function BlogIndex() {
+  const sorted = allPosts.sort(
+    (a, b) => new Date(b.date) - new Date(a.date)
+  );
+  return (
+    <ul>
+      {sorted.map(post => (
+        <li key={post.slug}>
+          <a href={post.url}>{post.title}</a>
+        </li>
+      ))}
+    </ul>
+  );
+}`;
+
+export const listAstro = `---
+// src/pages/blog/index.astro
+import { getCollection } from 'astro:content';
+
+const posts = await getCollection('blog', ({ data }) => !data.draft);
+const sorted = posts.sort(
+  (a, b) => b.data.date.valueOf() - a.data.date.valueOf()
+);
+---
+<ul>
+  {sorted.map((post) => (
+    <li>
+      <a href={\`/blog/\${post.slug}/\`}>{post.data.title}</a>
+    </li>
+  ))}
+</ul>`;
+
+<ReactAstro client:visible react={listReact} astro={listAstro} />
+
+<Diff title="MDX in Next.js vs render(entry) in Astro">
+- Next + contentlayer: `useMDXComponent(post.body.code)` — compiles MDX in the browser (or at the edge).
+- Astro: `render(entry)` — compiles MDX **at build time**, ships static HTML. Zero MDX runtime in the browser.
+- Next: frontmatter fields accessed as flat properties on the post object.
+- Astro: frontmatter fields accessed via `entry.data` — typed from the zod schema.
+- `render()` also returns `headings` (table of contents array) — no extra remark plugin needed.
+</Diff>
+
+export const quizRenderingMarkdown = [
+  {
+    q: "What function do you call to get a renderable component from a collection entry?",
+    options: [
+      "`entry.toJSX()`",
+      "`import { MDXContent } from entry`",
+      "`render(entry)` (Astro 5+) — returns `{ Content }`",
+      "`Astro.render(entry)`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "How do you output the rendered content in the Astro template?",
+    options: [
+      "`{entry.body}`",
+      "`<Content />`",
+      "`{entry.html}`",
+      "`<Markdown content={entry.body} />`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What does `getStaticPaths()` return for a dynamic collection route?",
+    options: [
+      "An array of `{ params, props }` objects",
+      "A Promise that resolves to the rendered HTML",
+      "The collection config schema",
+      "An array of file paths",
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content/rendering-markdown" questions={quizRenderingMarkdown} />
+
+<ProgressTracker client:visible id="content/rendering-markdown" />

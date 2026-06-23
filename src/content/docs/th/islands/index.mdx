@@ -1,0 +1,99 @@
+---
+title: 'Islands & Using React in Astro'
+description: 'Hydrate only the interactive parts of your page — and bring your existing React components along.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ในแอป React ทั้ง UI คือ JavaScript bundle ขนาดใหญ่ก้อนเดียว เบราว์เซอร์ดาวน์โหลดมัน hydrate component tree ทั้งหมด แล้วหน้าเพจถึงจะโต้ตอบได้ Astro พลิกโมเดลนั้น: เพจเป็น HTML แบบ static โดยค่าเริ่มต้น และคุณ **เลือก hydrate เฉพาะ component ที่ต้องการ** — นั่นคือ islands ของคุณ
+
+ฟีเจอร์เด่นสำหรับนักพัฒนา React: **React component ที่มีอยู่ทำงานใน Astro โดยไม่ต้องแก้ไขใดๆ** นำเข้า `Counter.jsx` เพิ่ม `client:load` แล้วก็เสร็จ ทุกอย่างรอบๆ ยังคงเป็น HTML ล้วนๆ
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียน |
+|---|---|
+| [Island คืออะไร?](/astro-for-react-developers/th/islands/what-is-an-island/) | Partial hydration vs full-app hydration; ประสิทธิภาพที่ดีขึ้น |
+| [ใช้ React ใน Astro](/astro-for-react-developers/th/islands/using-react/) | `npx astro add react`; นำ `.jsx` ใดก็ได้ใส่ใน `.astro` |
+| [Client Directives](/astro-for-react-developers/th/islands/client-directives/) | `client:load`, `client:idle`, `client:visible`, `client:media`, `client:only` |
+| [ส่ง Props](/astro-for-react-developers/th/islands/passing-props/) | Props ที่ serialize ได้; การส่ง children/slots ให้ framework islands |
+| [เมื่อใดควรใช้ Island](/astro-for-react-developers/th/islands/when-to-island/) | กลยุทธ์ static เป็นค่าเริ่มต้น; การแยกตัวของ islands เทียบกับ React SPA |
+
+## แนวคิดหลัก
+
+export const indexReact = `// In a React/Next.js app every component
+// is part of one hydrated tree.
+// The whole bundle ships to the browser.
+
+export default function Page() {
+  return (
+    <Layout>
+      <Header />       {/* hydrated */}
+      <HeroImage />    {/* hydrated */}
+      <ArticleText />  {/* hydrated */}
+      <Counter />      {/* hydrated */}
+      <Footer />       {/* hydrated */}
+    </Layout>
+  );
+}`;
+
+export const indexAstro = `---
+// In Astro, only Counter needs JS.
+// Everything else is static HTML.
+import Header from '../components/Header.astro';
+import Counter from '../components/Counter.jsx';
+---
+<Header />          <!-- static HTML, zero JS -->
+<img src="/hero.jpg" alt="Hero" /> <!-- static HTML -->
+<article>Long article text...</article>  <!-- static HTML -->
+<Counter client:load />  <!-- ONE hydrated island -->
+<footer>...</footer>     <!-- static HTML -->`;
+
+<ReactAstro client:visible react={indexReact} astro={indexAstro} />
+
+<Diff title="Full-app hydration vs Islands">
+- React/Next.js: **JS bundle เดียว** ทั้ง tree ถูก hydrate ทุก component รันในเบราว์เซอร์
+- Astro: **HTML แบบ static เป็นค่าเริ่มต้น** มีเฉพาะ component ที่มี `client:*` directive เท่านั้นที่ส่ง JavaScript
+- React component ของคุณ **ไม่ต้องแก้ไข** — เพียงเพิ่ม directive แทน props
+- ผลลัพธ์: ลด JS budget อย่างมีนัยสำคัญและ Time to Interactive เร็วขึ้น
+</Diff>
+
+export const quizIslandsIndex = [
+  {
+    q: "Astro ส่งอะไรไปยังเบราว์เซอร์โดยค่าเริ่มต้นสำหรับ .astro component ธรรมดา?",
+    options: [
+      "React virtual DOM tree",
+      "Hydration shim ขนาดเล็ก",
+      "ไม่มี JavaScript เลย",
+      "IIFE bundle",
+    ],
+    answer: 2,
+  },
+  {
+    q: "อะไรทำให้ Astro component เป็น 'island'?",
+    options: [
+      "อยู่ในไฟล์ของตัวเอง",
+      "เขียนด้วย framework อย่าง React",
+      "มี `client:*` directive ที่เลือก hydration ด้วย JavaScript",
+      "ใช้ `export default`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "React component ที่มีอยู่จำเป็นต้องเขียนใหม่เพื่อทำงานเป็น Astro islands หรือไม่?",
+    options: [
+      "ใช่ — ต้องแปลงเป็นไฟล์ .astro",
+      "ไม่ — ทำงานได้เลย เพียงเพิ่ม client directive เมื่อใช้งาน",
+      "เฉพาะที่ใช้ hooks เท่านั้น",
+      "เฉพาะที่ใช้ context เท่านั้น",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/index" questions={quizIslandsIndex} />
+
+<ProgressTracker client:visible id="islands/index" />

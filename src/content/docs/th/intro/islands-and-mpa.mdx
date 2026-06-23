@@ -1,0 +1,192 @@
+---
+title: Islands Architecture และ MPA Model
+description: Astro ส่ง HTML ที่ render จาก server ตามค่าเริ่มต้นได้อย่างไร และ hydrate เฉพาะ island ที่โต้ตอบได้ เพื่อประหยัด JavaScript ในระดับใหญ่
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+model การส่งมอบเริ่มต้นของ React คือ **Single-Page Application (SPA)**: server ส่ง HTML shell ที่เกือบว่างเปล่า เบราว์เซอร์ดาวน์โหลด JavaScript bundle, React บูต และหน้าเว็บ render ฝั่ง client การนำทางจัดการด้วย client-side router — ไม่มีการโหลดหน้าใหม่เต็มรูปแบบ
+
+model ของ Astro คือ **Multi-Page Application (MPA)**: server render แต่ละหน้าเป็น HTML สมบูรณ์ก่อนที่เบราว์เซอร์จะเห็น เบราว์เซอร์รับ HTML จริงๆ วาดภาพทันที และ — ถ้าคุณไม่บอก Astro เป็นอย่างอื่น — **ไม่ดาวน์โหลด JavaScript เลย**
+
+## ต้นทุนของ SPA model
+
+ใน React SPA ทั่วไป:
+
+- เบราว์เซอร์ดาวน์โหลด `main.js` (React runtime + โค้ดแอปของคุณ — มักจะ 100–300 kB ในรูปแบบ gzip)
+- React รัน, สร้าง virtual DOM, reconcile, และแนบ event listener
+- แล้วหน้าถึงจะโต้ตอบได้
+
+สำหรับบทความบล็อก, landing page, หรือบทความ docs JavaScript ส่วนใหญ่นั้นสูญเปล่า: เนื้อหาไม่เคยเปลี่ยนหลังจาก render ครั้งแรก
+
+## Islands: พื้นที่โต้ตอบในทะเล HTML แบบ static
+
+islands architecture ของ Astro กลับหลักการนี้ หน้าเป็น **static HTML** เมื่อ component ใดต้องการ interactivity — search box, counter, ตะกร้าสินค้า — คุณทำเครื่องหมายมันเป็น island
+
+export const islandsReact = `// React SPA — everything is a component tree
+// The entire page re-renders when state changes
+function App() {
+  const [count, setCount] = React.useState(0);
+  return (
+    <>
+      <Header />        {/* re-renders on count change */}
+      <ArticleBody />   {/* re-renders on count change */}
+      <Counter
+        count={count}
+        onIncrement={() => setCount(c => c + 1)}
+      />
+    </>
+  );
+}
+// Bundle: React runtime + Header + ArticleBody + Counter`;
+
+export const islandsAstro = `---
+// Astro MPA — only Counter is an island
+import Header from '../components/Header.astro';
+import ArticleBody from '../components/ArticleBody.astro';
+import Counter from '../components/Counter.tsx'; // React island
+---
+<html lang="en">
+  <body>
+    <Header />         <!-- zero JS, pure HTML -->
+    <ArticleBody />    <!-- zero JS, pure HTML -->
+    <Counter client:visible />  <!-- hydrated only when visible -->
+  </body>
+</html>
+<!-- Bundle: only Counter's JS — not Header or ArticleBody -->`;
+
+<ReactAstro client:visible react={islandsReact} astro={islandsAstro} />
+
+สังเกต `client:visible` บน `Counter` นั่นคือ **hydration directive** ถ้าไม่มีมัน `Counter` จะ render เป็น HTML ขณะ build (markup เริ่มต้น) และไม่มีทางโต้ตอบในเบราว์เซอร์
+
+## Hydration directive
+
+| Directive | เมื่อใด island จะ hydrate |
+|---|---|
+| `client:load` | ทันทีเมื่อโหลดหน้า |
+| `client:idle` | เมื่อเบราว์เซอร์ว่าง (`requestIdleCallback`) |
+| `client:visible` | เมื่อ component เข้ามาใน viewport |
+| `client:media="(max-width:768px)"` | เมื่อ CSS media query ตรงกัน |
+| `client:only="react"` | ข้าม SSR ทั้งหมด; render เฉพาะในเบราว์เซอร์ |
+
+แต่ละ island โหลดและ hydrate แยกกัน component data-visualisation ขนาดใหญ่ที่ด้านล่างของหน้า (`client:visible`) ไม่บล็อก header จากการวาดภาพ
+
+## ทำไมเรื่องนี้ถึงสำคัญต่อ performance
+
+ลองนึกภาพหน้าที่มี navigation bar, บทความยาว, sidebar related-posts, และปุ่ม "like" ที่โต้ตอบได้หนึ่งปุ่ม:
+
+- **React SPA**: ทั้งสี่ส่วนส่งเป็น JavaScript, บูตพร้อมกัน, hydrate พร้อมกัน
+- **Astro MPA กับ island**: เฉพาะปุ่ม "like" เท่านั้นที่ส่ง JavaScript ส่วนอีกสามส่วนเป็น HTML ล้วนๆ
+
+ผลในทางปฏิบัติคือ **Total Blocking Time** ที่ลดลงอย่างมากและ **Largest Contentful Paint** ที่เร็วขึ้น — metric ที่ขับเคลื่อนทั้ง user experience และ SEO
+
+## MPA navigation: โหลดหน้าใหม่เต็มรูปแบบ
+
+ข้อแลกเปลี่ยน: เนื่องจากแต่ละ Astro page เป็น HTML document แยกกัน การนำทางระหว่างหน้าจึงเป็นการโหลดหน้าเต็มรูปแบบ (เหมือนคลิก link บนเว็บไซต์แบบดั้งเดิม) ไม่มี client-side router ที่แคชหน้าก่อนหน้าในหน่วยความจำ
+
+สำหรับเว็บไซต์ที่เน้นเนื้อหาส่วนใหญ่นี่ก็ไม่เป็นไร — หน้าโหลดเร็วเพราะเป็น HTML ที่ pre-render แล้ว สำหรับแอปที่ใช้งานหนักซึ่ง navigation state มีความสำคัญ React (หรือ Next.js กับ App Router) ยังคงเหมาะกว่า
+
+Astro รองรับ **View Transitions** (`<ClientRouter />`) เพื่อทำ animation ระหว่างหน้าโดยไม่ต้องโหลดใหม่เต็มรูปแบบ — แต่นั่นเป็น enhancement แบบ opt-in ไม่ใช่ค่าเริ่มต้น
+
+## หน้า static ที่รันได้
+
+export const islandsCode = `---
+const sections = [
+  { id: "hero", label: "Hero", color: "#6366f1" },
+  { id: "about", label: "About", color: "#0ea5e9" },
+  { id: "contact", label: "Contact", color: "#10b981" },
+];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Islands demo</title>
+    <style>
+      body { font-family: sans-serif; margin: 0; }
+      .section { padding: 3rem 2rem; }
+      .badge {
+        display: inline-block;
+        font-size: 0.75rem;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        background: #f1f5f9;
+        color: #475569;
+        margin-bottom: 0.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    {sections.map(s => (
+      <div class="section" style={\`border-top: 4px solid \${s.color}\`}>
+        <span class="badge">Static HTML island</span>
+        <h2>{s.label} section</h2>
+        <p>This renders to HTML at build time. No JS bundle.</p>
+      </div>
+    ))}
+    <div class="section" style="border-top:4px solid #f59e0b">
+      <span class="badge">client:visible island would go here</span>
+      <h2>Interactive widget</h2>
+      <p>Only this section would ship JavaScript — the rest stays pure HTML.</p>
+    </div>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={islandsCode} />
+
+<Diff title="React SPA vs Astro MPA with islands">
+- React SPA: JS bundle เดียวบูตทุกอย่าง; component ทั้งหมด hydrate พร้อมกันเมื่อโหลด
+- Astro MPA: server render HTML สมบูรณ์; เฉพาะ component ที่มี directive `client:*` เท่านั้นที่ส่ง JS
+- Navigation: SPA = client-side router (ไม่โหลดใหม่); MPA = โหลดหน้าเต็มรูปแบบ (หรือ View Transitions แบบ opt-in)
+- จุดแข็งของ Islands: แต่ละ interactive widget โหลดและ hydrate แยกกัน — ไม่มี JS overhead ที่ใช้ร่วมกัน
+</Diff>
+
+export const quizIslands = [
+  {
+    q: "`client:visible` ใน Astro ทำอะไร?",
+    options: [
+      "ทำให้ component มองเห็นได้ด้วย CSS",
+      "Hydrate island เฉพาะเมื่อเลื่อนเข้ามาใน viewport",
+      "Render component เฉพาะบน client โดยข้าม SSR",
+      "โหลด JS ของ component ทันทีเมื่อโหลดหน้า",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ใน islands model ของ Astro สิ่งที่เกิดขึ้นกับ `.astro` component ที่ไม่มี directive `client:*` คืออะไร?",
+    options: [
+      "เกิด build error",
+      "Render เป็น div ว่างเปล่า",
+      "ส่ง JavaScript ศูนย์ชิ้น — render เป็น HTML ขณะ build/server เท่านั้น",
+      "Fallback ไปใช้ React rendering",
+    ],
+    answer: 2,
+  },
+  {
+    q: "ข้อแลกเปลี่ยน performance หลักของ Astro MPA เมื่อเทียบกับ React SPA คืออะไร?",
+    options: [
+      "หน้า Astro ใช้เวลา build นานกว่า",
+      "การนำทางระหว่างหน้าทำให้โหลดหน้าเต็มรูปแบบแทนการเปลี่ยนเส้นทาง client-side",
+      "Astro ไม่สามารถ cache หน้าใน CDN ได้",
+      "Island โหลด JS มากกว่า React SPA เสมอ",
+    ],
+    answer: 1,
+  },
+  {
+    q: "directive `client:*` ใดที่ hydrate component เฉพาะหลังจากเบราว์เซอร์ว่าง?",
+    options: [
+      "`client:load`",
+      "`client:visible`",
+      "`client:idle`",
+      "`client:lazy`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/islands-and-mpa" questions={quizIslands} />
+
+<ProgressTracker client:visible id="intro/islands-and-mpa" />

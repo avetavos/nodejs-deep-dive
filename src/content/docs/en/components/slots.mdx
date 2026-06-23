@@ -1,0 +1,164 @@
+---
+title: Slots
+description: "Use <slot /> to accept children in .astro components. Named slots replace React's render props and named children patterns."
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+React passes children via the `children` prop. Astro uses `<slot />` — a Web Component concept built right into the template. The result is the same: the parent decides what goes inside, the component decides where it goes.
+
+## Default slot (children equivalent)
+
+export const slotsReact = `// Card.jsx
+export default function Card({ children }) {
+  return (
+    <div className="card">
+      {children}
+    </div>
+  );
+}
+
+// Usage:
+// <Card>
+//   <h2>Title</h2>
+//   <p>Body text</p>
+// </Card>`;
+
+export const slotsAstro = `---
+// Card.astro
+---
+<div class="card">
+  <slot />
+</div>
+
+<!-- Usage:
+<Card>
+  <h2>Title</h2>
+  <p>Body text</p>
+</Card>
+-->`;
+
+<ReactAstro client:visible react={slotsReact} astro={slotsAstro} />
+
+No prop declaration needed — `<slot />` automatically receives any children passed to the component. If no children are passed, the slot renders nothing (you can provide fallback content between the slot tags: `<slot>Default content</slot>`).
+
+## Named slots
+
+React doesn't have native named slots. Common patterns are render props, compound components, or separate props like `header={<H1 />}`. Astro has first-class named slots.
+
+In the **component definition**, place `<slot name="header" />` where you want header content to appear.
+
+In the **component usage**, add `slot="header"` to any child element to route it to that slot.
+
+export const namedSlotsReact = `// Layout.jsx — React named-slot workaround
+export default function Layout({ header, sidebar, children }) {
+  return (
+    <div className="layout">
+      <header>{header}</header>
+      <aside>{sidebar}</aside>
+      <main>{children}</main>
+    </div>
+  );
+}
+
+// Usage:
+// <Layout
+//   header={<nav>Nav here</nav>}
+//   sidebar={<ul>Links</ul>}
+// >
+//   <p>Main content</p>
+// </Layout>`;
+
+export const namedSlotsAstro = `---
+// Layout.astro
+---
+<div class="layout">
+  <header><slot name="header" /></header>
+  <aside><slot name="sidebar" /></aside>
+  <main><slot /></main>
+</div>
+
+<!-- Usage:
+<Layout>
+  <nav slot="header">Nav here</nav>
+  <ul slot="sidebar">Links</ul>
+  <p>Main content</p>
+</Layout>
+-->`;
+
+<ReactAstro client:visible react={namedSlotsReact} astro={namedSlotsAstro} />
+
+## Runnable example
+
+export const slotsCode = `---
+// No frontmatter needed for this demo
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Slots demo</title></head>
+  <body style="font-family:sans-serif;padding:2rem;max-width:600px;margin:auto">
+    <style>
+      .card { border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; }
+      .card header { background:#6366f1; color:#fff; padding:1rem; }
+      .card main { padding:1rem; }
+      .card footer { background:#f8fafc; padding:.75rem 1rem; font-size:.875rem; color:#64748b; }
+    </style>
+
+    <!-- Inline component demo using an HTML template pattern -->
+    <div class="card">
+      <header>
+        <h2>Named Slots</h2>
+      </header>
+      <main>
+        <p>The default slot receives children with no slot attribute.</p>
+        <p>Named slots receive children tagged with slot="name".</p>
+      </main>
+      <footer>No JavaScript required.</footer>
+    </div>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={slotsCode} />
+
+<Diff title="React children vs Astro slots">
+- React default children: `{children}` prop (must be declared or destructured).
+- Astro default slot: `<slot />` — no declaration needed.
+- React named slots: workaround via separate props or render props.
+- Astro named slots: `<slot name="header" />` in the component; `slot="header"` on child elements.
+- Both: support fallback/default content when nothing is passed.
+</Diff>
+
+export const quizSlots = [
+  {
+    q: "What is the Astro equivalent of React's `{children}` prop?",
+    options: ["`<children />`", "`{Astro.children}`", "`<slot />`", "`<yield />`"],
+    answer: 2,
+  },
+  {
+    q: "How do you direct a child element to a named slot called 'header' in Astro?",
+    options: [
+      "Wrap it in `<Slot name=\"header\">`",
+      "Pass it as a `header` prop to the component",
+      "Add the attribute `slot=\"header\"` to the child element",
+      "Use `Astro.slots.header`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What renders if nothing is passed to `<slot>Fallback text</slot>`?",
+    options: [
+      "Nothing — slots always render empty",
+      "An error is thrown",
+      "The fallback text between the slot tags",
+      "The string 'undefined'",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/slots" questions={quizSlots} />
+
+<ProgressTracker client:visible id="components/slots" />

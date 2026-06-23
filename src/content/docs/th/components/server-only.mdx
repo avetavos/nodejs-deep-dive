@@ -1,0 +1,173 @@
+---
+title: Server-Only & Scripts
+description: '.astro component ส่ง JS เป็นศูนย์โดย default เพิ่ม JS ฝั่งเบราว์เซอร์ได้ด้วย tag <script> ธรรมดา'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+นี่คือแนวคิดที่ทำให้นักพัฒนา React ประหลาดใจมากที่สุด ใน React ทุก component ที่คุณเขียนจะส่ง JavaScript ไปยังเบราว์เซอร์ แม้แต่ component ที่แค่ render หัวข้อก็ตาม Astro กลับด้านของ default นี้: **`.astro` component ธรรมดาผลิต JavaScript ออกมาเป็นศูนย์**
+
+## React ส่ง JS เสมอ — Astro ไม่ส่ง
+
+export const serverOnlyReact = `// Heading.jsx — React
+// This component ships JS to the browser.
+// React needs a runtime to mount it, diff it,
+// and re-render it if props change.
+export default function Heading({ title }) {
+  return <h1>{title}</h1>;
+}
+
+// React also ships event-wiring, reconciler, etc.
+// even when none of that is needed here.`;
+
+export const serverOnlyAstro = `---
+// Heading.astro — Astro
+// This compiles to:
+//   <h1>My Title</h1>
+// No JavaScript. No runtime. No hydration.
+const { title } = Astro.props;
+---
+<h1>{title}</h1>`;
+
+<ReactAstro client:visible react={serverOnlyReact} astro={serverOnlyAstro} />
+
+compiler ของ Astro จะแปลง `Heading.astro` ให้เป็นฟังก์ชันที่ return string ของ HTML ออกมา เบราว์เซอร์ได้รับ string นั้นไป จบ ไม่มี script tag ไม่มี React runtime ไม่มีอะไรเลย
+
+## สิ่งที่คุณทำไม่ได้ใน .astro component ธรรมดา
+
+เพราะ frontmatter ทำงาน **ตอน build/server time** และ template ผลิต **static HTML** ออกมา คุณจึงไม่สามารถ:
+
+- เรียก `useState`, `useReducer` หรือ React hook ใด ๆ
+- ผูก event listener ใน frontmatter (ไม่มี `onClick` ที่ทำงานในเบราว์เซอร์)
+- อ่าน `window`, `document` หรือ `localStorage` ใน frontmatter (สิ่งเหล่านี้ไม่มีอยู่ตอน build time)
+- ทำให้ UI ตอบสนองต่อ input ของผู้ใช้ — สิ่งนั้นต้องใช้ **island** (จะกล่าวถึงในโมดูลถัดไป)
+
+## การเพิ่ม vanilla browser JS ด้วย script tag
+
+เมื่อคุณต้องการ JavaScript ฝั่งเบราว์เซอร์เพียงเล็กน้อย — เช่น toggle, counter หรือ event สำหรับ analytics — Astro ให้คุณใส่ tag `<script>` เข้าไปใน template ได้โดยตรง Astro จะ bundle และ deduplicate script เหล่านี้ให้อัตโนมัติ
+
+export const scriptReact = `// Counter.jsx — React
+// Ships React + hydration + component JS
+import { useState } from 'react';
+
+export default function Counter() {
+  const [count, setCount] = useState(0);
+  return (
+    <div>
+      <p>Count: {count}</p>
+      <button onClick={() => setCount(count + 1)}>
+        Increment
+      </button>
+    </div>
+  );
+}`;
+
+export const scriptAstro = `---
+// Counter.astro — vanilla JS via <script>
+// Ships only the tiny script below — no framework runtime
+---
+<div>
+  <p id="count">Count: 0</p>
+  <button id="btn">Increment</button>
+</div>
+
+<script>
+  let count = 0;
+  const display = document.getElementById('count');
+  const btn = document.getElementById('btn');
+  btn.addEventListener('click', () => {
+    count++;
+    display.textContent = 'Count: ' + count;
+  });
+</script>`;
+
+<ReactAstro client:visible react={scriptReact} astro={scriptAstro} />
+
+tag `<script>` ใน Astro component จะถูกประมวลผลโดย Vite: มันถูก bundle, tree-shake และ inject เพียงครั้งเดียวต่อหนึ่งหน้า แม้ component นั้นจะถูกใช้หลายครั้งก็ตาม สำหรับความ interactive ที่ซับซ้อน ให้ใช้ island (component ของ React, Preact, Svelte หรือ framework อื่นที่มี directive `client:*`)
+
+## ตัวอย่างที่รันได้จริงพร้อม script
+
+export const serverOnlyCode = `---
+const items = ["Astro", "React", "TypeScript", "Vite"];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Script demo</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <h1>Tech Stack</h1>
+    <ul id="list" style="padding-left:1.5rem">
+      {items.map((item) => <li>{item}</li>)}
+    </ul>
+    <button id="toggle" style="margin-top:1rem;padding:.5rem 1rem;cursor:pointer">
+      Toggle list
+    </button>
+  </body>
+</html>
+
+<script>
+  const list = document.getElementById('list');
+  const btn = document.getElementById('toggle');
+  btn.addEventListener('click', () => {
+    list.style.display = list.style.display === 'none' ? '' : 'none';
+  });
+</script>`;
+
+<AstroPlayground client:visible code={serverOnlyCode} />
+
+<Diff title="React (always JS) vs Astro (zero JS by default)">
+- React: ทุก component ส่ง JS — ทั้ง React runtime, reconciler และโค้ดของ component ล้วนทำงานในเบราว์เซอร์
+- Astro `.astro`: ส่ง JavaScript **เป็นศูนย์** — compile ออกมาเป็น string ของ HTML ล้วน ๆ
+- state/hook ของ React: ทำงานในเบราว์เซอร์เท่านั้น และต้องการ hydration
+- `<script>` ของ Astro: vanilla JS แบบ opt-in ที่ bundle โดย Vite ไม่ต้องการ framework runtime
+- สำหรับความ interactive ที่มี state ใน Astro: ให้ใช้ **island** — component ของ React/Preact/Svelte ที่มี directive `client:*` (โมดูลถัดไป)
+</Diff>
+
+export const quizServerOnly = [
+  {
+    q: ".astro component ธรรมดาส่ง JavaScript ไปยังเบราว์เซอร์เท่าไร?",
+    options: [
+      "Astro runtime (~10 kB)",
+      "เท่ากับ React component ที่เทียบเท่ากัน",
+      "JavaScript เป็นศูนย์",
+      "ขึ้นอยู่กับว่ามันรับ props กี่ตัว",
+    ],
+    answer: 2,
+  },
+  {
+    q: "คุณต้องการ click handler ที่ toggle เมนูใน .astro component วิธีที่เบาที่สุดซึ่งยังอยู่ใน .astro (ไม่ใช้ island) คืออะไร?",
+    options: [
+      "เพิ่ม `onClick` ลงบนปุ่มใน template โดยตรง",
+      "ใช้ `useState` ใน frontmatter",
+      "เพิ่ม tag `<script>` พร้อม `addEventListener` แบบ vanilla JS",
+      "import React แล้วใช้ `useEffect`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "เกิดอะไรขึ้นกับ tag `<script>` ภายใน .astro component เมื่อ component นั้นถูกใช้หลายครั้งในหน้าเดียวกัน?",
+    options: [
+      "script ถูกทำซ้ำหนึ่งครั้งต่อหนึ่ง instance ของ component",
+      "Astro โยน build error ออกมา",
+      "Astro deduplicate มัน — script ถูก inject เพียงครั้งเดียว",
+      "script ถูกเพิกเฉยตั้งแต่การใช้ครั้งที่สองเป็นต้นไป",
+    ],
+    answer: 2,
+  },
+  {
+    q: "ข้อใดที่คุณ 'ทำได้' ภายใน frontmatter ของ Astro component?",
+    options: [
+      "เรียก `useState(0)` เพื่อติดตามการโต้ตอบของผู้ใช้",
+      "อ่าน `window.location.href`",
+      "ดึงข้อมูลด้วย `await fetch('/api/posts')` ตอน build time",
+      "เพิ่ม `document.addEventListener` สำหรับ event การคลิก",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/server-only" questions={quizServerOnly} />
+
+<ProgressTracker client:visible id="components/server-only" />

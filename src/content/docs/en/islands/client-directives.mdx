@@ -1,0 +1,182 @@
+---
+title: Client Directives
+description: 'client:load, client:idle, client:visible, client:media, client:only — what each does and when to use it.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In a React app every component hydrates as soon as the bundle loads. Astro gives you fine-grained control: **each island declares when it should hydrate** via a `client:*` directive. Without any directive, the component renders to static HTML and ships zero JavaScript.
+
+## The five directives
+
+### `client:load`
+
+Hydrates immediately when the page loads. Use this for components that must be interactive right away — a navigation menu, a login form, an above-the-fold widget.
+
+```astro
+<SearchBar client:load />
+```
+
+This is the direct equivalent of a React component in a Next.js page — it hydrates on load. Use it sparingly; every `client:load` island adds to the initial JS budget.
+
+### `client:idle`
+
+Hydrates after the browser fires `requestIdleCallback` — when the main thread is quiet. Use this for interactive components that are important but not immediately critical.
+
+```astro
+<NewsletterSignup client:idle />
+```
+
+In a React app there is no equivalent — everything loads eagerly. `client:idle` is a free performance win for secondary widgets.
+
+### `client:visible`
+
+Hydrates once the component's root element enters the viewport (uses `IntersectionObserver`). Perfect for below-the-fold islands: comments sections, carousels, interactive charts.
+
+```astro
+<CommentThread client:visible />
+<PricingTable client:visible />
+```
+
+A user who never scrolls down never downloads the JS. This is the most impactful directive for long pages.
+
+### `client:media`
+
+Hydrates when a CSS media query matches. Use this for islands that only exist in certain layouts — a mobile bottom nav, a desktop sidebar filter.
+
+```astro
+<MobileMenu client:media="(max-width: 768px)" />
+<DesktopFilter client:media="(min-width: 1024px)" />
+```
+
+Desktop users never download the mobile component's JS; mobile users never download the desktop one.
+
+### `client:only`
+
+Skips server-side rendering entirely and renders only in the browser. You must pass the framework name as its value. Use this for components that call browser-only APIs (`window`, `localStorage`, WebGL) that would crash during SSR.
+
+```astro
+<ThreeScene client:only="react" />
+<MapWidget client:only="react" />
+```
+
+> Without `client:only`, Astro still runs your React component on the server to generate the initial HTML. If the component calls `window` or `document` at the top level, the SSR step will throw. `client:only` skips that step.
+
+## All five directives side by side
+
+export const directivesReact = `// React/Next.js — no directive system.
+// All components hydrate on load.
+// Lazy loading is manual (React.lazy + Suspense).
+import dynamic from 'next/dynamic';
+
+const HeavyChart = dynamic(() => import('./HeavyChart'), {
+  ssr: false,  // skip SSR — closest to client:only
+});
+
+export default function Page() {
+  return (
+    <>
+      <SearchBar />    {/* eager hydration */}
+      <HeavyChart />   {/* ssr:false ~ client:only */}
+      {/* No built-in idle/visible/media support */}
+    </>
+  );
+}`;
+
+export const directivesAstro = `---
+import SearchBar from '../components/SearchBar.jsx';
+import NewsletterSignup from '../components/NewsletterSignup.jsx';
+import CommentThread from '../components/CommentThread.jsx';
+import MobileMenu from '../components/MobileMenu.jsx';
+import ThreeScene from '../components/ThreeScene.jsx';
+---
+<!-- Hydrate immediately -->
+<SearchBar client:load />
+
+<!-- Hydrate when browser is idle -->
+<NewsletterSignup client:idle />
+
+<!-- Hydrate when scrolled into view -->
+<CommentThread client:visible />
+
+<!-- Hydrate only on mobile -->
+<MobileMenu client:media="(max-width: 768px)" />
+
+<!-- Browser-only, skip SSR -->
+<ThreeScene client:only="react" />`;
+
+<ReactAstro client:visible react={directivesReact} astro={directivesAstro} />
+
+## No directive = static HTML
+
+The most important thing to remember: **a React component without a directive is static HTML**. Astro runs it on the server, renders its output to HTML, and ships nothing to the browser.
+
+```astro
+---
+import ProductCard from '../components/ProductCard.jsx';
+---
+<!-- No client: directive → static HTML, zero JS -->
+<ProductCard title="Widget" price={29} />
+```
+
+This is intentional. Astro encourages you to ask: "does this component actually need to be interactive?" If a React component just renders data, it can be static.
+
+<Diff title="React hydration vs Astro client directives">
+- React: **all components hydrate on load** — no built-in idle/visible/media strategy.
+- Astro `client:load`: hydrate immediately (same as React default).
+- Astro `client:idle`: hydrate when the main thread is free (no React equivalent).
+- Astro `client:visible`: hydrate on scroll-into-view (no React equivalent).
+- Astro `client:media`: hydrate when a media query matches (no React equivalent).
+- Astro `client:only`: skip SSR, browser-only (similar to Next.js `dynamic({ ssr: false })`).
+- No directive: **static HTML, zero JS** — no React equivalent.
+</Diff>
+
+export const quizClientDirectives = [
+  {
+    q: "Which directive should you use for a comment section that is 1000px below the fold?",
+    options: [
+      "`client:load`",
+      "`client:idle`",
+      "`client:visible`",
+      "`client:only`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What does `client:only=\"react\"` do differently from the other directives?",
+    options: [
+      "It hydrates faster than `client:load`",
+      "It skips server-side rendering and renders the component only in the browser",
+      "It only ships the component to React Native clients",
+      "It defers hydration until React is idle",
+    ],
+    answer: 1,
+  },
+  {
+    q: "A React component is imported into an .astro file with no `client:*` directive. What happens?",
+    options: [
+      "Astro throws a build-time error",
+      "The component hydrates with `client:load` by default",
+      "The component renders to static HTML; no JavaScript is shipped",
+      "The component is skipped entirely and nothing renders",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Which directive is the best fit for a mobile navigation menu that should not load on desktop?",
+    options: [
+      "`client:only`",
+      "`client:media=\"(max-width: 768px)\"`",
+      "`client:visible`",
+      "`client:idle`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/client-directives" questions={quizClientDirectives} />
+
+<ProgressTracker client:visible id="islands/client-directives" />

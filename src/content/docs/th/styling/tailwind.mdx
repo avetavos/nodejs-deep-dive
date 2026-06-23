@@ -1,0 +1,162 @@
+---
+title: Tailwind
+description: 'เพิ่ม Tailwind CSS ใน Astro ด้วย npx astro add tailwind และใช้ utility classes เหมือนกับใน Next.js — ต่างกันแค่ class= แทน className='
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน Next.js คุณเพิ่ม Tailwind โดยติดตั้งสาม package สร้าง `tailwind.config.js` เพิ่ม `@tailwind` directives ใน `globals.css` แล้ว import ไฟล์นั้นใน `_app.tsx` Astro มี official integration ที่ทำทุกอย่างนั้นด้วยคำสั่งเดียว
+
+> **Playground note:** Tailwind ต้องการ Vite integration ที่ติดตั้งในโปรเจกต์ — ไฟล์ `.astro` เดี่ยวใน StackBlitz ไม่สามารถโหลดได้โดยไม่มี setup ครบถ้วน บทเรียนนี้จึงเป็น code-only คัดลอก snippet ใดก็ได้ไปยัง local project ที่สร้างด้วย `npx create astro@latest` แล้วทำตามขั้นตอนด้านล่างเพื่อทดลอง
+
+## การเพิ่ม Tailwind ใน Astro
+
+```bash
+# inside your Astro project
+npx astro add tailwind
+```
+
+CLI จะติดตั้ง `@astrojs/tailwind` และ `tailwindcss` สร้าง `tailwind.config.mjs` และเพิ่ม integration ใน `astro.config.mjs` ยืนยัน prompt ทั้งหมด
+
+```js
+// astro.config.mjs  — after running the command
+import { defineConfig } from 'astro/config';
+import tailwind from '@astrojs/tailwind';
+
+export default defineConfig({
+  integrations: [tailwind()],
+});
+```
+
+```js
+// tailwind.config.mjs  — auto-generated
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./src/**/*.{astro,html,js,jsx,ts,tsx,svelte,vue}'],
+  theme: { extend: {} },
+  plugins: [],
+};
+```
+
+ไม่ต้อง import `globals.css` — integration จัดการให้อัตโนมัติ
+
+## การใช้ utility classes ใน .astro เทียบกับ React
+
+export const tailwindReact = `// Card.tsx  (Next.js + Tailwind)
+export default function Card({
+  title,
+  description,
+  featured = false,
+}: {
+  title: string;
+  description: string;
+  featured?: boolean;
+}) {
+  return (
+    <div className={\`rounded-xl border p-6 shadow-sm \${
+      featured ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 bg-white'
+    }\`}>
+      <h2 className="mb-2 text-lg font-semibold text-slate-900">{title}</h2>
+      <p className="text-sm text-slate-600">{description}</p>
+    </div>
+  );
+}`;
+
+export const tailwindAstro = `---
+// Card.astro  (Astro + Tailwind)
+interface Props { title: string; description: string; featured?: boolean; }
+const { title, description, featured = false } = Astro.props;
+---
+<div class:list={[
+  "rounded-xl border p-6 shadow-sm",
+  featured ? "border-indigo-500 bg-indigo-50" : "border-slate-200 bg-white",
+]}>
+  <h2 class="mb-2 text-lg font-semibold text-slate-900">{title}</h2>
+  <p class="text-sm text-slate-600">{description}</p>
+</div>`;
+
+<ReactAstro client:visible react={tailwindReact} astro={tailwindAstro} />
+
+การเปลี่ยนแปลงที่จำเป็นเพียงอย่างเดียว: `className` กลายเป็น `class` ทุกอย่างอื่น — utility classes, responsive prefixes, dark-mode variants, arbitrary values — ทำงานเหมือนกันทุกประการ
+
+## ผสม Tailwind กับ scoped styles
+
+คุณใช้ Tailwind utilities และ `<style>` block ในไฟล์ `.astro` เดียวกันได้ มีประโยชน์เมื่อ component ต้องการ complex selector (เช่น `nth-child`, `::before`) ที่ Tailwind ไม่สามารถแสดงออกได้อย่างสวยงาม
+
+```astro
+---
+// HeroSection.astro
+---
+<section class="py-24 px-6 bg-gradient-to-br from-indigo-600 to-purple-700">
+  <h1 class="text-4xl font-bold text-white mb-4">Ship faster</h1>
+  <p class="text-indigo-200 max-w-xl">Tailwind utilities + scoped styles in one component.</p>
+</section>
+
+<style>
+  /* Scoped rule for a complex selector Tailwind cannot express */
+  section > *:not(:last-child) { margin-bottom: 1rem; }
+</style>
+```
+
+## Tailwind กับ framework components (React / Vue ภายใน Astro)
+
+Utility classes ทำงานได้กับ framework components ที่ render ภายใน Astro pages ด้วย ส่ง class เป็น `class` บน Astro wrapper หรือเป็น `className` ภายใน JSX ถ้าคุณอยู่ใน `.tsx` Island component
+
+```astro
+---
+// Page.astro
+import Counter from './Counter.tsx';
+---
+<!-- Tailwind class on the Astro element wrapper -->
+<div class="max-w-screen-lg mx-auto px-4">
+  <!-- className inside the React Island -->
+  <Counter className="mt-8" client:visible />
+</div>
+```
+
+<Diff title="Tailwind ใน Next.js vs Tailwind ใน Astro">
+- Next.js: ติดตั้งด้วยตัวเอง (`npm i tailwindcss postcss autoprefixer`), สร้าง config, เพิ่ม `@tailwind` directives, import `globals.css` ใน `_app.tsx`
+- Astro: `npx astro add tailwind` — คำสั่งเดียว ไม่ต้อง config ด้วยตัวเอง
+- Utility classes: เหมือนกัน — responsive/dark/hover prefixes เดียวกัน, arbitrary-value syntax เดียวกัน
+- ความต่างหลัก: `className` ใน React/JSX → `class` ใน `.astro` templates (และ `class:list` สำหรับ conditionals)
+</Diff>
+
+export const quizTailwind = [
+  {
+    q: "คำสั่งเดียวใดที่เพิ่ม Tailwind ใน Astro project และจัดการ configuration ทั้งหมดอัตโนมัติ?",
+    options: [
+      "`npm install tailwindcss && npx tailwindcss init`",
+      "`astro install tailwind`",
+      "`npx astro add tailwind`",
+      "`npm install @astrojs/tailwind && npx tailwind setup`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "ใน `.astro` template คุณใช้ Tailwind classes ด้วย attribute ใด?",
+    options: [
+      "`className` — เหมือน React",
+      "`tw` — Tailwind-specific prop ของ Astro",
+      "`class` — Astro ใช้ HTML attribute ไม่ใช่ React JSX alias",
+      "`classList` — จำเป็นต้องใช้เมื่อใช้ Tailwind ใน Astro",
+    ],
+    answer: 2,
+  },
+  {
+    q: "หลังรัน `npx astro add tailwind` แล้ว ต้อง import Tailwind CSS ใน layout file ด้วยตัวเองไหม?",
+    options: [
+      "ใช่ — เพิ่ม `import 'tailwindcss/tailwind.css'` ในทุก layout",
+      "ไม่ — integration inject styles อัตโนมัติ",
+      "ใช่ — สร้าง `globals.css` พร้อม `@tailwind` directives แล้ว import ใน `_app.astro`",
+      "ไม่ — แต่เฉพาะเมื่อใช้ `output: 'static'`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="styling/tailwind" questions={quizTailwind} />
+
+<ProgressTracker client:visible id="styling/tailwind" />

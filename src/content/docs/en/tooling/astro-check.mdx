@@ -1,0 +1,159 @@
+---
+title: astro check
+description: 'Type-check .astro files and TypeScript with a single command. Compare with tsc and ESLint in a Next.js project.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In a Next.js project, TypeScript checking is a two-step process: `tsc --noEmit` handles `.ts`/`.tsx` files, and ESLint (often with `@typescript-eslint`) catches additional issues. `.astro` files are not TypeScript files — they have a frontmatter block and an HTML template — so `tsc` cannot parse them directly. Astro ships `astro check` to cover both in a single command.
+
+## Running `astro check`
+
+```bash
+# One-shot check — exits with code 1 if there are errors
+npx astro check
+
+# Watch mode — re-runs on every file save (great during development)
+npx astro check --watch
+
+# Check a specific directory
+npx astro check --root src/content
+```
+
+The output mirrors TypeScript's compiler output: file path, line number, column, and the error message. Errors in `.astro` frontmatter, template expressions, and imported `.ts` modules all surface here.
+
+## What `astro check` covers
+
+```bash
+# astro check catches all of these:
+# 1. Type errors in .astro frontmatter
+# 2. Missing or wrong-typed Astro.props (if interface Props is declared)
+# 3. Type errors in template expressions: {someVar}
+# 4. Type errors in imported .ts / .tsx files
+# 5. Missing imports
+```
+
+## Comparison with `tsc` and ESLint
+
+export const checkNext = `// tsconfig.json — Next.js project
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }]
+  }
+}
+
+// package.json
+// "type-check": "tsc --noEmit",
+// "lint":       "next lint"
+// (two separate commands — two separate passes)`;
+
+export const checkAstro = `// tsconfig.json — Astro project
+{
+  "extends": "astro/tsconfigs/strict",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@components/*": ["src/components/*"]
+    }
+  }
+}
+
+// package.json
+// "check": "astro check"
+// (one command — covers .astro files + .ts files)
+
+// astro/tsconfigs/strict extends:
+//   "strict": true
+//   "jsx": "react-jsx"        (when @astrojs/react is installed)
+//   "jsxImportSource": "react"
+//   etc.`;
+
+<ReactAstro client:visible react={checkNext} astro={checkAstro} reactTitle="Next.js (tsconfig + scripts)" astroTitle="Astro (tsconfig + scripts)" />
+
+Astro ships base tsconfigs at `astro/tsconfigs/strict`, `astro/tsconfigs/strictest`, and `astro/tsconfigs/base` — extend one in your `tsconfig.json` to avoid manually maintaining the full compiler options object.
+
+## Editor tooling
+
+Install the official VS Code extension to get inline errors in `.astro` files without running the CLI:
+
+```bash
+# In VS Code — search for:
+# "Astro" by "Astro" (astro.build)
+# Extension ID: astro-build.astro-vscode
+```
+
+The extension uses the same language server that powers `astro check`. Once installed, you get:
+
+- Red squiggles on type errors in frontmatter and template expressions
+- Autocomplete for `Astro.props`, component imports, and HTML attributes
+- Go-to-definition across `.astro` files
+
+## `astro check` in CI
+
+```yaml
+# .github/workflows/ci.yml
+- name: Type check
+  run: npx astro check
+```
+
+Add this step before your build step in CI to catch type errors before they reach production. `astro check` exits with code 1 on any error, so the workflow fails correctly.
+
+<Diff title="Next.js tsc/ESLint vs astro check">
+- Next.js: `tsc --noEmit` for types + `next lint` (ESLint) — two separate commands.
+- Astro: `astro check` — one command that covers `.astro`, `.ts`, and `.tsx` in a single pass.
+- Astro extends `astro/tsconfigs/strict` to avoid boilerplate `tsconfig.json` options.
+- Both integrate with VS Code via a language server; Astro requires the `astro-build.astro-vscode` extension.
+</Diff>
+
+export const quizAstroCheck = [
+  {
+    q: "Why can't you use `tsc --noEmit` alone to check an Astro project?",
+    options: [
+      "Astro uses Babel, not TypeScript",
+      "`.astro` files have a frontmatter + template structure that `tsc` cannot parse directly",
+      "`tsc` is not installed in Astro projects",
+      "Astro disables the TypeScript compiler in its default config",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which `tsconfig.json` extend value does Astro recommend for strict type checking?",
+    options: [
+      "`\"extends\": \"@tsconfig/strictest\"`",
+      "`\"extends\": \"astro/tsconfigs/strict\"`",
+      "`\"extends\": \"next\"`",
+      "`\"strict\": true` inline — no extends",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What flag do you pass to `astro check` to keep it running and re-check on every file save?",
+    options: [
+      "`--continuous`",
+      "`--daemon`",
+      "`--watch`",
+      "`--hot`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="tooling/astro-check" questions={quizAstroCheck} />
+
+<ProgressTracker client:visible id="tooling/astro-check" />

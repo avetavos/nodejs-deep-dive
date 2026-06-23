@@ -1,0 +1,161 @@
+---
+title: ใช้ React ใน Astro
+description: 'เพิ่ม React integration นำ .jsx components ใส่ .astro files และทำงานได้ทันที'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+นี่คือฟีเจอร์เด่น: **React component ที่มีอยู่ทำงานใน Astro โดยไม่ต้องแก้ไข** ไม่ต้องเขียนใหม่ ไม่ต้องแปลงเป็น `.astro` เพิ่ม integration import ไฟล์ ใส่ directive — เสร็จ
+
+## ขั้นตอนที่ 1: เพิ่ม React integration
+
+รันคำสั่งนี้ในโปรเจกต์ Astro ของคุณ:
+
+```bash
+npx astro add react
+```
+
+คำสั่งนี้ติดตั้ง `@astrojs/react`, `react` และ `react-dom` จากนั้นแก้ไข `astro.config.mjs` ให้อัตโนมัติ
+
+> **รันแบบ local หลัง `npx astro add react`** React islands ต้องการ `@astrojs/react` integration และไฟล์ `.jsx`/`.tsx` แยกต่างหาก — ไม่สามารถรันใน StackBlitz playground ขนาดเล็กที่คอร์สนี้ใช้
+
+## ขั้นตอนที่ 2: เขียน React component
+
+React component ของคุณเป็นไฟล์ `.jsx` หรือ `.tsx` ธรรมดา ไม่มีอะไรพิเศษ:
+
+```jsx
+// src/components/Counter.jsx
+import { useState } from 'react';
+
+export default function Counter({ start = 0 }) {
+  const [count, setCount] = useState(start);
+  return (
+    <div>
+      <p>Count: {count}</p>
+      <button onClick={() => setCount(count + 1)}>+1</button>
+    </div>
+  );
+}
+```
+
+## ขั้นตอนที่ 3: ใช้งานใน .astro page
+
+Import ไฟล์ `.jsx` เข้าสู่ `.astro` page และเพิ่ม `client:` directive:
+
+```astro
+---
+import Counter from '../components/Counter.jsx';
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Counter demo</title></head>
+  <body>
+    <h1>My Page</h1>
+    <p>This heading is static HTML — zero JS.</p>
+    <Counter client:load start={5} />
+  </body>
+</html>
+```
+
+หากไม่มี `client:load` component จะ render เป็น **HTML แบบ static** (ไม่มี interactivity) ใส่ directive แล้ว Astro จะส่ง React runtime + component JS ไปยังเบราว์เซอร์และ hydrate มัน
+
+## เคียงข้างกัน: React app vs Astro page ที่มี React island
+
+export const usingReactApp = `// React app — everything in one tree
+// src/App.jsx
+import Counter from './Counter';
+import Header from './Header';
+
+export default function App() {
+  return (
+    <>
+      <Header />         {/* part of React tree */}
+      <Counter start={5} />  {/* part of React tree */}
+    </>
+  );
+}`;
+
+export const usingReactAstro = `---
+// Astro page — Header is .astro (zero JS),
+// Counter is a React island
+import Header from '../components/Header.astro';
+import Counter from '../components/Counter.jsx';
+---
+<html lang="en">
+  <body>
+    <Header />                    <!-- static HTML -->
+    <Counter client:load start={5} /> <!-- React island -->
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={usingReactApp} astro={usingReactAstro} />
+
+## Codebase React ทั้งหมดของคุณสามารถย้ายมาได้
+
+Hooks, context, third-party React libraries, การประกอบ component — ทั้งหมดทำงานภายใน React island เหมือนกับในแอป React คุณไม่ได้เสียอะไรเลย แค่เลือกว่าส่วนไหนของเพจต้องการมัน
+
+```jsx
+// src/components/SearchBar.jsx — a real-world island
+import { useState, useCallback } from 'react';
+import { useDebounce } from 'use-debounce'; // third-party hook
+
+export default function SearchBar({ onSearch }) {
+  const [query, setQuery] = useState('');
+  const [debouncedQuery] = useDebounce(query, 300);
+
+  // useEffect, context, custom hooks — all fine inside an island
+  return (
+    <input
+      value={query}
+      onChange={e => setQuery(e.target.value)}
+      placeholder="Search..."
+    />
+  );
+}
+```
+
+<Diff title="React component ใน React app vs เป็น Astro island">
+- ไฟล์ `.jsx` **เหมือนกันทุกประการ** — ไม่ต้องแก้ไข
+- ใน React: import และใช้งานภายใน React component อื่น เป็นส่วนหนึ่งของ tree เดียว
+- ใน Astro: import ภายในไฟล์ `.astro` กลายเป็น island ด้วย `client:*`
+- Hooks, context, third-party libraries ทั้งหมดทำงานภายใน island เหมือนเดิม
+</Diff>
+
+export const quizUsingReact = [
+  {
+    q: "คำสั่งใดที่เพิ่ม React support ให้โปรเจกต์ Astro?",
+    options: [
+      "`npm install react react-dom`",
+      "`npx astro add react`",
+      "`npx create-react-app .`",
+      "`astro install @astrojs/react`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "จะเกิดอะไรขึ้นเมื่อ import React component เข้า .astro file แต่ไม่ใส่ `client:*` directive?",
+    options: [
+      "Astro ขึ้น build error",
+      "Component hydrate ด้วย React default behavior",
+      "Component render เป็น static HTML ไม่ส่ง JavaScript",
+      "Component ถูกข้ามทั้งหมด",
+    ],
+    answer: 2,
+  },
+  {
+    q: "จำเป็นต้องแก้ไข React .jsx components ที่มีอยู่เพื่อใช้เป็น Astro islands หรือไม่?",
+    options: [
+      "ใช่ — ต้องเปลี่ยนชื่อเป็น .astro",
+      "ใช่ — ต้องแทน hooks ด้วย Astro equivalents",
+      "ไม่ — ทำงานได้ทันที แค่ import และเพิ่ม client directive",
+      "เฉพาะที่ใช้ useState",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="islands/using-react" questions={quizUsingReact} />
+
+<ProgressTracker client:visible id="islands/using-react" />

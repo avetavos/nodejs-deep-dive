@@ -1,0 +1,211 @@
+---
+title: 'CSS Variables and class:list'
+description: 'Pass frontmatter values into CSS with define:vars and toggle conditional classes with class:list — the Astro alternatives to inline styles and clsx.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+React developers routinely thread dynamic values into styles with inline style objects (`style={{ color: accentColor }}`) or with `clsx` for conditional class names. Astro gives you two dedicated built-in tools for the same jobs: `define:vars` bridges frontmatter values into CSS custom properties, and `class:list` replaces `clsx` for conditional class toggling.
+
+## `define:vars` — frontmatter values in CSS
+
+`define:vars` is a `<style>` directive that maps a JS object of variables to CSS custom properties on the element. You write the values in the frontmatter and reference them as `var(--name)` in CSS.
+
+export const defineVarsReact = `// Badge.tsx
+export default function Badge({
+  label,
+  color = "#6366f1",
+  bg = "#eef2ff",
+}: {
+  label: string;
+  color?: string;
+  bg?: string;
+}) {
+  return (
+    <span
+      style={{ color, backgroundColor: bg, borderColor: color }}
+      className="badge"
+    >
+      {label}
+    </span>
+  );
+}`;
+
+export const defineVarsAstro = `---
+// Badge.astro
+interface Props { label: string; color?: string; bg?: string; }
+const { label, color = "#6366f1", bg = "#eef2ff" } = Astro.props;
+---
+<span class="badge">{label}</span>
+
+<style define:vars={{ color, bg }}>
+  .badge {
+    color: var(--color);
+    background: var(--bg);
+    border: 1px solid var(--color);
+    padding: .2em .7em;
+    border-radius: 999px;
+    font-size: .8rem;
+    font-weight: 600;
+    display: inline-block;
+  }
+</style>`;
+
+<ReactAstro client:visible react={defineVarsReact} astro={defineVarsAstro} />
+
+The compiled output sets the variables as inline custom properties on the element's `style` attribute — so they cascade naturally — while the actual style rules stay in the `<style>` block and benefit from scoping.
+
+## `class:list` — conditional class names
+
+`class:list` is the Astro equivalent of `clsx`. It accepts an array whose items can be strings (always applied), objects with boolean values (applied when the value is truthy), or other arrays.
+
+export const classListReact = `// Button.tsx
+import clsx from 'clsx';
+import styles from './Button.module.css';
+
+type Variant = 'primary' | 'ghost' | 'danger';
+export default function Button({
+  label,
+  variant = 'primary',
+  disabled = false,
+}: {
+  label: string;
+  variant?: Variant;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      className={clsx(
+        styles.btn,
+        styles[variant],
+        { [styles.disabled]: disabled },
+      )}
+      disabled={disabled}
+    >
+      {label}
+    </button>
+  );
+}`;
+
+export const classListAstro = `---
+// Button.astro
+type Variant = 'primary' | 'ghost' | 'danger';
+interface Props { label: string; variant?: Variant; disabled?: boolean; }
+const { label, variant = 'primary', disabled = false } = Astro.props;
+---
+<button
+  class:list={["btn", variant, { disabled }]}
+  disabled={disabled}
+>
+  {label}
+</button>
+
+<style>
+  .btn { border-radius: 6px; padding: .5rem 1.2rem; border: none; cursor: pointer; font-size: .95rem; }
+  .primary  { background: #6366f1; color: #fff; }
+  .ghost    { background: transparent; border: 1px solid #6366f1; color: #6366f1; }
+  .danger   { background: #ef4444; color: #fff; }
+  .disabled { opacity: .45; cursor: not-allowed; }
+</style>`;
+
+<ReactAstro client:visible react={classListReact} astro={classListAstro} />
+
+`class:list` accepts the same shapes as `clsx`: plain strings, `{ className: booleanExpr }` objects, and nested arrays. Falsy items are silently ignored.
+
+## Combining both
+
+`define:vars` and `class:list` compose naturally when you need both dynamic color values and conditional classes.
+
+## Runnable example
+
+export const cssVarsCode = `---
+const theme = "ocean";
+const themes = {
+  ocean:  { bg: "#0ea5e9", text: "#fff", accent: "#0284c7" },
+  forest: { bg: "#22c55e", text: "#fff", accent: "#16a34a" },
+  sunset: { bg: "#f97316", text: "#fff", accent: "#ea580c" },
+};
+const { bg, text, accent } = themes[theme];
+const cards = [
+  { title: "Scoped styles",   active: true  },
+  { title: "Global styles",   active: false },
+  { title: "define:vars",     active: true  },
+  { title: "class:list",      active: false },
+];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>define:vars + class:list</title></head>
+  <body>
+    <header class="hero">
+      <h1>CSS Variables + class:list</h1>
+      <p>Theme: <strong>{theme}</strong></p>
+    </header>
+    <ul class="grid">
+      {cards.map(card => (
+        <li class:list={["card", { active: card.active }]}>
+          {card.title}
+        </li>
+      ))}
+    </ul>
+  </body>
+</html>
+
+<style define:vars={{ bg, text, accent }}>
+  body { font-family: sans-serif; margin: 0; background: #f1f5f9; }
+  .hero { background: var(--bg); color: var(--text); padding: 2rem; }
+  .hero h1 { margin: 0 0 .25rem; }
+  .hero p { margin: 0; opacity: .85; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: .75rem; padding: 1.5rem; list-style: none; margin: 0; }
+  .card { background: #fff; border: 2px solid #e2e8f0; border-radius: 8px; padding: 1rem; font-size: .95rem; color: #475569; }
+  .active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+</style>`;
+
+<AstroPlayground client:visible code={cssVarsCode} />
+
+<Diff title="React inline styles + clsx vs Astro define:vars + class:list">
+- React: `style={{ color }}` for dynamic values, `clsx(...)` import for conditional classes.
+- Astro: `define:vars={{ color }}` injects CSS custom properties, `class:list={[...]}` handles conditionals — no extra package.
+- Both: falsy class conditions are ignored; CSS custom properties cascade normally.
+- Astro advantage: `define:vars` keeps dynamic values in CSS land (`var(--color)`) rather than HTML attributes, so hover/focus rules still work without JS.
+</Diff>
+
+export const quizCssVars = [
+  {
+    q: "What does `<style define:vars={{ color }}>` do in an Astro component?",
+    options: [
+      "It imports a CSS variable file named `color`",
+      "It sets a `color` CSS custom property on the element using the frontmatter value",
+      "It inlines the value as a `style` attribute on every child element",
+      "It creates a global `:root { --color }` variable",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which of the following is a valid `class:list` value that applies `btn` always and `active` only when `isActive` is true?",
+    options: [
+      "`class:list={['btn', isActive ? 'active' : null]}`",
+      "`class:list={['btn', { active: isActive }]}`",
+      "`class:list={clsx('btn', { active: isActive })}`",
+      "`class:list=['btn active']`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "After the Astro compiler processes `define:vars={{ bg, text }}`, where do the variable values end up in the HTML?",
+    options: [
+      "As data attributes: `data-bg` and `data-text`",
+      "As a `<script>` block injected before the element",
+      "As inline CSS custom properties on the element's `style` attribute",
+      "As a new `:root` rule in the global stylesheet",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="styling/css-variables-classlist" questions={quizCssVars} />
+
+<ProgressTracker client:visible id="styling/css-variables-classlist" />

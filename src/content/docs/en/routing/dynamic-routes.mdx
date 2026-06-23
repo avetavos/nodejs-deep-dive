@@ -1,0 +1,183 @@
+---
+title: 'Dynamic Routes'
+description: 'Create dynamic URL segments with [slug].astro and getStaticPaths() — the Astro equivalent of Next.js generateStaticParams.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In Next.js App Router you use `[slug]/page.tsx` + `generateStaticParams()` to pre-render dynamic pages at build time. Astro uses the same bracket-filename convention — `[slug].astro` — paired with a **required** `getStaticPaths()` export inside the frontmatter.
+
+> Dynamic routes require multiple generated pages — run these examples in a full Astro project (`npm create astro@latest`) locally.
+
+## Defining a dynamic segment
+
+export const dynReact = `// app/blog/[slug]/page.tsx  (Next.js App Router)
+export async function generateStaticParams() {
+  const posts = await getPosts();
+  return posts.map((post) => ({ slug: post.slug }));
+}
+
+export default function BlogPost({
+  params,
+}: {
+  params: { slug: string };
+}) {
+  return <h1>Post: {params.slug}</h1>;
+}`;
+
+export const dynAstro = `---
+// src/pages/blog/[slug].astro
+export async function getStaticPaths() {
+  const posts = await getPosts();
+  return posts.map((post) => ({
+    params: { slug: post.slug },
+    props:  { post },         // pass data alongside params
+  }));
+}
+
+const { slug } = Astro.params;
+const { post } = Astro.props;
+---
+<h1>{post.title}</h1>`;
+
+<ReactAstro client:visible react={dynReact} astro={dynAstro} reactTitle="Next.js" />
+
+Key differences to note:
+
+1. `getStaticPaths()` is exported **from inside the frontmatter** — not as a separate file export like Next.js.
+2. Each path object can carry a `props` field to colocate fetched data with the path — no second fetch needed on the page.
+3. `Astro.params` holds the dynamic segment value, equivalent to `params.slug` in Next.js.
+
+## Accessing params and props
+
+export const dynParamsReact = `// Next.js Pages Router equivalent
+// pages/blog/[slug].tsx
+import type { GetStaticPaths, GetStaticProps } from 'next';
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  const posts = await getPosts();
+  return {
+    paths: posts.map((p) => ({ params: { slug: p.slug } })),
+    fallback: false,
+  };
+};
+
+export const getStaticProps: GetStaticProps = async ({ params }) => {
+  const post = await getPost(params!.slug as string);
+  return { props: { post } };
+};
+
+export default function BlogPost({ post }: { post: Post }) {
+  return <article><h1>{post.title}</h1></article>;
+}`;
+
+export const dynParamsAstro = `---
+// src/pages/blog/[slug].astro
+// getStaticPaths + data fetching in ONE function:
+export async function getStaticPaths() {
+  const posts = await getPosts();
+  return posts.map((post) => ({
+    params: { slug: post.slug },
+    props:  { post },
+  }));
+}
+
+// props arrive via Astro.props (same as any component)
+const { post } = Astro.props;
+---
+<article>
+  <h1>{post.title}</h1>
+  <div set:html={post.body} />
+</article>`;
+
+<ReactAstro client:visible react={dynParamsReact} astro={dynParamsAstro} reactTitle="Next.js Pages Router" />
+
+## File tree for a blog
+
+```
+src/pages/
+└── blog/
+    ├── index.astro          → /blog       (list all posts)
+    └── [slug].astro         → /blog/:slug (individual post)
+```
+
+## Catch-all routes
+
+Astro supports rest-parameter catch-all routes with `[...path].astro`, which maps to `[[...slug]]/page.tsx` in Next.js.
+
+export const catchAllReact = `// app/docs/[[...slug]]/page.tsx
+export default function DocsPage({
+  params,
+}: {
+  params: { slug?: string[] };
+}) {
+  const path = params.slug?.join('/') ?? '';
+  return <div>Docs path: {path}</div>;
+}`;
+
+export const catchAllAstro = `---
+// src/pages/docs/[...path].astro
+const { path } = Astro.params;
+// path is a string like "getting-started/intro"
+---
+<div>Docs path: {path}</div>`;
+
+<ReactAstro client:visible react={catchAllReact} astro={catchAllAstro} reactTitle="Next.js" />
+
+<Diff title="Next.js dynamic routes vs Astro dynamic routes">
+- Next.js App Router: `[slug]/page.tsx` + `generateStaticParams()` as a named export from the file.
+- Next.js Pages Router: `[slug].tsx` + separate `getStaticPaths` + `getStaticProps` exports.
+- Astro: `[slug].astro` + `getStaticPaths()` inside the frontmatter; `props` field on each path eliminates the separate data-fetch step.
+- Catch-all: Next `[[...slug]]` → Astro `[...slug]`.
+- `Astro.params.slug` is always a `string` (never an array for `[slug]`); catch-all `[...path]` gives you a slash-joined string.
+</Diff>
+
+export const quizDynamicRoutes = [
+  {
+    q: "Which function must you export from a dynamic .astro page to tell Astro which paths to pre-render?",
+    options: [
+      "generateStaticParams()",
+      "getStaticPaths()",
+      "getServerSideProps()",
+      "getPaths()",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Where is `getStaticPaths()` declared in an Astro dynamic route file?",
+    options: [
+      "In a separate +page.server.js file",
+      "As a default export from the .astro file",
+      "Inside the frontmatter (--- block) of the .astro file",
+      "In astro.config.mjs",
+    ],
+    answer: 2,
+  },
+  {
+    q: "How do you access the dynamic segment value (e.g. the slug) inside an Astro page?",
+    options: [
+      "Via `props.params.slug`",
+      "Via `useParams()` hook",
+      "Via `Astro.params.slug`",
+      "Via `this.slug`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What is the Astro equivalent of Next.js `[[...slug]]` catch-all segments?",
+    options: [
+      "`[slug].astro`",
+      "`{...slug}.astro`",
+      "`[...slug].astro`",
+      "`*.astro`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="routing/dynamic-routes" questions={quizDynamicRoutes} />
+
+<ProgressTracker client:visible id="routing/dynamic-routes" />

@@ -1,0 +1,182 @@
+---
+title: Passing Props to Islands
+description: 'Pass serializable props to React islands; use slots to compose children across the Astro/React boundary.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Passing props to a React island looks identical to passing props in JSX — the syntax is the same. There is one important constraint though: **props passed across the Astro/island boundary must be serializable** to JSON.
+
+## Serializable props
+
+Astro renders your page on the server. When it encounters a hydrated island, it serializes the props into the HTML so the browser can rehydrate the component with the exact same data.
+
+That means props must be values JSON can represent:
+
+- Strings, numbers, booleans
+- Plain objects and arrays (no class instances)
+- `null` and `undefined`
+
+**Not serializable:** functions, Dates (use ISO strings instead), class instances, React nodes, DOM elements.
+
+export const propsSerializableReact = `// React app — any prop type works,
+// including functions passed from a parent.
+<Counter
+  start={10}
+  label="Score"
+  onReset={() => console.log('reset')}
+  date={new Date()}
+/>`;
+
+export const propsSerializableAstro = `---
+// Astro — props must be JSON-serializable.
+// Functions and class instances are NOT allowed
+// across the Astro→island boundary.
+import Counter from '../components/Counter.jsx';
+const iso = new Date().toISOString(); // Date → string ✓
+---
+<Counter
+  start={10}
+  label="Score"
+  date={iso}
+/>
+{/* onReset={() => ...} would throw a build error */}`;
+
+<ReactAstro client:visible react={propsSerializableReact} astro={propsSerializableAstro} />
+
+> **Functions as props:** You cannot pass a callback from `.astro` to a React island. If your island needs a callback (e.g., a modal that calls `onClose`), handle that interaction entirely inside the island — fetch data, manage state, and navigate using the browser's native APIs from within React.
+
+## Passing children / slots
+
+React passes children via the `children` prop. Astro uses `<slot />`. When you use a React island as a wrapper, you can pass HTML content to it via Astro's slot mechanism — but the child content will be **static HTML**, not a React component tree.
+
+```astro
+---
+import Card from '../components/Card.jsx';
+---
+<Card client:load title="Hello">
+  <p>This content is passed as a slot — static HTML inside the React component.</p>
+</Card>
+```
+
+Inside `Card.jsx`, that content arrives as `children` exactly as you would expect:
+
+```jsx
+// src/components/Card.jsx
+export default function Card({ title, children }) {
+  return (
+    <div className="card">
+      <h2>{title}</h2>
+      <div>{children}</div>
+    </div>
+  );
+}
+```
+
+## Named slots
+
+Astro supports named slots. Inside a React island, named slot content arrives as a prop with the slot name:
+
+```astro
+---
+import Modal from '../components/Modal.jsx';
+---
+<Modal client:load>
+  <h2 slot="header">Confirm deletion</h2>
+  <p>This action cannot be undone.</p>
+  <button slot="footer">Cancel</button>
+</Modal>
+```
+
+```jsx
+// src/components/Modal.jsx
+export default function Modal({ children, header, footer }) {
+  return (
+    <dialog>
+      <header>{header}</header>
+      <main>{children}</main>
+      <footer>{footer}</footer>
+    </dialog>
+  );
+}
+```
+
+## Full comparison
+
+export const propsPassing = `// React parent → React child
+// Any prop type, including functions and Dates.
+function Page() {
+  return (
+    <UserCard
+      user={userObject}        // class instance ok
+      onEdit={() => setEdit(true)} // function ok
+      createdAt={new Date()}   // Date ok
+    />
+  );
+}`;
+
+export const propsPassingAstro = `---
+// Astro page → React island
+// Only JSON-serializable props allowed.
+import UserCard from '../components/UserCard.jsx';
+const user = await fetch('/api/user').then(r => r.json());
+---
+<UserCard
+  name={user.name}
+  avatarUrl={user.avatarUrl}
+  createdAt={user.createdAt}
+/>
+{/*
+  user object (plain JSON) ✓
+  ISO date string ✓
+  Function props ✗ — handle inside the island
+*/}`;
+
+<ReactAstro client:visible react={propsPassing} astro={propsPassingAstro} />
+
+<Diff title="React props vs Astro island props">
+- React: **any prop type** — functions, Dates, class instances all fine.
+- Astro islands: props must be **JSON-serializable** — strings, numbers, booleans, plain objects/arrays.
+- Children (slot content) works, but arrives as static HTML — not a React component.
+- Functions-as-props must live inside the island; handle callbacks with internal state or browser APIs.
+</Diff>
+
+export const quizPassingProps = [
+  {
+    q: "Why must props passed to an Astro island be JSON-serializable?",
+    options: [
+      "Astro does not support TypeScript generics",
+      "Astro serializes props to HTML at build/SSR time so the browser can rehydrate with the same data",
+      "React cannot accept non-serializable props",
+      "The Vite bundler strips non-serializable values",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which of the following is NOT a valid prop to pass from .astro to a React island?",
+    options: [
+      "A string: `title=\"Hello\"`",
+      "A number: `count={42}`",
+      "A callback: `onClose={() => setOpen(false)}`",
+      "A plain object: `user={{ name: 'Alice' }}`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "How does slot/children content passed to a React island from .astro arrive in the component?",
+    options: [
+      "As a React component tree that can be re-rendered",
+      "As static HTML string inside the `children` prop",
+      "It is not supported — React islands cannot accept children",
+      "As a Svelte snippet",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/passing-props" questions={quizPassingProps} />
+
+<ProgressTracker client:visible id="islands/passing-props" />

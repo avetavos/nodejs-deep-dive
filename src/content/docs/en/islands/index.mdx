@@ -1,0 +1,99 @@
+---
+title: 'Islands & Using React in Astro'
+description: 'Hydrate only the interactive parts of your page — and bring your existing React components along.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In a React app, the whole UI is one giant JavaScript bundle. The browser downloads it, hydrates the entire component tree, and only then does the page become interactive. Astro flips that model: the page is static HTML by default and you **opt individual components into hydration** — those are your islands.
+
+The killer feature for React developers: **your existing React components work inside Astro with zero changes.** Drop in a `Counter.jsx`, add `client:load`, done. Everything around it stays pure HTML.
+
+## What this module covers
+
+| Lesson | What you will learn |
+|---|---|
+| [What is an Island?](/astro-for-react-developers/en/islands/what-is-an-island/) | Partial hydration vs full-app hydration; the performance case |
+| [Using React in Astro](/astro-for-react-developers/en/islands/using-react/) | `npx astro add react`; drop any `.jsx` component into `.astro` |
+| [Client Directives](/astro-for-react-developers/en/islands/client-directives/) | `client:load`, `client:idle`, `client:visible`, `client:media`, `client:only` |
+| [Passing Props](/astro-for-react-developers/en/islands/passing-props/) | Serializable props; passing children/slots to framework islands |
+| [When to Use an Island](/astro-for-react-developers/en/islands/when-to-island/) | Default-static strategy; isolation vs a React SPA's single tree |
+
+## The core idea
+
+export const indexReact = `// In a React/Next.js app every component
+// is part of one hydrated tree.
+// The whole bundle ships to the browser.
+
+export default function Page() {
+  return (
+    <Layout>
+      <Header />       {/* hydrated */}
+      <HeroImage />    {/* hydrated */}
+      <ArticleText />  {/* hydrated */}
+      <Counter />      {/* hydrated */}
+      <Footer />       {/* hydrated */}
+    </Layout>
+  );
+}`;
+
+export const indexAstro = `---
+// In Astro, only Counter needs JS.
+// Everything else is static HTML.
+import Header from '../components/Header.astro';
+import Counter from '../components/Counter.jsx';
+---
+<Header />          <!-- static HTML, zero JS -->
+<img src="/hero.jpg" alt="Hero" /> <!-- static HTML -->
+<article>Long article text...</article>  <!-- static HTML -->
+<Counter client:load />  <!-- ONE hydrated island -->
+<footer>...</footer>     <!-- static HTML -->`;
+
+<ReactAstro client:visible react={indexReact} astro={indexAstro} />
+
+<Diff title="Full-app hydration vs Islands">
+- React/Next.js: **one JS bundle**, the whole tree is hydrated, every component runs in the browser.
+- Astro: **static HTML by default**, only components with a `client:*` directive ship JavaScript.
+- Your React components need **zero modifications** — they just get a directive instead of props.
+- Result: dramatically smaller JS budgets and faster Time to Interactive.
+</Diff>
+
+export const quizIslandsIndex = [
+  {
+    q: "What does Astro ship to the browser by default for a plain .astro component?",
+    options: [
+      "A React virtual DOM tree",
+      "A small hydration shim",
+      "Zero JavaScript",
+      "An IIFE bundle",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What makes an Astro component an 'island'?",
+    options: [
+      "It lives in its own file",
+      "It is written in a framework like React",
+      "It has a `client:*` directive that opts it into JavaScript hydration",
+      "It uses `export default`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Do your existing React components need to be rewritten to work as Astro islands?",
+    options: [
+      "Yes — they must be converted to .astro files",
+      "No — they work as-is; just add a client directive when you use them",
+      "Only if they use hooks",
+      "Only if they use context",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/index" questions={quizIslandsIndex} />
+
+<ProgressTracker client:visible id="islands/index" />

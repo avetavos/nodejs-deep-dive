@@ -1,0 +1,171 @@
+---
+title: Importing Components
+description: Import .astro components in the frontmatter and compose them in the template — just like React imports.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Composing components in Astro works exactly as you expect from React. Import in the frontmatter, use in the template. The import syntax is standard ES module syntax — the only requirement is that the import lives **inside the `---` frontmatter block**.
+
+## Importing and using a component
+
+export const importReact = `// src/pages/Home.jsx
+import Hero from '../components/Hero';
+import Footer from '../components/Footer';
+
+export default function Home() {
+  return (
+    <>
+      <Hero title="Welcome" subtitle="Built with React" />
+      <main>
+        <p>Page content here.</p>
+      </main>
+      <Footer />
+    </>
+  );
+}`;
+
+export const importAstro = `---
+// src/pages/index.astro
+import Hero from '../components/Hero.astro';
+import Footer from '../components/Footer.astro';
+---
+<Hero title="Welcome" subtitle="Built with Astro" />
+<main>
+  <p>Page content here.</p>
+</main>
+<Footer />`;
+
+<ReactAstro client:visible react={importReact} astro={importAstro} />
+
+Key differences:
+
+- Astro imports always go **between the `---` fences**, not at the top of the file.
+- `.astro` is a required extension in the import path (unlike React's `.jsx`/`.tsx` which bundlers often resolve automatically).
+- An Astro page does not need a root wrapper element — the template is a document fragment.
+
+## Nesting and composition
+
+Composition works identically to React — pass props, pass slots, nest as deeply as you need. An Astro component can import and use other Astro components, React components (as islands), Svelte components, and more.
+
+export const compositionReact = `// PageLayout.jsx
+import Header from './Header';
+import Sidebar from './Sidebar';
+import Card from './Card';
+
+export default function PageLayout({ posts }) {
+  return (
+    <div className="layout">
+      <Header />
+      <div className="content">
+        <Sidebar />
+        <main>
+          {posts.map((post) => (
+            <Card key={post.id} title={post.title} />
+          ))}
+        </main>
+      </div>
+    </div>
+  );
+}`;
+
+export const compositionAstro = `---
+// PageLayout.astro
+import Header from './Header.astro';
+import Sidebar from './Sidebar.astro';
+import Card from './Card.astro';
+
+const { posts } = Astro.props;
+---
+<div class="layout">
+  <Header />
+  <div class="content">
+    <Sidebar />
+    <main>
+      {posts.map((post) => (
+        <Card title={post.title} />
+      ))}
+    </main>
+  </div>
+</div>`;
+
+<ReactAstro client:visible react={compositionReact} astro={compositionAstro} />
+
+> **Note on the runnable snippet:** The StackBlitz playground runs a single `src/pages/index.astro` file. The example below inlines the "sub-component" markup directly to stay self-contained. In a real project you would split it into separate `.astro` files and import them.
+
+export const importCode = `---
+// Self-contained page — no separate component files needed
+const team = [
+  { name: "Alice", role: "Engineer" },
+  { name: "Bob", role: "Designer" },
+  { name: "Carol", role: "PM" },
+];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Team</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <header style="border-bottom:1px solid #e2e8f0;padding-bottom:1rem;margin-bottom:2rem">
+      <h1>Our Team</h1>
+    </header>
+    <ul style="list-style:none;padding:0;display:grid;gap:1rem">
+      {team.map((member) => (
+        <li style="border:1px solid #e2e8f0;border-radius:8px;padding:1rem">
+          <strong>{member.name}</strong>
+          <span style="color:#888;margin-left:.5rem">{member.role}</span>
+        </li>
+      ))}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={importCode} />
+
+<Diff title="React imports vs Astro imports">
+- React: imports can appear anywhere at the top of the file (outside the function).
+- Astro: imports must be inside the `---` frontmatter block.
+- React: extension is often optional (bundler resolves `.jsx`/`.tsx`).
+- Astro: `.astro` extension is required in import paths.
+- Both: standard ES module `import` syntax — named, default, and namespace imports all work.
+- Astro: importing a `.astro` component adds **zero JavaScript** to the bundle; importing a React component as an island adds only that component's JS.
+</Diff>
+
+export const quizImporting = [
+  {
+    q: "Where must `import` statements for components appear in an .astro file?",
+    options: [
+      "Anywhere in the file, before the component is used",
+      "Inside the `---` frontmatter block",
+      "After the closing `---` fence",
+      "In a separate `imports.ts` file",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which import path is correct when using an .astro component?",
+    options: [
+      "`import Card from './Card'`",
+      "`import Card from './Card.jsx'`",
+      "`import Card from './Card.astro'`",
+      "`const Card = require('./Card.astro')`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Does importing and using an .astro component add JavaScript to the browser bundle?",
+    options: [
+      "Yes, a small Astro runtime is included",
+      "Yes, one script tag per component",
+      "No — .astro components compile to plain HTML with zero JS",
+      "Only if the component uses props",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/importing-components" questions={quizImporting} />
+
+<ProgressTracker client:visible id="components/importing-components" />

@@ -1,0 +1,171 @@
+---
+title: Importing Components
+description: import .astro component ใน frontmatter แล้วประกอบมันใน template เหมือนกับการ import ใน React เลย
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+การประกอบ component ใน Astro ทำงานเหมือนกับที่คุณคาดหวังจาก React ทุกประการ import ใน frontmatter แล้วนำไปใช้ใน template syntax ของการ import เป็น ES module มาตรฐาน ข้อกำหนดเดียวคือ import ต้องอยู่ **ภายในบล็อก `---` frontmatter**
+
+## การ import และใช้งาน component
+
+export const importReact = `// src/pages/Home.jsx
+import Hero from '../components/Hero';
+import Footer from '../components/Footer';
+
+export default function Home() {
+  return (
+    <>
+      <Hero title="Welcome" subtitle="Built with React" />
+      <main>
+        <p>Page content here.</p>
+      </main>
+      <Footer />
+    </>
+  );
+}`;
+
+export const importAstro = `---
+// src/pages/index.astro
+import Hero from '../components/Hero.astro';
+import Footer from '../components/Footer.astro';
+---
+<Hero title="Welcome" subtitle="Built with Astro" />
+<main>
+  <p>Page content here.</p>
+</main>
+<Footer />`;
+
+<ReactAstro client:visible react={importReact} astro={importAstro} />
+
+ความแตกต่างที่สำคัญ:
+
+- import ของ Astro จะอยู่ **ระหว่าง fence `---` เสมอ** ไม่ใช่ที่ด้านบนสุดของไฟล์
+- `.astro` เป็น extension ที่จำเป็นต้องใส่ใน path ของ import (ต่างจาก `.jsx`/`.tsx` ของ React ที่ bundler มักจะ resolve ให้อัตโนมัติ)
+- หน้าเพจของ Astro ไม่จำเป็นต้องมี root wrapper element เพราะ template เป็น document fragment
+
+## การซ้อนและการประกอบ (Nesting and composition)
+
+การประกอบทำงานเหมือนกับ React ทุกประการ — ส่ง props ส่ง slot และซ้อนได้ลึกเท่าที่คุณต้องการ Astro component สามารถ import และใช้ Astro component อื่น, React component (ในรูปแบบ island), Svelte component และอื่น ๆ ได้
+
+export const compositionReact = `// PageLayout.jsx
+import Header from './Header';
+import Sidebar from './Sidebar';
+import Card from './Card';
+
+export default function PageLayout({ posts }) {
+  return (
+    <div className="layout">
+      <Header />
+      <div className="content">
+        <Sidebar />
+        <main>
+          {posts.map((post) => (
+            <Card key={post.id} title={post.title} />
+          ))}
+        </main>
+      </div>
+    </div>
+  );
+}`;
+
+export const compositionAstro = `---
+// PageLayout.astro
+import Header from './Header.astro';
+import Sidebar from './Sidebar.astro';
+import Card from './Card.astro';
+
+const { posts } = Astro.props;
+---
+<div class="layout">
+  <Header />
+  <div class="content">
+    <Sidebar />
+    <main>
+      {posts.map((post) => (
+        <Card title={post.title} />
+      ))}
+    </main>
+  </div>
+</div>`;
+
+<ReactAstro client:visible react={compositionReact} astro={compositionAstro} />
+
+> **หมายเหตุเกี่ยวกับ snippet ที่รันได้:** playground ของ StackBlitz รันไฟล์ `src/pages/index.astro` เพียงไฟล์เดียว ตัวอย่างด้านล่างจึงเขียน markup ของ "sub-component" แบบ inline ลงไปตรง ๆ เพื่อให้อยู่ในไฟล์เดียวได้ครบ ในโปรเจกต์จริงคุณจะแยกมันออกเป็นไฟล์ `.astro` ต่างหากแล้ว import เข้ามา
+
+export const importCode = `---
+// Self-contained page — no separate component files needed
+const team = [
+  { name: "Alice", role: "Engineer" },
+  { name: "Bob", role: "Designer" },
+  { name: "Carol", role: "PM" },
+];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Team</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <header style="border-bottom:1px solid #e2e8f0;padding-bottom:1rem;margin-bottom:2rem">
+      <h1>Our Team</h1>
+    </header>
+    <ul style="list-style:none;padding:0;display:grid;gap:1rem">
+      {team.map((member) => (
+        <li style="border:1px solid #e2e8f0;border-radius:8px;padding:1rem">
+          <strong>{member.name}</strong>
+          <span style="color:#888;margin-left:.5rem">{member.role}</span>
+        </li>
+      ))}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={importCode} />
+
+<Diff title="React imports vs Astro imports">
+- React: import วางไว้ที่ใดก็ได้บนด้านบนของไฟล์ (นอกฟังก์ชัน)
+- Astro: import ต้องอยู่ภายในบล็อก `---` frontmatter
+- React: extension มักเป็น optional (bundler resolve `.jsx`/`.tsx` ให้)
+- Astro: ต้องใส่ extension `.astro` ใน path ของ import
+- ทั้งคู่: ใช้ syntax `import` แบบ ES module มาตรฐาน — named, default และ namespace import ใช้ได้หมด
+- Astro: การ import `.astro` component เพิ่ม JavaScript ลง bundle **เป็นศูนย์** ส่วนการ import React component แบบ island จะเพิ่มเฉพาะ JS ของ component นั้นเท่านั้น
+</Diff>
+
+export const quizImporting = [
+  {
+    q: "statement `import` สำหรับ component ต้องอยู่ที่ไหนในไฟล์ .astro?",
+    options: [
+      "ที่ใดก็ได้ในไฟล์ ก่อนที่จะใช้ component",
+      "ภายในบล็อก `---` frontmatter",
+      "หลัง fence `---` ที่ปิดท้าย",
+      "ในไฟล์ `imports.ts` แยกต่างหาก",
+    ],
+    answer: 1,
+  },
+  {
+    q: "import path ใดถูกต้องเมื่อใช้ .astro component?",
+    options: [
+      "`import Card from './Card'`",
+      "`import Card from './Card.jsx'`",
+      "`import Card from './Card.astro'`",
+      "`const Card = require('./Card.astro')`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "การ import และใช้ .astro component เพิ่ม JavaScript ลงใน bundle ของเบราว์เซอร์หรือไม่?",
+    options: [
+      "เพิ่ม โดยมี Astro runtime ขนาดเล็กรวมเข้ามาด้วย",
+      "เพิ่ม หนึ่ง script tag ต่อหนึ่ง component",
+      "ไม่เพิ่ม — .astro component compile ออกมาเป็น HTML ล้วน ๆ โดยมี JS เป็นศูนย์",
+      "เพิ่มเฉพาะเมื่อ component ใช้ props เท่านั้น",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/importing-components" questions={quizImporting} />
+
+<ProgressTracker client:visible id="components/importing-components" />

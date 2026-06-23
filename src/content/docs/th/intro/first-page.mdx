@@ -1,0 +1,209 @@
+---
+title: หน้าแรกของคุณ
+description: "สร้าง .astro page จริงที่มี frontmatter block และ HTML template แล้วเปรียบเทียบกับ React component"
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน React "page" คือ component — ฟังก์ชัน JavaScript ที่คืน JSX ใน Astro "page" คือไฟล์ `.astro` — เอกสาร HTML ที่มีบล็อก **frontmatter** JavaScript/TypeScript แบบ optional อยู่ที่บนสุดคั่นด้วย `---`
+
+anatomy สองโซนของไฟล์ `.astro`:
+
+```
+---                          ← fence open
+// FRONTMATTER: runs on the server / at build time
+// fetch data, compute values, import components
+const title = "My Page";
+---                          ← fence close
+<!-- TEMPLATE: HTML + {expressions} -->
+<html lang="en">
+  <head><title>{title}</title></head>
+  <body><h1>{title}</h1></body>
+</html>
+```
+
+ทุกอย่างเหนือ `---` ที่สองคือโค้ด **Node.js** ทุกอย่างด้านล่างคือ **HTML template** ที่ฝัง expression ด้วย `{expr}` ได้ — เหมือน JSX แต่ render ครั้งเดียวเป็น string ไม่มีการรันซ้ำในเบราว์เซอร์
+
+## React page กับ Astro page
+
+export const firstPageReact = `// src/app/page.tsx  (Next.js App Router)
+interface PageProps {
+  params: { slug: string };
+}
+
+export default function BlogPost({ params }: PageProps) {
+  // Runs on server AND can re-run on client
+  const publishedAt = new Date().toLocaleDateString();
+
+  return (
+    <article>
+      <h1>My First Post</h1>
+      <time>{publishedAt}</time>
+      <p>Welcome to my blog built with React.</p>
+    </article>
+  );
+}`;
+
+export const firstPageAstro = `---
+// src/pages/blog/first-post.astro
+// Runs ONLY on the server / at build time
+const title = "My First Post";
+const publishedAt = new Date().toLocaleDateString();
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <article>
+      <h1>{title}</h1>
+      <time>{publishedAt}</time>
+      <p>Welcome to my blog built with Astro.</p>
+    </article>
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={firstPageReact} astro={firstPageAstro} />
+
+มีสองสิ่งที่โดดเด่นทันที:
+
+1. **Astro page เป็นเอกสาร HTML ที่สมบูรณ์** — มี `<html>`, `<head>`, และ `<body>` React component คืน fragment; layout wrapper เพิ่ม shell ใน Astro, page รับผิดชอบเอกสารทั้งหมด (หรือมอบหมายให้ Layout component ที่ provide shell)
+2. **`new Date()` ใน frontmatter รันครั้งเดียวขณะ build** — string ที่ได้ถูกฝังลงใน HTML ใน Next.js App Router มันก็รันบน server เช่นกัน แต่ความแตกต่างสำคัญ: ใน Astro ไม่มี React runtime, ไม่มี hydration, และ date ไม่มีทางคำนวณซ้ำในเบราว์เซอร์
+
+## การเพิ่ม style
+
+Style ใน Astro page สามารถเป็น tag `<style>` inline ใน template — Astro scope มันให้กับ component โดยอัตโนมัติ เหมือน CSS Modules โดยไม่ต้อง configure:
+
+```astro
+---
+const color = "#6366f1";
+---
+<h1>Hello</h1>
+<style>
+  /* This style is scoped to this component automatically */
+  h1 { color: #6366f1; }
+</style>
+```
+
+Global style ใส่ในไฟล์ CSS แยกต่างหากและ import ใน frontmatter:
+
+```astro
+---
+import '../styles/global.css';
+---
+```
+
+## ตัวอย่างที่รันได้
+
+export const firstPageCode = `---
+const title = "My First Astro Page";
+const author = "A React Developer";
+const publishedAt = "2026-06-23";
+const tags = ["astro", "web", "frontend"];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>{title}</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 680px;
+        margin: 0 auto;
+        padding: 2rem 1.5rem;
+        color: #1e293b;
+      }
+      .meta { color: #64748b; font-size: 0.875rem; margin-bottom: 1.5rem; }
+      .tags { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1.5rem; }
+      .tag {
+        background: #ede9fe;
+        color: #5b21b6;
+        padding: 0.2rem 0.7rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+      }
+    </style>
+  </head>
+  <body>
+    <article>
+      <h1>{title}</h1>
+      <p class="meta">By {author} &middot; {publishedAt}</p>
+      <p>
+        This page was built with Astro. The frontmatter ran at build time —
+        no JavaScript was shipped to the browser to render this content.
+      </p>
+      <p>
+        The tags below are rendered with a <code>.map()</code> in the template.
+        In React that would hydrate a component. Here it is pure HTML.
+      </p>
+      <div class="tags">
+        {tags.map(tag => <span class="tag">#{tag}</span>)}
+      </div>
+    </article>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={firstPageCode} />
+
+เปิด tab Network ใน DevTools ของเบราว์เซอร์ — ไม่มี JavaScript bundle เลย `.map()` บน `tags` สร้าง element `<span>` สามอันขณะ build และหายไป
+
+<Diff title="React component / Next.js page vs .astro page">
+- React/Next: ฟังก์ชันคืน JSX → React runtime render → hydrate ในเบราว์เซอร์
+- Astro: frontmatter คำนวณค่า → template render เป็น HTML → เบราว์เซอร์รับ HTML เท่านั้น
+- Styling: React → CSS Modules หรือ Tailwind; Astro → `<style>` ภายใน `.astro` ถูก scope โดยอัตโนมัติ
+- `.map()` ใน JSX สร้าง React element ที่ hydrate; `.map()` ใน Astro template สร้าง HTML แบบ static
+- ทั้งคู่: syntax `{expr}`, TypeScript type, component import, `public/` สำหรับ static asset
+</Diff>
+
+export const quizFirstPage = [
+  {
+    q: "สองโซนของไฟล์ `.astro` คืออะไร?",
+    options: [
+      "บล็อก `<script>` และบล็อก `<template>`",
+      "บล็อก frontmatter (ระหว่าง `---`) และ HTML template ด้านล่าง",
+      "ฟังก์ชัน `export default` และ export `styles`",
+      "server component และ client component",
+    ],
+    answer: 1,
+  },
+  {
+    q: "คุณเรียก `new Date()` ใน Astro frontmatter มันรันเมื่อใด?",
+    options: [
+      "ในเบราว์เซอร์ทุกครั้งที่โหลดหน้า",
+      "ทุกครั้งที่ component re-render",
+      "ครั้งเดียวขณะ build (หรือต่อ request ในโหมด SSR) บน server",
+      "ภายใน useEffect หลัง hydration",
+    ],
+    answer: 2,
+  },
+  {
+    q: "tag `<style>` ภายในไฟล์ `.astro` ถูก scope ตามค่าเริ่มต้นอย่างไร?",
+    options: [
+      "เป็น global — ใช้กับทั้งหน้า",
+      "ต้องใช้นามสกุลไฟล์ CSS Modules",
+      "ถูก scope ให้กับ component โดยอัตโนมัติ — ไม่ต้อง config",
+      "ต้องใช้ attribute `scoped` อย่างชัดเจน",
+    ],
+    answer: 2,
+  },
+  {
+    q: "`.map()` บน array ภายใน Astro template ผลิตอะไร?",
+    options: [
+      "list แบบ reactive ที่อัปเดตเมื่อ array เปลี่ยน",
+      "React fragment ที่ hydrate ในเบราว์เซอร์",
+      "HTML element แบบ static ที่ฝังลงในหน้าขณะ build",
+      "JSON payload ที่ส่งไปยัง client",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/first-page" questions={quizFirstPage} />
+
+<ProgressTracker client:visible id="intro/first-page" />

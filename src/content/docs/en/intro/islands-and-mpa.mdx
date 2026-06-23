@@ -1,0 +1,192 @@
+---
+title: Islands Architecture & the MPA Model
+description: How Astro ships server-rendered HTML by default and hydrates only interactive islands, saving JavaScript at scale.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+React's default delivery model is a **Single-Page Application (SPA)**: the server sends a nearly empty HTML shell, the browser downloads a JavaScript bundle, React boots, and the page renders client-side. Navigation is handled by a client-side router — no full page reload.
+
+Astro's model is a **Multi-Page Application (MPA)**: the server renders each page to full HTML before the browser ever sees it. The browser receives real HTML, paints immediately, and — unless you explicitly tell Astro otherwise — **downloads no JavaScript at all**.
+
+## The cost of the SPA model
+
+In a typical React SPA:
+
+- The browser downloads `main.js` (React runtime + your app code — often 100–300 kB gzipped).
+- React executes, builds the virtual DOM, reconciles, and attaches event listeners.
+- Only then is the page interactive.
+
+For a blog post, a landing page, or a docs article, most of that JavaScript is wasted: the content never changes after the initial render.
+
+## Islands: interactive pockets in a sea of static HTML
+
+Astro's islands architecture inverts the default. The page is **static HTML**. When a specific component needs interactivity — a search box, a counter, a shopping cart — you mark it as an island.
+
+export const islandsReact = `// React SPA — everything is a component tree
+// The entire page re-renders when state changes
+function App() {
+  const [count, setCount] = React.useState(0);
+  return (
+    <>
+      <Header />        {/* re-renders on count change */}
+      <ArticleBody />   {/* re-renders on count change */}
+      <Counter
+        count={count}
+        onIncrement={() => setCount(c => c + 1)}
+      />
+    </>
+  );
+}
+// Bundle: React runtime + Header + ArticleBody + Counter`;
+
+export const islandsAstro = `---
+// Astro MPA — only Counter is an island
+import Header from '../components/Header.astro';
+import ArticleBody from '../components/ArticleBody.astro';
+import Counter from '../components/Counter.tsx'; // React island
+---
+<html lang="en">
+  <body>
+    <Header />         <!-- zero JS, pure HTML -->
+    <ArticleBody />    <!-- zero JS, pure HTML -->
+    <Counter client:visible />  <!-- hydrated only when visible -->
+  </body>
+</html>
+<!-- Bundle: only Counter's JS — not Header or ArticleBody -->`;
+
+<ReactAstro client:visible react={islandsReact} astro={islandsAstro} />
+
+Notice `client:visible` on the `Counter`. That is a **hydration directive**. Without it, `Counter` would render to HTML at build time (its initial markup) and never become interactive in the browser.
+
+## Hydration directives
+
+| Directive | When the island hydrates |
+|---|---|
+| `client:load` | Immediately on page load |
+| `client:idle` | When the browser is idle (`requestIdleCallback`) |
+| `client:visible` | When the component enters the viewport |
+| `client:media="(max-width:768px)"` | When the CSS media query matches |
+| `client:only="react"` | Skip SSR entirely; render only in the browser |
+
+Each island is independently loaded and hydrated. A heavy data-visualisation component at the bottom of the page (`client:visible`) doesn't block the header from painting.
+
+## Why this matters for performance
+
+Imagine a page with a navigation bar, a long article, a related-posts sidebar, and one interactive "like" button:
+
+- **React SPA**: all four pieces ship as JavaScript, boot together, hydrate together.
+- **Astro MPA with islands**: only the "like" button ships JavaScript. The other three are pure HTML.
+
+The practical result is dramatically lower **Total Blocking Time** and faster **Largest Contentful Paint** — the metrics that drive both user experience and SEO.
+
+## MPA navigation: full-page reloads
+
+The trade-off: because each Astro page is a separate HTML document, navigating between pages is a full page load (like clicking a link on a traditional website). There is no client-side router caching the previous page in memory.
+
+For most content sites this is fine — the pages load fast because they're pre-rendered HTML. For highly interactive applications where navigation state matters, React (or Next.js with the App Router) is still the better fit.
+
+Astro does support **View Transitions** (`<ClientRouter />`) to animate between pages without a full reload — but that is an opt-in enhancement, not the default.
+
+## Runnable static page
+
+export const islandsCode = `---
+const sections = [
+  { id: "hero", label: "Hero", color: "#6366f1" },
+  { id: "about", label: "About", color: "#0ea5e9" },
+  { id: "contact", label: "Contact", color: "#10b981" },
+];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Islands demo</title>
+    <style>
+      body { font-family: sans-serif; margin: 0; }
+      .section { padding: 3rem 2rem; }
+      .badge {
+        display: inline-block;
+        font-size: 0.75rem;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        background: #f1f5f9;
+        color: #475569;
+        margin-bottom: 0.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    {sections.map(s => (
+      <div class="section" style={\`border-top: 4px solid \${s.color}\`}>
+        <span class="badge">Static HTML island</span>
+        <h2>{s.label} section</h2>
+        <p>This renders to HTML at build time. No JS bundle.</p>
+      </div>
+    ))}
+    <div class="section" style="border-top:4px solid #f59e0b">
+      <span class="badge">client:visible island would go here</span>
+      <h2>Interactive widget</h2>
+      <p>Only this section would ship JavaScript — the rest stays pure HTML.</p>
+    </div>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={islandsCode} />
+
+<Diff title="React SPA vs Astro MPA with islands">
+- React SPA: one JS bundle boots everything; all components hydrate together on load.
+- Astro MPA: server renders full HTML; only components with a `client:*` directive ship JS.
+- Navigation: SPA = client-side router (no reload); MPA = full page load (or opt-in View Transitions).
+- Islands win: each interactive widget loads and hydrates independently — no shared JS overhead.
+</Diff>
+
+export const quizIslands = [
+  {
+    q: "What does `client:visible` do in Astro?",
+    options: [
+      "Makes the component visible using CSS",
+      "Hydrates the island only when it scrolls into the viewport",
+      "Renders the component only on the client, skipping SSR",
+      "Loads the component JS immediately on page load",
+    ],
+    answer: 1,
+  },
+  {
+    q: "In the Astro islands model, what happens to a `.astro` component that has NO `client:*` directive?",
+    options: [
+      "It throws a build error",
+      "It renders as an empty div",
+      "It ships zero JavaScript — rendered to HTML at build/server time only",
+      "It falls back to React rendering",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What is the main performance trade-off of an Astro MPA compared to a React SPA?",
+    options: [
+      "Astro pages take longer to build",
+      "Navigation between pages triggers a full page load instead of a client-side route change",
+      "Astro cannot cache pages in a CDN",
+      "Islands always load more JS than a React SPA",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which `client:*` directive hydrates a component only after the browser is idle?",
+    options: [
+      "`client:load`",
+      "`client:visible`",
+      "`client:idle`",
+      "`client:lazy`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/islands-and-mpa" questions={quizIslands} />
+
+<ProgressTracker client:visible id="intro/islands-and-mpa" />

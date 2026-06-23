@@ -1,0 +1,167 @@
+---
+title: Expressions
+description: Embed values, conditionals, and lists in .astro templates with {expr}. Rendered once at build time — no reactivity.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Astro template expressions look almost identical to JSX. You use `{expr}` to embed any JavaScript expression. The critical difference: Astro evaluates them **once** at build/server time and writes static HTML. There is no virtual DOM, no re-renders, no reactive updates.
+
+## Embedding values
+
+export const expressionsReact = `// Stats.jsx
+export default function Stats({ count, label }) {
+  const doubled = count * 2;
+  return (
+    <div>
+      <span>{label}: {count}</span>
+      <span>Doubled: {doubled}</span>
+    </div>
+  );
+}`;
+
+export const expressionsAstro = `---
+// Stats.astro
+const { count, label } = Astro.props;
+const doubled = count * 2;
+---
+<div>
+  <span>{label}: {count}</span>
+  <span>Doubled: {doubled}</span>
+</div>`;
+
+<ReactAstro client:visible react={expressionsReact} astro={expressionsAstro} />
+
+## Conditionals
+
+JSX uses `{condition && <El />}` and ternaries. Astro uses exactly the same syntax.
+
+export const conditionalsReact = `// Alert.jsx
+export default function Alert({ type, message }) {
+  return (
+    <div>
+      {type === "error" && (
+        <p className="error">{message}</p>
+      )}
+      {type !== "error" && (
+        <p className="info">{message}</p>
+      )}
+    </div>
+  );
+}`;
+
+export const conditionalsAstro = `---
+// Alert.astro
+const { type, message } = Astro.props;
+---
+<div>
+  {type === "error" && (
+    <p class="error">{message}</p>
+  )}
+  {type !== "error" && (
+    <p class="info">{message}</p>
+  )}
+</div>`;
+
+<ReactAstro client:visible react={conditionalsReact} astro={conditionalsAstro} />
+
+Ternaries work identically: `{isLoggedIn ? <Dashboard /> : <Login />}`.
+
+## Rendering lists
+
+export const listsReact = `// TagList.jsx
+export default function TagList({ tags }) {
+  return (
+    <ul>
+      {tags.map((tag) => (
+        <li key={tag}>{tag}</li>
+      ))}
+    </ul>
+  );
+}`;
+
+export const listsAstro = `---
+// TagList.astro
+const { tags } = Astro.props;
+---
+<ul>
+  {tags.map((tag) => (
+    <li>{tag}</li>
+  ))}
+</ul>`;
+
+<ReactAstro client:visible react={listsReact} astro={listsAstro} />
+
+Astro does **not** require a `key` prop on list items — there is no virtual DOM diffing. The list is rendered to HTML once and done.
+
+## Runnable example
+
+export const expressionsCode = `---
+const fruits = ["Apple", "Banana", "Cherry", "Date"];
+const today = new Date().toLocaleDateString("en-US", { weekday: "long" });
+const isWeekend = [0, 6].includes(new Date().getDay());
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Expressions demo</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <h1>Today is {today}</h1>
+    {isWeekend && <p style="color:green">It is the weekend!</p>}
+    {!isWeekend && <p style="color:#555">It is a weekday.</p>}
+    <h2>Fruits ({fruits.length})</h2>
+    <ul>
+      {fruits.map((fruit) => <li>{fruit}</li>)}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={expressionsCode} />
+
+<Diff title="JSX expressions vs Astro template expressions">
+- Syntax is the same: `{expr}`, `{cond && <El />}`, ternary, `.map()`.
+- React: expressions run **every render** in the browser — they drive reactivity.
+- Astro: expressions run **once at build/server time** — the result is baked into HTML.
+- React list items need a `key` prop for virtual DOM reconciliation.
+- Astro list items do **not** need `key` — there is nothing to reconcile.
+- Astro cannot react to state changes in `.astro` templates — interactivity needs an island (a framework component).
+</Diff>
+
+export const quizExpressions = [
+  {
+    q: "You write `{items.map((i) => <li>{i}</li>)}` in an Astro template. When does this execute?",
+    options: [
+      "In the browser, every time the component re-renders",
+      "Once at build or server time — the result is static HTML",
+      "In a Web Worker at page load",
+      "On every scroll event",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Do Astro list items rendered with `.map()` need a `key` prop?",
+    options: [
+      "Yes, always — Astro uses a virtual DOM",
+      "Only for arrays longer than 10 items",
+      "No — there is no virtual DOM to reconcile",
+      "Only when the list can change at runtime",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Which expression correctly renders a paragraph only when `isAdmin` is true in an Astro template?",
+    options: [
+      "`<p v-if=\"isAdmin\">Admin</p>`",
+      "`{# if isAdmin}<p>Admin</p>{/if}`",
+      "`{isAdmin && <p>Admin</p>}`",
+      "`<?= isAdmin ? '<p>Admin</p>' : '' ?>`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/expressions" questions={quizExpressions} />
+
+<ProgressTracker client:visible id="components/expressions" />

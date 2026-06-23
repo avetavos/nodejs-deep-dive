@@ -1,0 +1,197 @@
+---
+title: 'Static vs SSR'
+description: 'เลือกระหว่าง static output และ SSR ใน Astro เพิ่ม adapters สำหรับ server rendering และเปรียบเทียบกับ static, SSR และ ISR modes ของ Next.js'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Next.js ให้ rendering modes สามแบบต่อหน้า: static (SSG), server-side rendering (SSR) และ incremental static regeneration (ISR) Astro เริ่มจากปลายตรงข้าม — **static โดย default, opt เข้า SSR ทีละ route** — โดยใช้ model สองตัวสวิตช์ที่เรียบง่ายกว่า: option `output` ระดับ global และ export `prerender` ระดับต่อหน้า
+
+## option `output`
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+
+export default defineConfig({
+  // 'static'  — default; HTML build-time สำหรับทุกหน้า
+  // 'server'  — ทุกหน้า server-rendered ยกเว้น prerender=true
+  // 'hybrid'  — alias สำหรับ 'server' (คำศัพท์ Astro 4+)
+  output: 'static',
+});
+```
+
+เมื่อ `output` เป็น `'static'` (default) Astro pre-render ทุกหน้าตอน build time และเขียน static HTML files ไปที่ `dist/` ไม่ต้องมี server process — คุณ deploy ไปยัง CDN หรือ static host ใดก็ได้
+
+## เพิ่ม SSR adapter
+
+หากต้องการใช้ `output: 'server'` คุณต้องติดตั้ง adapter ที่บอก Astro วิธีรัน server-side code ใน target environment
+
+```bash
+# เลือกหนึ่ง:
+npx astro add vercel       # Vercel serverless functions
+npx astro add netlify      # Netlify Edge Functions
+npx astro add node         # Self-hosted Node.js (express/standalone)
+npx astro add cloudflare   # Cloudflare Workers / Pages
+```
+
+```js
+// astro.config.mjs — SSR กับ Vercel adapter
+import { defineConfig } from 'astro/config';
+import vercel from '@astrojs/vercel/serverless';
+
+export default defineConfig({
+  output: 'server',
+  adapter: vercel(),
+});
+```
+
+## export `prerender` ต่อหน้า
+
+เมื่อ `output: 'server'` ทุกหน้า server-rendered โดย default export `prerender = true` เพื่อ opt หน้าแต่ละหน้ากลับเป็น static HTML
+
+```astro
+---
+// src/pages/about.astro
+// หน้านี้ยัง pre-rendered แม้จะตั้ง output: 'server'
+export const prerender = true;
+
+const title = "About us";
+---
+<h1>{title}</h1>
+```
+
+ทำกลับกันได้เช่นกัน: เมื่อ `output: 'static'` ทำเครื่องหมายหน้าเป็น server-only ด้วย `export const prerender = false`
+
+## เปรียบเทียบ rendering modes
+
+export const renderingNext = `// Next.js rendering modes (App Router)
+
+// Static (SSG) — default สำหรับ Server Components
+// ไม่ต้อง export พิเศษ; เพียงเขียน Server Component
+// next build pre-render เป็น HTML
+
+// SSR — opt in ต่อ route
+export const dynamic = 'force-dynamic';
+
+// ISR — revalidate ตามกำหนดเวลา
+export const revalidate = 60; // วินาที
+
+// Client-side only (CSR)
+'use client';
+import { useEffect, useState } from 'react';
+// ...`;
+
+export const renderingAstro = `// Astro rendering modes
+
+// astro.config.mjs
+// output: 'static'  → ทุกหน้า pre-rendered (default)
+// output: 'server'  → ทุกหน้า SSR โดย default
+
+// Per-page overrides (ใช้ได้ทั้งสอง modes):
+// Pre-render หน้านี้:
+export const prerender = true;
+
+// Server-render หน้านี้:
+export const prerender = false;
+
+// ไม่มี ISR เทียบเท่าใน Astro core — ใช้ adapter-specific
+// options (เช่น Vercel's isr: { expiration: 60 }) ใน
+// astro.config.mjs หาก adapter รองรับ`;
+
+<ReactAstro client:visible react={renderingNext} astro={renderingAstro} reactTitle="Next.js (App Router)" astroTitle="Astro" />
+
+## Dynamic routes กับ SSR
+
+เมื่อหน้าต้องพึ่งพาข้อมูล request-time (auth cookies, URL params, POST body) ให้เขียนเป็น SSR page:
+
+```astro
+---
+// src/pages/dashboard.astro
+export const prerender = false;    // server-render หน้านี้
+
+const session = Astro.cookies.get('session')?.value;
+if (!session) return Astro.redirect('/login');
+
+const user = await fetchUser(session);
+---
+<h1>Welcome, {user.name}</h1>
+```
+
+นี่คือสิ่งเทียบเท่าของ Astro กับหน้า `getServerSideProps` ของ Next.js หรือ dynamic Server Component ที่อ่าน cookies
+
+## ISR ใน Astro
+
+Astro ไม่มี ISR เทียบเท่าในตัวแบบ Next.js `revalidate` แต่มี adapter-specific options:
+
+```js
+// astro.config.mjs — Vercel ISR ผ่าน adapter config
+import { defineConfig } from 'astro/config';
+import vercel from '@astrojs/vercel/serverless';
+
+export default defineConfig({
+  output: 'server',
+  adapter: vercel({
+    isr: {
+      expiration: 60,   // สร้างใหม่หลัง 60 วินาที
+    },
+  }),
+});
+```
+
+<Diff title="Next.js rendering modes vs Astro">
+- Next.js: `dynamic = 'force-dynamic'` (SSR), `revalidate = N` (ISR), default = static
+- Astro: `output: 'static'` (default) หรือ `output: 'server'` (SSR), export `prerender` ต่อหน้า
+- Astro ไม่มี ISR ในตัว — ISR เป็น adapter-level option (Vercel, Netlify)
+- ทั้งคู่: static pages ไม่มี JavaScript; SSR pages รันบน server ต่อ request
+</Diff>
+
+export const quizStaticSsr = [
+  {
+    q: "Astro rendering mode เริ่มต้นคืออะไร?",
+    options: [
+      "Server-side rendering (SSR) ทุกหน้า",
+      "Client-side rendering ผ่าน React",
+      "Static — ทุกหน้า pre-rendered ตอน build time",
+      "Incremental static regeneration ทุก 60 วินาที",
+    ],
+    answer: 2,
+  },
+  {
+    q: "ต้องติดตั้งอะไรก่อนตั้ง `output: 'server'` ใน `astro.config.mjs`?",
+    options: [
+      "React integration (`@astrojs/react`)",
+      "SSR adapter เช่น `@astrojs/node` หรือ `@astrojs/vercel`",
+      "Node.js 20 หรือใหม่กว่า",
+      "package `@astrojs/ssr`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "วิธี pre-render หน้าหนึ่งๆ เมื่อตั้ง `output: 'server'` ระดับ global?",
+    options: [
+      "เพิ่ม `static: true` ใน frontmatter YAML",
+      "เปลี่ยนชื่อไฟล์เป็น `page.static.astro`",
+      "Export `export const prerender = true` จากหน้านั้น",
+      "ย้ายไฟล์ไปที่ `src/pages/static/`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Next.js export ใดใกล้เคียงแนวคิดกับ `export const prerender = false` ของ Astro มากที่สุด?",
+    options: [
+      "`export const revalidate = 0`",
+      "`export const dynamic = 'force-dynamic'`",
+      "`'use client'`",
+      "`export const runtime = 'edge'`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling/static-vs-ssr" questions={quizStaticSsr} />
+
+<ProgressTracker client:visible id="tooling/static-vs-ssr" />

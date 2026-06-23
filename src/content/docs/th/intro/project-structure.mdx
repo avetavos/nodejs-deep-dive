@@ -1,0 +1,156 @@
+---
+title: โครงสร้างโปรเจกต์
+description: Astro จัดระเบียบ src/pages, src/components, src/layouts, public/ และ astro.config.mjs อย่างไร — เทียบกับโปรเจกต์ Next.js หรือ CRA
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+โปรเจกต์ Astro ที่เพิ่งสร้างใหม่จะดูคุ้นเคยถ้าคุณรู้จัก Next.js แต่หลาย convention มีความแตกต่างกันเล็กน้อย สิ่งสำคัญที่สุด: **`src/pages/` คือ directory เดียวที่ Astro ถือว่าพิเศษสำหรับ routing** — ส่วนที่เหลือขึ้นอยู่กับคุณ
+
+## โครงสร้างแบบเทียบเคียง
+
+export const structureReact = `my-next-app/
+├── src/
+│   ├── app/              # App Router pages (Next 13+)
+│   │   ├── page.tsx      # → /
+│   │   └── about/
+│   │       └── page.tsx  # → /about
+│   ├── components/       # Shared React components
+│   └── lib/              # Utilities
+├── public/               # Static assets (served at /)
+├── next.config.mjs       # Framework config
+└── package.json`;
+
+export const structureAstro = `my-astro-app/
+├── src/
+│   ├── pages/            # File-based routes (special)
+│   │   ├── index.astro   # → /
+│   │   └── about.astro   # → /about
+│   ├── components/       # .astro and framework components
+│   ├── layouts/          # Layout wrappers (Astro convention)
+│   └── content/          # Content Collections (MDX, YAML, JSON)
+├── public/               # Static assets (served at /)
+├── astro.config.mjs      # Framework config
+└── package.json`;
+
+<ReactAstro client:visible react={structureReact} astro={structureAstro} />
+
+ความแตกต่างสำคัญที่ควรสังเกต:
+
+1. **`src/pages/` — ไม่ใช่ `src/app/`** Astro ใช้ mental model แบบ Pages Router: ไฟล์ที่ `src/pages/about.astro` render ที่ `/about` ไม่ต้อง wrapper `page.tsx` พิเศษ
+2. **`src/layouts/` เป็น convention ไม่ใช่กฎของ framework** Astro ไม่บังคับให้มี directory `layouts/` — แต่ทุกโปรเจกต์ Astro ใช้มันตาม convention เพราะ layout component เป็น pattern ที่สำคัญ (ครอบคลุมในโมดูล Layouts)
+3. **`src/content/` ใช้สำหรับ Content Collections** — เนื้อหาที่มีโครงสร้าง เช่น บทความ MDX, ไฟล์ YAML ของสมาชิกทีม หรือข้อมูล JSON Astro มี typed API สำหรับ query มัน คุณจะใช้ `getStaticPaths` + `getEntry` แทน `getStaticProps` + การอ่านไฟล์
+4. **`astro.config.mjs` แทน `next.config.mjs`** แนวคิดเดียวกัน — framework config, integration, Vite override
+
+## โฟลเดอร์ `public/`
+
+ทั้ง Next.js และ Astro มี directory `public/` ไฟล์ที่วางไว้ที่นั่นจะถูก serve ที่ root URL ตามที่เป็น — ไม่มี bundle, ไม่มี transform ไฟล์ที่ `public/logo.png` จะเข้าถึงได้ที่ `/logo.png`
+
+ความแตกต่าง: ใน Next.js คุณอ้างอิงรูปภาพด้วย component `<Image>` เพื่อ optimise ใน Astro คุณใช้ tag `<img>` ธรรมดา (หรือ image optimisation ที่มีใน Astro — `import { Image } from 'astro:assets'`)
+
+## `astro.config.mjs`
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+import tailwind from '@astrojs/tailwind';
+
+export default defineConfig({
+  site: 'https://my-site.com',
+  integrations: [react(), tailwind()],
+  // Vite config lives inside vite: {}
+});
+```
+
+เทียบกับ `next.config.mjs` — รูปแบบคล้ายกัน (default export ที่คืน config object) แต่ key ต่างกัน Astro ไม่มี `experimental`, `rewrites`, หรือ `redirects` เป็น top-level key สิ่งเหล่านั้นผ่าน Vite หรือ Astro middleware
+
+## หน้าที่รันได้แสดงโครงสร้าง
+
+export const structureCode = `---
+// src/pages/index.astro
+// Frontmatter: runs at build/server time
+const siteName = "My Astro Site";
+const navLinks = [
+  { href: "/", label: "Home" },
+  { href: "/about", label: "About" },
+  { href: "/blog", label: "Blog" },
+];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{siteName}</title>
+    <style>
+      body { font-family: sans-serif; margin: 0; }
+      nav { background: #1e1b4b; padding: 1rem 2rem; display: flex; gap: 1.5rem; }
+      nav a { color: #c7d2fe; text-decoration: none; font-size: 0.9rem; }
+      nav a:hover { color: #fff; }
+      main { padding: 2rem; }
+      .badge { background: #ede9fe; color: #4c1d95; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      {navLinks.map(link => (
+        <a href={link.href}>{link.label}</a>
+      ))}
+    </nav>
+    <main>
+      <span class="badge">src/pages/index.astro</span>
+      <h1>Welcome to {siteName}</h1>
+      <p>This page lives at <code>src/pages/index.astro</code> and renders at <code>/</code>.</p>
+      <p>Components go in <code>src/components/</code>, layouts in <code>src/layouts/</code>.</p>
+    </main>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={structureCode} />
+
+<Diff title="Next.js project structure vs Astro project structure">
+- Next App Router: `src/app/page.tsx` → `/`; layout ผ่านไฟล์ `layout.tsx` ในแต่ละโฟลเดอร์ segment
+- Astro: `src/pages/index.astro` → `/`; layout ผ่าน component `src/layouts/` ที่ใช้ร่วมกัน (import โดยตรง)
+- ทั้งคู่: `public/` สำหรับ static asset, `package.json`, Vite เบื้องหลัง, รองรับ TypeScript
+- Astro พิเศษ: `src/content/` สำหรับ Content Collections (MDX/YAML/JSON แบบ typed), `astro.config.mjs` สำหรับ integration
+</Diff>
+
+export const quizStructure = [
+  {
+    q: "Directory ใดใน Astro project ที่กำหนด URL route?",
+    options: [
+      "`src/app/`",
+      "`src/routes/`",
+      "`src/pages/`",
+      "`src/views/`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "`src/content/` ใช้ทำอะไรใน Astro?",
+    options: [
+      "เก็บ React context provider",
+      "Content Collections — ข้อมูล MDX, YAML, และ JSON แบบ typed ที่ query ด้วย content API ของ Astro",
+      "ผลลัพธ์ build สำหรับ production",
+      "ไฟล์ CSS ที่ใช้ร่วมกัน",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ไฟล์ที่วางไว้ใน `public/logo.png` เข้าถึงได้ที่ URL ใด?",
+    options: [
+      "`/public/logo.png`",
+      "`/assets/logo.png`",
+      "`/logo.png`",
+      "ต้อง import ก่อนจึงจะเข้าถึงได้",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/project-structure" questions={quizStructure} />
+
+<ProgressTracker client:visible id="intro/project-structure" />

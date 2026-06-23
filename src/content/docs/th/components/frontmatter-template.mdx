@@ -1,0 +1,131 @@
+---
+title: Frontmatter & Template
+description: บล็อก frontmatter --- ทำงานตอน build/server time ส่วน HTML template จะ render ออกมาเป็น static markup
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+React component มีสองส่วนเชิงตรรกะ คือ **function body** (ที่คุณประกาศตัวแปร เรียก hook และรัน logic) กับ **JSX ที่ return ออกมา** (สิ่งที่ render) Astro component สะท้อนการแบ่งนี้ด้วยเส้นคั่น (fence) ที่ชัดเจน
+
+```
+---
+// frontmatter: JS/TS that runs at build or server time
+---
+<!-- template: HTML-first markup rendered to static HTML -->
+```
+
+คู่ของ `---` เรียกว่า **component script** หรือ **frontmatter** ทุกอย่างที่อยู่ระหว่าง fence คือ TypeScript/JavaScript ล้วน ๆ ส่วนทุกอย่างที่อยู่หลัง `---` ปิดท้ายคือ template ซึ่งเป็น superset ของ HTML ที่คุณฝัง expression ได้ด้วย `{...}`
+
+## Frontmatter: component script
+
+ให้คิดถึง frontmatter เหมือนส่วนบนของ React function แต่ไม่มี hook และ event handler สิ่งที่คุณทำได้คือ:
+
+- import component อื่น ๆ, utility และไฟล์ข้อมูล
+- ดึงข้อมูลด้วย `await` (ทั้ง component ทำงานบนเซิร์ฟเวอร์/ตอน build)
+- destructure props จาก `Astro.props`
+- ประกาศตัวแปร local ที่ template จะอ่านไปใช้
+
+export const frontmatterReact = `// Card.jsx  (function body = "frontmatter")
+import { formatDate } from './utils';
+
+export default function Card({ title, date }) {
+  // runs in the browser on every render
+  const formatted = formatDate(date);
+
+  return (
+    <div className="card">
+      <h2>{title}</h2>
+      <time>{formatted}</time>
+    </div>
+  );
+}`;
+
+export const frontmatterAstro = `---
+// Card.astro  (frontmatter = component script)
+import { formatDate } from './utils';
+
+// runs ONCE at build time — never in the browser
+const { title, date } = Astro.props;
+const formatted = formatDate(date);
+---
+<div class="card">
+  <h2>{title}</h2>
+  <time>{formatted}</time>
+</div>`;
+
+<ReactAstro client:visible react={frontmatterReact} astro={frontmatterAstro} />
+
+## HTML template
+
+หลังจาก `---` ที่ปิดท้าย คุณจะเขียน HTML ซึ่ง **ไม่ใช่** JSX:
+
+- ใช้ `class` ไม่ใช่ `className`
+- attribute แบบ boolean ทำงานตามวิธีมาตรฐานของ HTML
+- self-closing tag เป็นไปตามกฎของ HTML (แต่ Astro ผ่อนปรนให้ ทั้ง `<img />` และ `<img>` ใช้ได้)
+- ฝัง JavaScript expression ใด ๆ ด้วย `{expr}`
+
+export const templateCode = `---
+const items = ["Astro", "React", "TypeScript"];
+const hero = { title: "Welcome", subtitle: "Zero JS by default" };
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>{hero.title}</title></head>
+  <body>
+    <h1>{hero.title}</h1>
+    <p>{hero.subtitle}</p>
+    <ul>
+      {items.map((item) => <li>{item}</li>)}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={templateCode} />
+
+<Diff title="React function body vs Astro frontmatter">
+- function body ของ React ทำงาน **ในเบราว์เซอร์** ทุกครั้งที่ render hook (`useState`, `useEffect`) อยู่ตรงนี้
+- frontmatter ของ Astro ทำงาน **ตอน build/server time** ไม่ทำงานในเบราว์เซอร์ ไม่มี hook ไม่มี browser API
+- template ของ React คือ JSX: `className`, `htmlFor`, event แบบ camelCase
+- template ของ Astro เป็น HTML-first: `class`, `for`, attribute มาตรฐานของ HTML
+- ทั้งคู่รองรับ `{expr}` สำหรับค่าแบบ dynamic แต่ template expression ของ Astro render **ครั้งเดียว** ไม่มี reactivity
+</Diff>
+
+export const quizFrontmatter = [
+  {
+    q: "คุณจะเขียน `const data = await fetch('/api/posts')` ไว้ที่ไหนใน Astro component?",
+    options: [
+      "ภายใน useEffect hook",
+      "ในบล็อก frontmatter ---",
+      "ใน HTML template โดยตรง",
+      "ในไฟล์ .js แยกต่างหากเท่านั้น",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ชื่อ attribute ใดถูกต้องใน HTML template ของ Astro?",
+    options: ["`className=\"btn\"`", "`class=\"btn\"`", "`cls=\"btn\"`", "`htmlClass=\"btn\"`"],
+    answer: 1,
+  },
+  {
+    q: "คุณเรียก React hook อย่าง useState ภายในบล็อก frontmatter ของ Astro ได้หรือไม่?",
+    options: [
+      "ได้ Astro รองรับ React hook ทั้งหมด",
+      "ได้ แต่เฉพาะ useState และ useEffect เท่านั้น",
+      "ไม่ได้ frontmatter ทำงานตอน build time ส่วน hook ต้องการ runtime ของเบราว์เซอร์",
+      "ได้เฉพาะตอนที่ import React มาอย่างชัดเจนเท่านั้น",
+    ],
+    answer: 2,
+  },
+  {
+    q: "delimiter ที่ปิดท้ายบล็อก frontmatter ของ Astro คืออะไร?",
+    options: ["`*/`", "`---`", "`###`", "`</script>`"],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/frontmatter-template" questions={quizFrontmatter} />
+
+<ProgressTracker client:visible id="components/frontmatter-template" />

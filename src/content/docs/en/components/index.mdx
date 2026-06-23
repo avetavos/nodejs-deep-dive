@@ -1,0 +1,94 @@
+---
+title: '.astro Components'
+description: What a .astro component is, how it compares to a React component, and what this module covers.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In React you write components as JavaScript functions that return JSX. In Astro you write components as `.astro` files — a superset of HTML that has an optional JavaScript/TypeScript block at the top called the **frontmatter**.
+
+The mental model shift: a React function component runs in the browser on every render. An Astro component runs **once at build time (or on the server)** and ships pure HTML — zero JavaScript by default. No virtual DOM, no re-renders, no hydration cost.
+
+This module walks through every building block of a `.astro` component, anchored to what you already know from React.
+
+## Module lessons
+
+| Lesson | What you'll learn |
+|---|---|
+| [Frontmatter & Template](/astro-for-react-developers/en/components/frontmatter-template/) | The `---` block vs a React function body |
+| [Props](/astro-for-react-developers/en/components/props/) | `Astro.props` vs React props |
+| [Slots](/astro-for-react-developers/en/components/slots/) | `<slot />` vs `children` |
+| [Expressions](/astro-for-react-developers/en/components/expressions/) | Template expressions vs JSX |
+| [Importing Components](/astro-for-react-developers/en/components/importing-components/) | Composition in `.astro` |
+| [Server-Only & Scripts](/astro-for-react-developers/en/components/server-only/) | Zero JS by default; adding browser JS |
+
+## Your first .astro component
+
+A React component and its `.astro` equivalent side by side:
+
+export const indexReact = `// Greeting.jsx
+export default function Greeting({ name }) {
+  return <h1>Hello, {name}!</h1>;
+}`;
+
+export const indexAstro = `---
+// Greeting.astro
+const { name } = Astro.props;
+---
+<h1>Hello, {name}!</h1>`;
+
+<ReactAstro client:visible react={indexReact} astro={indexAstro} />
+
+And here is the same idea as a runnable page:
+
+export const indexCode = `---
+const name = "React developer";
+const year = new Date().getFullYear();
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Hello</title></head>
+  <body>
+    <h1>Hello, {name}!</h1>
+    <p>Built in {year}. No JavaScript shipped to the browser.</p>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={indexCode} />
+
+<Diff title="React component vs .astro component">
+- React: a JS function that **returns JSX**, runs in the browser on every render.
+- Astro: a `.astro` file with an optional `---` frontmatter block, runs **once at build/server time**, outputs HTML.
+- Both: accept props, support composition, use JSX-like `{expr}` syntax in the template.
+- Key difference: `.astro` components ship **zero JavaScript** to the browser by default.
+</Diff>
+
+export const quizIndex = [
+  {
+    q: "When does the code inside an Astro component's frontmatter (---) run?",
+    options: [
+      "In the browser on every page load",
+      "Once at build time or on the server",
+      "Inside a Web Worker",
+      "Only when the component mounts",
+    ],
+    answer: 1,
+  },
+  {
+    q: "How much JavaScript does a plain .astro component ship to the browser by default?",
+    options: ["The same as React", "A small runtime shim", "Zero JavaScript", "Depends on the number of props"],
+    answer: 2,
+  },
+  {
+    q: "Which syntax does an .astro template use to embed expressions?",
+    options: ["`{{ expr }}`", "`<%= expr %>`", "`{expr}`", "`$expr`"],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="components/index" />

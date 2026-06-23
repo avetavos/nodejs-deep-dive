@@ -1,0 +1,153 @@
+---
+title: Props
+description: ส่งข้อมูลเข้าสู่ .astro component ด้วย Astro.props และเพิ่ม TypeScript type ด้วย interface Props
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน React props จะเข้ามาเป็น argument ตัวแรกของ component function แต่ใน Astro props จะเข้ามาผ่าน object ส่วนกลางชื่อ `Astro.props` ซึ่งคุณ destructure ออกมาใน frontmatter ด้วย syntax การ destructure แบบเดียวกับที่คุณรู้อยู่แล้ว
+
+## การรับ props
+
+export const propsReact = `// Button.jsx
+export default function Button({ label, variant = "primary" }) {
+  return (
+    <button className={\`btn btn--\${variant}\`}>
+      {label}
+    </button>
+  );
+}
+
+// Usage:
+// <Button label="Save" />
+// <Button label="Delete" variant="danger" />`;
+
+export const propsAstro = `---
+// Button.astro
+const { label, variant = "primary" } = Astro.props;
+---
+<button class={\`btn btn--\${variant}\`}>
+  {label}
+</button>
+
+<!-- Usage:
+<Button label="Save" />
+<Button label="Delete" variant="danger" />
+-->`;
+
+<ReactAstro client:visible react={propsReact} astro={propsAstro} />
+
+สองสิ่งที่ควรสังเกต:
+
+1. `Astro.props` คือตัวเทียบเท่าของ props object ใน React ให้ destructure ออกมาแบบเดียวกับที่คุณทำกับ parameter ของฟังก์ชัน
+2. ค่า default ทำงานด้วย default ของการ destructure ใน JavaScript มาตรฐาน (`= "primary"`)
+
+## TypeScript: interface Props
+
+Astro component รองรับ TypeScript ในตัวอยู่แล้ว ประกาศ `interface Props` (หรือ `type Props`) ใน frontmatter แล้ว compiler จะบังคับใช้ type นั้นตอน build time
+
+export const propsTypedReact = `// Card.tsx
+interface Props {
+  title: string;
+  description?: string;
+  href: string;
+}
+
+export default function Card({ title, description = "", href }: Props) {
+  return (
+    <a href={href} className="card">
+      <h2>{title}</h2>
+      {description && <p>{description}</p>}
+    </a>
+  );
+}`;
+
+export const propsTypedAstro = `---
+// Card.astro
+interface Props {
+  title: string;
+  description?: string;
+  href: string;
+}
+
+const { title, description = "", href } = Astro.props;
+---
+<a href={href} class="card">
+  <h2>{title}</h2>
+  {description && <p>{description}</p>}
+</a>`;
+
+<ReactAstro client:visible react={propsTypedReact} astro={propsTypedAstro} />
+
+การประกาศ `interface Props` คือ pattern แบบ idiomatic ของ Astro language server ของ Astro จะอ่าน type นี้เพื่อช่วยให้ editor autocomplete ได้ตอนที่คุณนำ component ไปใช้
+
+## ตัวอย่างที่รันได้จริง
+
+export const propsCode = `---
+interface Props {
+  name: string;
+  role?: string;
+  color?: string;
+}
+
+const { name, role = "Developer", color = "#6366f1" } = Astro.props;
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Props demo</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <div style={\`border-left:4px solid \${color};padding-left:1rem\`}>
+      <h1>{name}</h1>
+      <p style="color:#888">{role}</p>
+    </div>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={propsCode} />
+
+<Diff title="React props vs Astro.props">
+- React: props คือ **argument ตัวแรกของฟังก์ชัน** — `function Card({ title }: Props)`
+- Astro: props มาจาก **`Astro.props`** — `const { title } = Astro.props;`
+- ทั้งคู่รองรับการ destructure พร้อมค่า default และ TypeScript interface
+- props ของ Astro เป็น **ค่าแบบ read-only ตอน build time** ไม่มี `setState` ไม่มีการ re-render เมื่อ prop เปลี่ยน
+</Diff>
+
+export const quizProps = [
+  {
+    q: "คุณเข้าถึง props ภายใน frontmatter ของ Astro component ได้อย่างไร?",
+    options: [
+      "เป็น argument ตัวแรกของฟังก์ชัน: `function(props)`",
+      "ผ่าน `Astro.props` — เช่น `const { title } = Astro.props;`",
+      "ผ่าน `this.props`",
+      "ผ่าน `import props from 'astro:props'`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "คุณกำหนดค่า default ให้ prop ที่เป็น optional ใน Astro ได้อย่างไร?",
+    options: [
+      "`Astro.props.defaultValue('color', 'red')`",
+      "ใช้ `defaultProps` บน component",
+      "ใช้ default ของการ destructure ใน JS มาตรฐาน: `const { color = 'red' } = Astro.props;`",
+      "เพิ่ม `default:` ลงในการประกาศ interface Props",
+    ],
+    answer: 2,
+  },
+  {
+    q: "วิธีแบบ idiomatic ในการเพิ่ม TypeScript type ให้กับ props ของ Astro component คืออะไร?",
+    options: [
+      "export object ชื่อ `PropTypes`",
+      "ประกาศ `interface Props` ใน frontmatter",
+      "ใช้ `React.FC<Props>` เป็น type ของ component",
+      "ส่ง generic เข้าไปที่ `Astro.props<Props>`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/props" questions={quizProps} />
+
+<ProgressTracker client:visible id="components/props" />

@@ -1,0 +1,155 @@
+---
+title: 'The Astro CLI'
+description: 'Learn astro dev, build, preview, add, and check. Map every command to its Next.js equivalent and wire up package.json scripts.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+If you have run `next dev` you already know the pattern. Astro ships a single `astro` binary that handles every stage of the development lifecycle — development server, production build, local preview, integration scaffolding, and type checking. It maps almost exactly to the Next.js CLI commands you already use daily.
+
+## Core commands
+
+```bash
+# Start the dev server (hot module reloading, port 4321 by default)
+npx astro dev
+
+# Production build → dist/
+npx astro build
+
+# Serve the dist/ folder locally (mirrors the production build exactly)
+npx astro preview
+
+# Add an official integration and update astro.config.mjs automatically
+npx astro add react
+npx astro add tailwind
+npx astro add sitemap
+
+# Type-check all .astro and .ts files
+npx astro check
+```
+
+## package.json scripts
+
+Both frameworks follow the same convention of aliasing the CLI commands to short script names.
+
+export const scriptsNext = `// package.json — Next.js project
+{
+  "scripts": {
+    "dev":         "next dev",
+    "build":       "next build",
+    "start":       "next start",
+    "lint":        "next lint",
+    "type-check":  "tsc --noEmit"
+  }
+}`;
+
+export const scriptsAstro = `// package.json — Astro project
+{
+  "scripts": {
+    "dev":     "astro dev",
+    "build":   "astro build",
+    "preview": "astro preview",
+    "check":   "astro check"
+  }
+}`;
+
+<ReactAstro client:visible react={scriptsNext} astro={scriptsAstro} reactTitle="Next.js scripts" astroTitle="Astro scripts" />
+
+Two things stand out:
+
+1. `astro preview` is the local preview server — it is **not** a production server. Use an adapter (Node, Vercel, Cloudflare) for real production SSR.
+2. `astro check` replaces the two-step `tsc --noEmit` + linter that Next.js projects typically maintain separately.
+
+## The `astro add` command
+
+`npx astro add` scaffolds official integrations in one step: it installs the npm package, updates `astro.config.mjs`, and prints what changed.
+
+```bash
+# Add the React integration (enables .tsx islands)
+npx astro add react
+
+# Add Tailwind CSS
+npx astro add tailwind
+
+# Add the Vercel SSR adapter
+npx astro add vercel
+
+# Add multiple at once
+npx astro add react tailwind sitemap
+```
+
+There is no Next.js equivalent for this — in Next you `npm install` a package, then manually update `next.config.js`. The `astro add` command automates the config step.
+
+## CLI flags
+
+```bash
+# Custom port
+astro dev --port 3000
+
+# Bind to all interfaces (useful in Docker / WSL)
+astro dev --host
+
+# Verbose output during build
+astro build --verbose
+
+# Watch mode for astro check (re-runs on file save)
+astro check --watch
+```
+
+<Diff title="Next CLI vs Astro CLI">
+- `next dev` → `astro dev` (default port 3000 vs 4321)
+- `next build` → `astro build` (output: `.next/` vs `dist/`)
+- `next start` → `astro preview` (local preview only — not a production SSR server)
+- `next lint` + `tsc --noEmit` → `astro check` (single command covers both)
+- No Next.js equivalent for `astro add` — Next plugins are installed and configured manually.
+</Diff>
+
+export const quizAstroCli = [
+  {
+    q: "What is the default port that `astro dev` starts on?",
+    options: [
+      "3000",
+      "8080",
+      "4321",
+      "5173",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What does `npx astro add react` do beyond just installing the npm package?",
+    options: [
+      "It generates a starter React page in `src/pages/`",
+      "It installs the package AND automatically updates `astro.config.mjs`",
+      "It configures Babel for JSX transpilation",
+      "It creates a `react.config.js` file",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which command should you run to check TypeScript errors in `.astro` files?",
+    options: [
+      "`tsc --noEmit`",
+      "`astro lint`",
+      "`astro check`",
+      "`eslint src/`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "`astro preview` is equivalent to running a production SSR server. True or false?",
+    options: [
+      "True — it is identical to the production environment",
+      "False — it serves the static `dist/` folder locally; a real SSR server requires an adapter",
+      "True, but only when `output: 'server'` is set",
+      "False — it re-runs the build before serving",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling/astro-cli" questions={quizAstroCli} />
+
+<ProgressTracker client:visible id="tooling/astro-cli" />

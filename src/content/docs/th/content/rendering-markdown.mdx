@@ -1,0 +1,143 @@
+---
+title: 'Rendering Markdown'
+description: 'render entry ด้วย render(entry) หรือ entry.render() และแสดงรายการ entries เทียบกับ MDX components ใน Next.js'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน Next.js พร้อม contentlayer คุณ import MDX component โดยตรง ใน Astro คุณเรียก `render(entry)` (Astro 5+) หรือ `await entry.render()` เพื่อรับ `Content` component แล้วใช้ `<Content />` ใน template
+
+> ต้องใช้โปรเจกต์ Astro เต็มรูปแบบ ใช้ `npm create astro@latest` เพื่อสร้างโปรเจกต์
+
+## Rendering a single post: Next.js vs Astro
+
+export const renderReact = `// app/blog/[slug]/page.tsx (Next.js App Router + contentlayer)
+import { allPosts, Post } from 'contentlayer/generated';
+import { useMDXComponent } from 'next-contentlayer/hooks';
+
+export default function PostPage({ params }: { params: { slug: string } }) {
+  const post = allPosts.find((p) => p.slugAsParams === params.slug)!;
+  const MDXContent = useMDXComponent(post.body.code);
+
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <MDXContent />
+    </article>
+  );
+}`;
+
+export const renderAstro = `---
+// src/pages/blog/[slug].astro (Astro 5+)
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((entry) => ({
+    params: { slug: entry.slug },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+<article>
+  <h1>{entry.data.title}</h1>
+  <Content />
+</article>`;
+
+<ReactAstro client:visible react={renderReact} astro={renderAstro} />
+
+`render(entry)` คืนค่า object `{ Content, headings, remarkPluginFrontmatter }` ใช้ `<Content />` เพื่อ render Markdown/MDX ที่ compile แล้วใน template
+
+## Listing entries: Next.js vs Astro
+
+export const listReact = `// app/blog/page.tsx (Next.js App Router + contentlayer)
+import { allPosts } from 'contentlayer/generated';
+import Link from 'next/link';
+
+export default function BlogIndex() {
+  const posts = allPosts.sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+  );
+
+  return (
+    <ul>
+      {posts.map((post) => (
+        <li key={post._id}>
+          <Link href={post.url}>{post.title}</Link>
+        </li>
+      ))}
+    </ul>
+  );
+}`;
+
+export const listAstro = `---
+// src/pages/blog/index.astro (Astro)
+import { getCollection } from 'astro:content';
+
+const posts = await getCollection('blog', ({ data }) => !data.draft);
+const sorted = posts.sort(
+  (a, b) => b.data.date.valueOf() - a.data.date.valueOf()
+);
+---
+<ul>
+  {sorted.map((post) => (
+    <li>
+      <a href={\`/blog/\${post.slug}/\`}>{post.data.title}</a>
+    </li>
+  ))}
+</ul>`;
+
+<ReactAstro client:visible react={listReact} astro={listAstro} />
+
+`getCollection` รองรับ optional filter function ที่ argument ที่สอง — ที่นี่ใช้กรอง draft posts ออก
+
+<Diff title="contentlayer MDX rendering vs Astro render()">
+- contentlayer: `useMDXComponent(post.body.code)` ส่งคืน React component ที่ใช้ใน JSX โดยตรง
+- Astro: `render(entry)` (Astro 5+) หรือ `entry.render()` ส่งคืน `{ Content }` — เป็น plain Astro component
+- ทั้งคู่ compile MDX ตอน build time ไม่มีการ parse runtime
+- Astro `Content` component ทำงานใน `.astro` files โดยตรง ไม่ต้องมี React runtime
+- `render()` ยัง expose `headings` array สำหรับสร้าง table of contents
+</Diff>
+
+export const quizRenderingMarkdown = [
+  {
+    q: "ฟังก์ชันใดที่เรียกเพื่อรับ renderable component จาก collection entry?",
+    options: [
+      "`entry.toJSX()`",
+      "`import { MDXContent } from entry`",
+      "`render(entry)` (Astro 5+) — คืนค่า `{ Content }`",
+      "`Astro.render(entry)`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "แสดงเนื้อหาที่ render แล้วใน Astro template อย่างไร?",
+    options: [
+      "`{entry.body}`",
+      "`<Content />`",
+      "`{entry.html}`",
+      "`<Markdown content={entry.body} />`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "`getStaticPaths()` คืนค่าอะไรสำหรับ dynamic collection route?",
+    options: [
+      "Array ของ object `{ params, props }`",
+      "Promise ที่ resolve เป็น HTML ที่ render แล้ว",
+      "Schema ของ collection config",
+      "Array ของ file paths",
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content/rendering-markdown" questions={quizRenderingMarkdown} />
+
+<ProgressTracker client:visible id="content/rendering-markdown" />

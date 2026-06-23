@@ -1,0 +1,149 @@
+---
+title: 'Content Collections'
+description: 'ใช้ src/content/, defineCollection และ zod schemas ใน src/content.config.ts สำหรับ MD/MDX แบบ type-safe เทียบกับ MDX และ contentlayer ใน Next.js'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน Next.js คุณมักใช้ `contentlayer` หรือ `fs` + `gray-matter` เพื่อโหลดไฟล์ MDX พร้อม type safety Astro มี content collections built-in: วางไฟล์ MD/MDX ใน `src/content/<collection>/` กำหนด schema ด้วย zod ใน `src/content.config.ts` แล้วใช้ `getCollection('blog')` ที่ไหนก็ได้ในโปรเจกต์ — มี type safety เต็มรูปแบบ ไม่ต้องใช้ library ของ third-party
+
+> ต้องใช้โปรเจกต์ Astro เต็มรูปแบบ ใช้ `npm create astro@latest` เพื่อสร้างโปรเจกต์
+
+## การกำหนด collection: contentlayer vs Astro
+
+export const collectionReact = `// contentlayer.config.ts (Next.js)
+import { defineDocumentType, makeSource } from 'contentlayer/source-files';
+
+export const Post = defineDocumentType(() => ({
+  name: 'Post',
+  filePathPattern: 'blog/**/*.mdx',
+  contentType: 'mdx',
+  fields: {
+    title: { type: 'string', required: true },
+    date:  { type: 'date',   required: true },
+    tags:  { type: 'list', of: { type: 'string' } },
+  },
+}));
+
+export default makeSource({ contentDirPath: 'content', documentTypes: [Post] });
+
+// In a page:
+// import { allPosts } from 'contentlayer/generated';`;
+
+export const collectionAstro = `// src/content.config.ts (Astro)
+import { defineCollection, z } from 'astro:content';
+
+const blog = defineCollection({
+  type: 'content',
+  schema: z.object({
+    title: z.string(),
+    date:  z.coerce.date(),
+    tags:  z.array(z.string()).optional(),
+  }),
+});
+
+export const collections = { blog };
+
+// In a page:
+// import { getCollection } from 'astro:content';
+// const posts = await getCollection('blog');`;
+
+<ReactAstro client:visible react={collectionReact} astro={collectionAstro} />
+
+Schema อยู่ใน `src/content.config.ts` — Astro ตรวจสอบทุกไฟล์ใน collection ตอน build time และแสดง type errors ใน editor ของคุณ
+
+## content.config.ts
+
+```ts
+// src/content.config.ts
+import { defineCollection, z } from 'astro:content';
+
+const blog = defineCollection({
+  type: 'content', // 'content' for MD/MDX, 'data' for JSON/YAML
+  schema: z.object({
+    title:       z.string(),
+    description: z.string().optional(),
+    date:        z.coerce.date(),
+    draft:       z.boolean().default(false),
+    tags:        z.array(z.string()).default([]),
+  }),
+});
+
+export const collections = { blog };
+```
+
+## การแสดงรายการ collection entries
+
+```astro
+---
+// src/pages/blog/index.astro
+import { getCollection } from 'astro:content';
+
+const posts = await getCollection('blog', ({ data }) => !data.draft);
+const sorted = posts.sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Blog</title></head>
+  <body>
+    <h1>Blog</h1>
+    <ul>
+      {sorted.map((post) => (
+        <li>
+          <a href={`/blog/${post.slug}/`}>{post.data.title}</a>
+          <time>{post.data.date.toLocaleDateString()}</time>
+        </li>
+      ))}
+    </ul>
+  </body>
+</html>
+```
+
+argument ที่สองของ `getCollection` คือ optional filter function — ที่นี่ใช้กรอง drafts ออก `post.data` มี type จาก zod schema เต็มรูปแบบ
+
+<Diff title="contentlayer vs Astro content collections">
+- contentlayer: third-party library ไฟล์ config แยก สร้าง types ใน `contentlayer/generated` — ต้องใช้ build step
+- Astro: **built in** — `src/content.config.ts` + module `astro:content` ไม่มี external dependency
+- ทั้งคู่ validate frontmatter fields ตอน build time พร้อม type safety
+- Astro collections รองรับ **filter callback** ใน `getCollection()` — ไม่ต้อง filter ทีหลัง
+- contentlayer ใช้ได้เฉพาะ Next.js; Astro collections ทำงานได้กับทุก Astro adapter (static, Node, Vercel, Cloudflare…)
+</Diff>
+
+export const quizContentCollections = [
+  {
+    q: "คุณกำหนด schema สำหรับ content collection ที่ไหน?",
+    options: [
+      "ใน frontmatter ของแต่ละไฟล์ MDX",
+      "ใน `astro.config.mjs`",
+      "ใน `src/content.config.ts` ด้วย `defineCollection` และ zod",
+      "ในไฟล์ `schema.json`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "ดึงข้อมูลทุก entry จาก collection ชื่อ 'blog' ได้อย่างไร?",
+    options: [
+      "`import { allPosts } from 'contentlayer/generated'`",
+      "`await getCollection('blog')`",
+      "`Astro.glob('./blog/*.md')`",
+      "`fetch('/api/blog')`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ข้อดีหลักของ content collections เทียบกับ `fs` + `gray-matter` คืออะไร?",
+    options: [
+      "Type safety และ validation เต็มรูปแบบด้วย zod schemas",
+      "Build time เร็วกว่า",
+      "รองรับ remote MDX files",
+      "CSS scoping อัตโนมัติ",
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content/content-collections" questions={quizContentCollections} />
+
+<ProgressTracker client:visible id="content/content-collections" />

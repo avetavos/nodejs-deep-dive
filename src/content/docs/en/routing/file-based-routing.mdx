@@ -1,0 +1,156 @@
+---
+title: 'File-based Routing'
+description: 'How src/pages/*.astro maps to URLs, including index files and nested folders.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In Next.js App Router, every `page.tsx` inside `app/` becomes a route. In Astro the same idea applies but the convention is simpler: **any `.astro` file inside `src/pages/` maps directly to a URL**. The filename is the path segment.
+
+> Multi-page routing requires multiple files — open a full Astro project (`npm create astro@latest`) to run these examples locally.
+
+## File → URL mapping
+
+The table below shows how file paths inside `src/pages/` become URLs. This mirrors Next.js Pages Router conventions exactly — if you know `/pages`, you already know Astro routing.
+
+| File path | URL |
+|---|---|
+| `src/pages/index.astro` | `/` |
+| `src/pages/about.astro` | `/about` |
+| `src/pages/blog/index.astro` | `/blog` |
+| `src/pages/blog/first-post.astro` | `/blog/first-post` |
+| `src/pages/contact.astro` | `/contact` |
+
+## Side-by-side comparison
+
+export const fileRoutingReact = `// Next.js App Router
+app/
+  page.tsx           → /
+  about/
+    page.tsx         → /about
+  blog/
+    page.tsx         → /blog
+    first-post/
+      page.tsx       → /blog/first-post
+
+// Next.js Pages Router
+pages/
+  index.tsx          → /
+  about.tsx          → /about
+  blog/
+    index.tsx        → /blog
+    first-post.tsx   → /blog/first-post`;
+
+export const fileRoutingAstro = `// Astro src/pages/
+src/pages/
+  index.astro        → /
+  about.astro        → /about
+  blog/
+    index.astro      → /blog
+    first-post.astro → /blog/first-post
+
+// No page.tsx wrapper needed.
+// The .astro file IS the page.`;
+
+<ReactAstro client:visible react={fileRoutingReact} astro={fileRoutingAstro} reactTitle="Next.js" />
+
+## What a page file looks like
+
+A page `.astro` file is just a regular `.astro` component. The difference is location — files in `src/pages/` are treated as routes.
+
+export const pageFileReact = `// app/about/page.tsx  (Next.js App Router)
+export default function AboutPage() {
+  return (
+    <main>
+      <h1>About</h1>
+      <p>Welcome to the about page.</p>
+    </main>
+  );
+}`;
+
+export const pageFileAstro = `---
+// src/pages/about.astro
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="About">
+  <main>
+    <h1>About</h1>
+    <p>Welcome to the about page.</p>
+  </main>
+</Layout>`;
+
+<ReactAstro client:visible react={pageFileReact} astro={pageFileAstro} reactTitle="Next.js" />
+
+## Project file tree
+
+Here is what a typical Astro project looks like after adding a few routes:
+
+```
+src/
+├── layouts/
+│   └── Layout.astro          ← shared wrapper (covered in Layouts lesson)
+└── pages/
+    ├── index.astro            → /
+    ├── about.astro            → /about
+    └── blog/
+        ├── index.astro        → /blog
+        └── first-post.astro   → /blog/first-post
+```
+
+<Diff title="Next.js pages vs Astro pages">
+- Next.js App Router: every directory needs a `page.tsx` file to become a route.
+- Next.js Pages Router: `pages/index.tsx` → `/`; mirrors Astro most closely.
+- Astro: any `.astro` file in `src/pages/` becomes a route — no wrapping folder needed.
+- Both: `index.astro` / `index.tsx` maps to the parent directory path (`/blog`, not `/blog/index`).
+- Astro also supports `.md` and `.mdx` files in `src/pages/` as routes — useful for content sites.
+</Diff>
+
+export const quizFileBased = [
+  {
+    q: "Where do you place a .astro file to make it a route in Astro?",
+    options: [
+      "src/components/",
+      "src/layouts/",
+      "src/pages/",
+      "src/routes/",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What URL does `src/pages/blog/index.astro` map to?",
+    options: [
+      "/blog/index",
+      "/blog/index.astro",
+      "/blog/",
+      "/pages/blog/",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Which Next.js router convention is most similar to Astro file-based routing?",
+    options: [
+      "App Router (app/feature/page.tsx)",
+      "Pages Router (pages/feature.tsx)",
+      "react-router `<Routes>` config",
+      "getServerSideProps dynamic routing",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Besides .astro files, which other file types can be placed in src/pages/ to create routes?",
+    options: [
+      ".jsx and .tsx only",
+      ".html only",
+      ".md and .mdx files",
+      "No other file types are supported",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="routing/file-based-routing" questions={quizFileBased} />
+
+<ProgressTracker client:visible id="routing/file-based-routing" />

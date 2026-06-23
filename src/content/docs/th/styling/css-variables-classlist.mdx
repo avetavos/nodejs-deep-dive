@@ -1,0 +1,211 @@
+---
+title: 'CSS Variables และ class:list'
+description: 'ส่งค่าจาก frontmatter เข้า CSS ด้วย define:vars และสลับ conditional class ด้วย class:list — ทางเลือก Astro แทน inline styles และ clsx'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+นักพัฒนา React มักนำค่า dynamic เข้า style ด้วย inline style object (`style={{ color: accentColor }}`) หรือใช้ `clsx` สำหรับ conditional class names Astro มีเครื่องมือ built-in สองตัวสำหรับงานเดียวกัน: `define:vars` เชื่อมค่า frontmatter เข้า CSS custom properties และ `class:list` แทนที่ `clsx` สำหรับการสลับ class
+
+## `define:vars` — ค่า frontmatter ใน CSS
+
+`define:vars` คือ directive ของ `<style>` ที่ map JS object ของตัวแปรไปเป็น CSS custom properties บน element คุณเขียนค่าใน frontmatter แล้วอ้างถึงด้วย `var(--name)` ใน CSS
+
+export const defineVarsReact = `// Badge.tsx
+export default function Badge({
+  label,
+  color = "#6366f1",
+  bg = "#eef2ff",
+}: {
+  label: string;
+  color?: string;
+  bg?: string;
+}) {
+  return (
+    <span
+      style={{ color, backgroundColor: bg, borderColor: color }}
+      className="badge"
+    >
+      {label}
+    </span>
+  );
+}`;
+
+export const defineVarsAstro = `---
+// Badge.astro
+interface Props { label: string; color?: string; bg?: string; }
+const { label, color = "#6366f1", bg = "#eef2ff" } = Astro.props;
+---
+<span class="badge">{label}</span>
+
+<style define:vars={{ color, bg }}>
+  .badge {
+    color: var(--color);
+    background: var(--bg);
+    border: 1px solid var(--color);
+    padding: .2em .7em;
+    border-radius: 999px;
+    font-size: .8rem;
+    font-weight: 600;
+    display: inline-block;
+  }
+</style>`;
+
+<ReactAstro client:visible react={defineVarsReact} astro={defineVarsAstro} />
+
+output ที่ compile แล้วจะตั้งค่า variable เหล่านั้นเป็น inline custom properties บน `style` attribute ของ element — ดังนั้นจึง cascade ตามปกติ — ในขณะที่ style rules จริงยังคงอยู่ใน `<style>` block และได้ประโยชน์จาก scoping
+
+## `class:list` — conditional class names
+
+`class:list` คือ Astro equivalent ของ `clsx` รับ array ที่ item แต่ละตัวเป็น string (ใช้เสมอ), object ที่มีค่า boolean (ใช้เมื่อค่าเป็น truthy) หรือ array ซ้อนกัน
+
+export const classListReact = `// Button.tsx
+import clsx from 'clsx';
+import styles from './Button.module.css';
+
+type Variant = 'primary' | 'ghost' | 'danger';
+export default function Button({
+  label,
+  variant = 'primary',
+  disabled = false,
+}: {
+  label: string;
+  variant?: Variant;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      className={clsx(
+        styles.btn,
+        styles[variant],
+        { [styles.disabled]: disabled },
+      )}
+      disabled={disabled}
+    >
+      {label}
+    </button>
+  );
+}`;
+
+export const classListAstro = `---
+// Button.astro
+type Variant = 'primary' | 'ghost' | 'danger';
+interface Props { label: string; variant?: Variant; disabled?: boolean; }
+const { label, variant = 'primary', disabled = false } = Astro.props;
+---
+<button
+  class:list={["btn", variant, { disabled }]}
+  disabled={disabled}
+>
+  {label}
+</button>
+
+<style>
+  .btn { border-radius: 6px; padding: .5rem 1.2rem; border: none; cursor: pointer; font-size: .95rem; }
+  .primary  { background: #6366f1; color: #fff; }
+  .ghost    { background: transparent; border: 1px solid #6366f1; color: #6366f1; }
+  .danger   { background: #ef4444; color: #fff; }
+  .disabled { opacity: .45; cursor: not-allowed; }
+</style>`;
+
+<ReactAstro client:visible react={classListReact} astro={classListAstro} />
+
+`class:list` รับ shape เดียวกับ `clsx`: plain strings, object `{ className: booleanExpr }` และ nested arrays item ที่เป็น falsy จะถูกละเว้น
+
+## ใช้ทั้งคู่ร่วมกัน
+
+`define:vars` และ `class:list` ทำงานร่วมกันได้ดี เมื่อคุณต้องการทั้งค่าสี dynamic และ conditional classes
+
+## ตัวอย่างที่รันได้
+
+export const cssVarsCode = `---
+const theme = "ocean";
+const themes = {
+  ocean:  { bg: "#0ea5e9", text: "#fff", accent: "#0284c7" },
+  forest: { bg: "#22c55e", text: "#fff", accent: "#16a34a" },
+  sunset: { bg: "#f97316", text: "#fff", accent: "#ea580c" },
+};
+const { bg, text, accent } = themes[theme];
+const cards = [
+  { title: "Scoped styles",   active: true  },
+  { title: "Global styles",   active: false },
+  { title: "define:vars",     active: true  },
+  { title: "class:list",      active: false },
+];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>define:vars + class:list</title></head>
+  <body>
+    <header class="hero">
+      <h1>CSS Variables + class:list</h1>
+      <p>Theme: <strong>{theme}</strong></p>
+    </header>
+    <ul class="grid">
+      {cards.map(card => (
+        <li class:list={["card", { active: card.active }]}>
+          {card.title}
+        </li>
+      ))}
+    </ul>
+  </body>
+</html>
+
+<style define:vars={{ bg, text, accent }}>
+  body { font-family: sans-serif; margin: 0; background: #f1f5f9; }
+  .hero { background: var(--bg); color: var(--text); padding: 2rem; }
+  .hero h1 { margin: 0 0 .25rem; }
+  .hero p { margin: 0; opacity: .85; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: .75rem; padding: 1.5rem; list-style: none; margin: 0; }
+  .card { background: #fff; border: 2px solid #e2e8f0; border-radius: 8px; padding: 1rem; font-size: .95rem; color: #475569; }
+  .active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+</style>`;
+
+<AstroPlayground client:visible code={cssVarsCode} />
+
+<Diff title="React inline styles + clsx vs Astro define:vars + class:list">
+- React: `style={{ color }}` สำหรับค่า dynamic, import `clsx(...)` สำหรับ conditional classes
+- Astro: `define:vars={{ color }}` inject CSS custom properties, `class:list={[...]}` จัดการ conditionals — ไม่ต้อง package เพิ่ม
+- เหมือนกัน: class condition ที่เป็น falsy จะถูกละเว้น; CSS custom properties cascade ตามปกติ
+- ข้อดีของ Astro: `define:vars` เก็บค่า dynamic ไว้ใน CSS land (`var(--color)`) แทน HTML attributes ดังนั้น hover/focus rules ยังคงทำงานโดยไม่ต้อง JS
+</Diff>
+
+export const quizCssVars = [
+  {
+    q: "`<style define:vars={{ color }}>` ใน Astro component ทำอะไร?",
+    options: [
+      "Import ไฟล์ CSS variable ชื่อ `color`",
+      "ตั้งค่า CSS custom property `color` บน element โดยใช้ค่าจาก frontmatter",
+      "Inline ค่าเป็น `style` attribute บนทุก child element",
+      "สร้าง variable `:root { --color }` แบบ global",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ค่า `class:list` แบบใดที่ใช้ `btn` เสมอและใช้ `active` เฉพาะเมื่อ `isActive` เป็น true?",
+    options: [
+      "`class:list={['btn', isActive ? 'active' : null]}`",
+      "`class:list={['btn', { active: isActive }]}`",
+      "`class:list={clsx('btn', { active: isActive })}`",
+      "`class:list=['btn active']`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "หลัง Astro compiler ประมวลผล `define:vars={{ bg, text }}` แล้ว ค่า variable ไปอยู่ที่ไหนใน HTML?",
+    options: [
+      "เป็น data attribute: `data-bg` และ `data-text`",
+      "เป็น `<script>` block ที่ inject ก่อน element",
+      "เป็น inline CSS custom properties บน `style` attribute ของ element",
+      "เป็น rule `:root` ใหม่ใน global stylesheet",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="styling/css-variables-classlist" questions={quizCssVars} />
+
+<ProgressTracker client:visible id="styling/css-variables-classlist" />

@@ -1,0 +1,60 @@
+---
+title: Astro สำหรับนักพัฒนา React
+description: เรียน Astro แบบเร็ว — เทียบทุกแนวคิดกับ React ที่คุณรู้อยู่แล้ว
+template: splash
+hero:
+  tagline: คุณรู้จัก component, props และ JSX อยู่แล้ว คอร์สนี้จับคู่ทุกอย่างเข้ากับ Astro — .astro component ที่รันฝั่งเซิร์ฟเวอร์, islands architecture และ content collections — พร้อมแสดงวิธีใช้ React component เดิมของคุณต่อไปได้
+  actions:
+    - text: เริ่มที่นี่
+      link: /astro-for-react-developers/th/intro/
+      icon: right-arrow
+      variant: primary
+    - text: ข้ามไปที่ .astro Components
+      link: /astro-for-react-developers/th/components/
+      icon: open-book
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## สิ่งที่คุณจะได้เรียน
+
+<CardGrid>
+  <Card title="บทแนะนำ & การติดตั้ง" icon="rocket">
+    ทำไมต้อง Astro, islands architecture, MPA เทียบ SPA, ส่ง JS น้อยลง, หน้าแรกของคุณ [เริ่ม →](/astro-for-react-developers/th/intro/)
+  </Card>
+  <Card title=".astro Components" icon="open-book">
+    Frontmatter ที่รันฝั่งเซิร์ฟเวอร์, Astro.props, slot, expression — เทียบ JSX [สร้าง →](/astro-for-react-developers/th/components/)
+  </Card>
+  <Card title="Islands & การใช้ React" icon="puzzle">
+    วาง React component ของคุณลงไปแล้ว hydrate ด้วย client: directive — partial เทียบ full-app hydration [hydrate →](/astro-for-react-developers/th/islands/)
+  </Card>
+  <Card title="Routing & Layouts" icon="random">
+    File-based routing, dynamic route, layout — เทียบ react-router/Next [นำทาง →](/astro-for-react-developers/th/routing/)
+  </Card>
+  <Card title="Content & Data" icon="document">
+    Fetch ใน frontmatter ตอน build, content collections — เทียบ getServerSideProps/useEffect [โหลดข้อมูล →](/astro-for-react-developers/th/content/)
+  </Card>
+  <Card title="Styling" icon="pencil">
+    Scoped style, global style, CSS variable, Tailwind — เทียบ CSS modules/styled-components [จัดสไตล์ →](/astro-for-react-developers/th/styling/)
+  </Card>
+  <Card title="เครื่องมือ ทดสอบ & Deploy" icon="approve-check">
+    Astro CLI, integration, astro check, static เทียบ SSR, deploy — เทียบ toolchain ของ Next [ส่งงานจริง →](/astro-for-react-developers/th/tooling/)
+  </Card>
+</CardGrid>
+
+## คอร์สนี้ทำงานยังไง
+
+<CardGrid>
+  <Card title="เทียบกับ React ก่อนเสมอ" icon="random">
+    ทุกแนวคิดเริ่มจาก React ที่คุณรู้ แล้วค่อยแสดงวิธีของ Astro — พร้อมชี้จุดที่ต่างกัน
+  </Card>
+  <Card title="รัน Astro จริง" icon="rocket">
+    ตัวอย่างเปิดใน StackBlitz เป็นโปรเจกต์ Astro ที่รันได้จริง — คลิกเดียว ไม่ต้องติดตั้งในเครื่อง
+  </Card>
+  <Card title="แบบทดสอบ & ความคืบหน้า" icon="bars">
+    ทบทวนความเข้าใจหลังแต่ละบท ความคืบหน้าถูกบันทึกไว้ในเครื่อง
+  </Card>
+  <Card title="สองภาษา" icon="translate">
+    มีทั้งภาษาอังกฤษและไทย — สลับได้ตลอดจากแถบด้านบน
+  </Card>
+</CardGrid>

@@ -1,0 +1,185 @@
+---
+title: Navigation
+description: 'Plain <a href> แบบ MPA, Astro.url สำหรับ active link, และ ViewTransitions สำหรับ animation แบบ SPA — เทียบกับ <Link> และ useRouter'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน React คุณใช้ `<Link>` จาก react-router หรือ Next.js เพื่อ client-side navigation และ `usePathname()` / `useRouter()` เพื่ออ่าน URL ปัจจุบัน โมเดล MPA ของ Astro หมายความว่า **plain HTML `<a href>` ทำงานได้สมบูรณ์แบบ** — ไม่ต้องใช้ component พิเศษ สำหรับ URL ปัจจุบัน ใช้ `Astro.url` (object `URL` มาตรฐานที่ใช้ได้ในทุกไฟล์ `.astro`)
+
+## Navigation พื้นฐาน
+
+export const navReact = `// React / Next.js  — ต้องใช้ <Link> สำหรับ client-side nav
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+
+export default function Nav() {
+  const pathname = usePathname();
+  const links = ['/', '/about', '/blog'];
+
+  return (
+    <nav>
+      {links.map((href) => (
+        <Link
+          key={href}
+          href={href}
+          className={pathname === href ? 'active' : ''}
+        >
+          {href === '/' ? 'Home' : href.slice(1)}
+        </Link>
+      ))}
+    </nav>
+  );
+}`;
+
+export const navAstro = `---
+// src/components/Nav.astro
+// Astro.url คือ URL object มาตรฐาน — ไม่ต้อง hook
+const pathname = Astro.url.pathname;
+const links = ['/', '/about', '/blog'];
+---
+<nav>
+  {links.map((href) => (
+    <a
+      href={href}
+      class={pathname === href ? 'active' : ''}
+    >
+      {href === '/' ? 'Home' : href.slice(1)}
+    </a>
+  ))}
+</nav>`;
+
+<ReactAstro client:visible react={navReact} astro={navAstro} reactTitle="Next.js" />
+
+ประเด็นสำคัญ:
+
+1. `Astro.url` คือ `URL` object มาตรฐาน — ใช้ `.pathname`, `.origin`, `.searchParams` ฯลฯ
+2. การตรวจสอบ active link คือการเปรียบเทียบ string ล้วนๆ — ไม่ต้อง hook พิเศษ
+3. `<a href>` ปกติจะส่ง HTTP request เต็มรูปแบบ (โมเดล MPA) browser จัดการ navigation ให้เอง
+
+## ตัวอย่าง runnable — แสดง current path
+
+หน้าแบบ self-contained นี้แสดงการทำงานของ `Astro.url` เปิดใน StackBlitz และสังเกตว่า pathname ปัจจุบันถูก render ฝั่ง server
+
+export const navCode = `---
+const url = Astro.url;
+const links = ['/', '/about', '/blog', '/contact'];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Navigation demo</title>
+    <style>
+      body { font-family: sans-serif; padding: 2rem; }
+      nav { display: flex; gap: 1rem; margin-bottom: 2rem; }
+      a { color: #6366f1; text-decoration: none; padding: 0.25rem 0.75rem;
+          border-radius: 4px; border: 1px solid #6366f1; }
+      a.active { background: #6366f1; color: #fff; }
+      .info { background: #f1f5f9; padding: 1rem; border-radius: 6px; }
+      code { background: #e2e8f0; padding: 0.1rem 0.4rem; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      {links.map((href) => (
+        <a href={href} class={url.pathname === href ? 'active' : ''}>{href}</a>
+      ))}
+    </nav>
+    <div class="info">
+      <p><strong>Astro.url.pathname:</strong> <code>{url.pathname}</code></p>
+      <p><strong>Astro.url.origin:</strong> <code>{url.origin}</code></p>
+    </div>
+    <p>คลิก link — active state ถูกกำหนดณ build/render time ไม่ใช่ใน JS</p>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={navCode} />
+
+## ViewTransitions — animation แบบ SPA
+
+Astro มี `<ViewTransitions />` component built-in ที่ครอบ View Transitions API ของ browser เพียงเพิ่มลงใน layout ก็ได้ transition แบบ animation ระหว่างหน้าโดยไม่ต้องแปลง site เป็น SPA
+
+export const vtReact = `// Next.js — page transition ต้องใช้ library
+// เช่น framer-motion AnimatePresence หรือ next-view-transitions
+import { ViewTransitions } from 'next-view-transitions';
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <ViewTransitions>
+          {children}
+        </ViewTransitions>
+      </body>
+    </html>
+  );
+}`;
+
+export const vtAstro = `---
+// src/layouts/Layout.astro
+import { ViewTransitions } from 'astro:transitions';
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>My Site</title>
+    <!-- เพิ่มบรรทัดนี้บรรทัดเดียวเพื่อ transition แบบ SPA -->
+    <ViewTransitions />
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={vtReact} astro={vtAstro} reactTitle="Next.js" />
+
+เมื่อเพิ่ม `<ViewTransitions />` แล้ว Astro จะสกัด link click และใช้ native View Transitions API ของ browser สร้าง animation ระหว่างหน้า คุณยังคงใช้ mental model แบบ MPA — ไม่มี client-side router ไม่มี JavaScript bundle สำหรับ routing logic
+
+<Diff title="React/Next.js navigation vs Astro navigation">
+- Next.js `<Link>`: prefetch, จัดการ client-side navigation, อัปเดต URL โดยไม่โหลดหน้าใหม่
+- Astro plain `<a href>`: HTTP request ต่อการนำทาง — เรียบง่าย ไม่มี JS overhead ทำงานได้แม้ไม่มี JavaScript
+- `usePathname()` / `useRouter()` (React) → `Astro.url.pathname` (Astro ฝั่ง server เท่านั้น)
+- SPA transition: Next.js รองรับ first-class ผ่าน App Router; Astro ใช้ `<ViewTransitions />` (import เดียว)
+- `Astro.url` ใช้ได้เฉพาะ build/server time เท่านั้น — ไม่สามารถเปลี่ยนได้ตอบสนองต่อ client-side event
+</Diff>
+
+export const quizNavigation = [
+  {
+    q: "ควรใช้ component ใดสำหรับ navigation link ใน Astro MPA site แบบ default?",
+    options: [
+      "`<Link href>`",
+      "`<NavLink to>`",
+      "Plain `<a href>` HTML element",
+      "`<AstroLink href>`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "จะอ่าน pathname ของหน้าปัจจุบันฝั่ง server ใน Astro component ได้อย่างไร?",
+    options: [
+      "`usePathname()` hook",
+      "`Astro.url.pathname`",
+      "`Astro.request.path`",
+      "`import { pathname } from 'astro:router'`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "การเพิ่ม `<ViewTransitions />` ลงใน Astro layout ทำอะไร?",
+    options: [
+      "แปลง site เป็น SPA เต็มรูปแบบพร้อม client-side router",
+      "เปิดใช้ transition แบบ animation ระหว่างหน้าโดยใช้ View Transitions API ของ browser",
+      "เพิ่ม React Router navigation ให้ทุกหน้า",
+      "Prefetch ทุก internal link เมื่อโหลดหน้า",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="routing/navigation" questions={quizNavigation} />
+
+<ProgressTracker client:visible id="routing/navigation" />

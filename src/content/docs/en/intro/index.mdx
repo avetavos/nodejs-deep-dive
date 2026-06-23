@@ -1,0 +1,174 @@
+---
+title: 'Introduction: Astro for React Developers'
+description: Why Astro, what the islands architecture means for React developers, and what this course covers.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+You already know how to build UIs with React. You understand components, hooks, state, and JSX. Astro is not a replacement for that knowledge — it is a different delivery vehicle that reuses your React mental model where it matters and gets out of the way where it doesn't.
+
+The single biggest shift: **React ships a JavaScript runtime to the browser and renders your UI there. Astro renders your UI on the server (or at build time) and ships HTML. JavaScript reaches the browser only for the parts that genuinely need interactivity.**
+
+For content-heavy sites — docs, marketing pages, blogs, landing pages — that difference is enormous: faster Time to First Contentful Paint, smaller bundles, and better Core Web Vitals with zero manual optimisation.
+
+## Why Astro instead of just Next.js?
+
+Next.js is a great full-stack React framework. Astro is the right tool when:
+
+- **Your content outweighs your interactivity.** Static pages, blogs, docs sites, and marketing sites ship almost no JavaScript with Astro by default.
+- **You want to mix frameworks.** Astro lets you drop in a React, Svelte, Vue, or Preact component side by side — or none at all.
+- **You care about bundle size.** Astro's islands architecture means each interactive widget is independently hydrated; the rest of the page is plain HTML.
+- **You want file-based routing without a client-side router.** Every `.astro` page in `src/pages/` becomes a URL — no Link component, no router config, no hydration overhead.
+
+## What changes from React
+
+| React / Next.js | Astro equivalent |
+|---|---|
+| `.jsx` / `.tsx` component file | `.astro` component file |
+| Function body | Frontmatter (`---` block) |
+| `return (<JSX />)` | HTML template below `---` |
+| `props` argument | `Astro.props` |
+| `children` prop | `<slot />` |
+| `useEffect` / `useState` | Framework island with `client:*` directive |
+| `getServerSideProps` | Frontmatter (`fetch` at build/request time) |
+| Pages Router file | `src/pages/*.astro` |
+
+## What stays the same
+
+- JSX-like `{expr}` syntax in templates
+- Component composition (`<Header />`, `<Footer />`)
+- TypeScript everywhere (`interface Props`)
+- Your existing React components — drop them in as islands
+- `npm`/`pnpm` tooling, Vite under the hood
+
+## What this course covers
+
+| Module | What you'll learn |
+|---|---|
+| **Intro** *(this module)* | Why Astro, islands architecture, setup, project structure, first page |
+| **Components** | `.astro` component anatomy, props, slots, expressions |
+| **Layouts** | Shared layouts, nested layouts, `<slot />` patterns |
+| **Routing** | File-based routing, dynamic routes, 404 pages |
+| **Data Fetching** | `fetch` in frontmatter, `getStaticPaths`, content collections |
+| **Islands** | Using React/Svelte/Vue components with `client:*` directives |
+
+## A first .astro page
+
+Here is the smallest meaningful comparison: a React component that renders a hero section, versus the equivalent Astro page.
+
+export const indexReact = `// src/app/page.tsx  (Next.js App Router)
+export default function HeroPage() {
+  return (
+    <html lang="en">
+      <head><title>My Site</title></head>
+      <body>
+        <h1>Hello from React</h1>
+        <p>This page ships a full React runtime.</p>
+      </body>
+    </html>
+  );
+}`;
+
+export const indexAstro = `---
+// src/pages/index.astro
+const title = "My Site";
+---
+<html lang="en">
+  <head><title>{title}</title></head>
+  <body>
+    <h1>Hello from Astro</h1>
+    <p>This page ships zero JavaScript.</p>
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={indexReact} astro={indexAstro} />
+
+The Astro page above ships **no JavaScript to the browser** — the `title` variable is evaluated once at build time and baked into the HTML. There is no React runtime, no hydration, no virtual DOM.
+
+## Runnable example
+
+export const indexCode = `---
+const framework = "Astro";
+const audience = "React developer";
+const year = new Date().getFullYear();
+const features = ["Zero JS by default", "Islands architecture", "Use React components as islands", "File-based routing"];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Welcome to {framework}</title>
+    <style>
+      body { font-family: sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+      ul { line-height: 2; }
+      li::marker { color: #6366f1; }
+    </style>
+  </head>
+  <body>
+    <h1>Welcome, {audience}!</h1>
+    <p>This is an Astro page rendered in {year}. Check the browser DevTools — no JS bundle.</p>
+    <h2>Why Astro?</h2>
+    <ul>
+      {features.map(f => <li>{f}</li>)}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={indexCode} />
+
+<Diff title="React / Next.js page vs Astro page">
+- React/Next: ships a JS runtime to the browser; component re-renders on state/prop changes.
+- Astro: renders to HTML at build/server time; ships zero JS unless you add a `client:*` island.
+- Both: use `{expr}` to embed values, support TypeScript, use `npm` / Vite tooling.
+- Key win: the `.map()` above produces static `<li>` elements — no hydration, no bundle.
+</Diff>
+
+export const quizIntroIndex = [
+  {
+    q: "What does an Astro page ship to the browser by default?",
+    options: [
+      "A full React runtime and virtual DOM",
+      "A small Astro runtime for routing",
+      "Zero JavaScript — only HTML",
+      "A service worker for offline support",
+    ],
+    answer: 2,
+  },
+  {
+    q: "When does the code inside an Astro frontmatter (--- block) run?",
+    options: [
+      "In the browser on every page load",
+      "Once at build time or per request on the server",
+      "Inside a Web Worker",
+      "Only when the component mounts",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which Astro feature lets you use a React component inside an Astro page?",
+    options: [
+      "The `use client` directive",
+      "Wrapping it in `<Suspense>`",
+      "A `client:*` hydration directive on the component",
+      "Importing it from `astro/react`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What is the Astro equivalent of Next.js `getServerSideProps`?",
+    options: [
+      "A `loader()` function exported from the page",
+      "A `getProps()` export",
+      "`fetch` calls written directly in the frontmatter (--- block)",
+      "A custom middleware file",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/index" questions={quizIntroIndex} />
+
+<ProgressTracker client:visible id="intro/index" />

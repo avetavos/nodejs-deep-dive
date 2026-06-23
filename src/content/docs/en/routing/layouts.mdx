@@ -1,0 +1,192 @@
+---
+title: Layouts
+description: 'Wrap pages with reusable layouts using src/layouts/Layout.astro and <slot />, compared to Next.js layout.tsx and _app.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In Next.js App Router you create a `layout.tsx` next to your pages and React automatically wraps children through it. In Astro there is no automatic layout wrapping — you create a layout component in `src/layouts/` and **explicitly import and use it** inside each page. The layout receives page content through `<slot />`, which is Astro's equivalent of React's `children` prop.
+
+> Layouts require a multi-file project to observe — run these examples in a full Astro project (`npm create astro@latest`) locally.
+
+## Defining a layout
+
+export const layoutDefReact = `// app/layout.tsx  (Next.js App Router)
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <head>
+        <title>My Site</title>
+      </head>
+      <body>
+        <nav>My Nav</nav>
+        <main>{children}</main>
+        <footer>My Footer</footer>
+      </body>
+    </html>
+  );
+}`;
+
+export const layoutDefAstro = `---
+// src/layouts/Layout.astro
+interface Props {
+  title?: string;
+}
+const { title = 'My Site' } = Astro.props;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <nav>My Nav</nav>
+    <main>
+      <slot />  <!-- page content goes here -->
+    </main>
+    <footer>My Footer</footer>
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={layoutDefReact} astro={layoutDefAstro} reactTitle="Next.js" />
+
+## Using the layout in a page
+
+export const layoutUseReact = `// app/about/page.tsx  (Next.js App Router)
+// layout.tsx wraps this automatically — nothing to import
+export default function AboutPage() {
+  return <h1>About</h1>;
+}
+
+// -----------------------------------------
+// pages/_app.tsx  (Next.js Pages Router)
+// import type { AppProps } from 'next/app';
+// export default function App({ Component, pageProps }: AppProps) {
+//   return <Layout><Component {...pageProps} /></Layout>;
+// }`;
+
+export const layoutUseAstro = `---
+// src/pages/about.astro
+// Layouts must be explicitly imported in every page
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="About">
+  <h1>About</h1>
+  <p>Welcome to the about page.</p>
+</Layout>`;
+
+<ReactAstro client:visible react={layoutUseReact} astro={layoutUseAstro} reactTitle="Next.js" />
+
+## Named slots
+
+Astro supports **named slots** for injecting content into specific regions of a layout — similar to named `children` patterns in React (using render props or portals) but built into the language.
+
+export const namedSlotReact = `// React named-area pattern (render props)
+function Layout({ nav, main }: {
+  nav: React.ReactNode;
+  main: React.ReactNode;
+}) {
+  return (
+    <div>
+      <aside>{nav}</aside>
+      <main>{main}</main>
+    </div>
+  );
+}
+
+// Usage
+<Layout
+  nav={<NavLinks />}
+  main={<ArticleContent />}
+/>`;
+
+export const namedSlotAstro = `---
+// src/layouts/TwoColumn.astro
+---
+<div>
+  <aside>
+    <slot name="sidebar" />  <!-- named slot -->
+  </aside>
+  <main>
+    <slot />                 <!-- default slot -->
+  </main>
+</div>
+
+<!-- Usage in a page -->
+---
+import TwoColumn from '../layouts/TwoColumn.astro';
+---
+<TwoColumn>
+  <nav slot="sidebar">
+    <a href="/a">Link A</a>
+  </nav>
+  <article>Main content here</article>
+</TwoColumn>`;
+
+<ReactAstro client:visible react={namedSlotReact} astro={namedSlotAstro} />
+
+## Project file tree
+
+```
+src/
+├── layouts/
+│   ├── Layout.astro      ← base HTML shell (head, nav, footer)
+│   └── BlogLayout.astro  ← extends Layout, adds sidebar
+└── pages/
+    ├── index.astro        ← import Layout from '../layouts/Layout.astro'
+    ├── about.astro        ← import Layout from '../layouts/Layout.astro'
+    └── blog/
+        └── [slug].astro   ← import BlogLayout from '../../layouts/BlogLayout.astro'
+```
+
+<Diff title="Next.js layout vs Astro layout">
+- Next.js App Router: `layout.tsx` in a directory **automatically** wraps all pages in that segment — no import needed in the page.
+- Next.js Pages Router: `_app.tsx` wraps every page globally; nested layouts require a `getLayout` pattern.
+- Astro: layouts are regular `.astro` components in `src/layouts/`; you **explicitly** import and wrap each page — more verbose but more explicit.
+- `children` prop (React) → `<slot />` (Astro). Named slots are a first-class Astro primitive vs React render-prop patterns.
+- Astro layouts can receive typed props (`interface Props`) just like any other `.astro` component.
+</Diff>
+
+export const quizLayouts = [
+  {
+    q: "What Astro element is equivalent to React's `children` prop inside a layout?",
+    options: [
+      "`<children />`",
+      "`{children}`",
+      "`<slot />`",
+      "`<outlet />`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "How does Astro apply a layout to a page — compared to Next.js App Router?",
+    options: [
+      "Astro automatically wraps all pages in the nearest layout.astro, just like Next.js",
+      "You must explicitly import and wrap each page with the layout component",
+      "You register layouts in astro.config.mjs",
+      "Layouts are applied via a frontmatter `layout:` key",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Where is the conventional location for layout components in an Astro project?",
+    options: [
+      "src/pages/",
+      "src/components/",
+      "src/layouts/",
+      "src/templates/",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="routing/layouts" questions={quizLayouts} />
+
+<ProgressTracker client:visible id="routing/layouts" />

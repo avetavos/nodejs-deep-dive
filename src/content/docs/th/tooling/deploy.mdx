@@ -1,0 +1,262 @@
+---
+title: Deploy
+description: 'Build และ deploy Astro site ครอบคลุม static hosts (GitHub Pages, Netlify, Vercel), SSR adapters และตัวอย่าง GitHub Actions CI สำหรับ React developers'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+คุณรู้วิธี deploy แอปพลิเคชัน Next.js อยู่แล้ว: push ไป Vercel, เชื่อมต่อ repo กับ Netlify หรือรัน `next build && next start` บน server Astro ใช้ topology เดียวกัน — static output ไปยัง CDN ใดก็ได้, SSR output ผ่าน adapter — แต่ build artefact เรียบง่ายกว่าและ deployment surface กว้างกว่ามาก เพราะ static Astro build คือโฟลเดอร์ HTML, CSS และ JS ธรรมดา
+
+## Build สำหรับ production
+
+```bash
+# Build โปรเจกต์
+npx astro build
+
+# Output อยู่ใน dist/ เสมอ
+# Static build:  dist/ มี .html, .css, .js, images
+# SSR build:     dist/ มี server entry point + static assets
+```
+
+โฟลเดอร์ `dist/` คือ deployment artefact สำหรับ static sites อัปโหลดตรงๆ; สำหรับ SSR รัน server entry point ผ่าน adapter
+
+## Deploy static site
+
+### GitHub Pages
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+```
+
+ตั้งค่า `site` และ `base` ใน `astro.config.mjs` ด้วยหาก site อยู่ที่ sub-path (เช่น `https://user.github.io/repo/`):
+
+```js
+// astro.config.mjs
+export default defineConfig({
+  site: 'https://yourname.github.io',
+  base: '/your-repo-name',
+});
+```
+
+### Netlify — static
+
+Netlify ตรวจจับ Astro อัตโนมัติ เพิ่ม `netlify.toml` สำหรับ config ชัดเจน:
+
+```toml
+[build]
+  command = "npm run build"
+  publish = "dist"
+```
+
+### Vercel — static
+
+Vercel ตรวจจับ Astro อัตโนมัติเช่นกัน ไม่ต้องมีไฟล์ config สำหรับ static build เส้นทาง zero-config: เชื่อมต่อ repo ใน Vercel dashboard แล้ว push
+
+## Deploy กับ SSR
+
+สำหรับ SSR output ต้องใช้ adapter ติดตั้งด้วย `npx astro add <adapter>` และตั้ง `output: 'server'`:
+
+### Vercel (SSR)
+
+```bash
+npx astro add vercel
+```
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import vercel from '@astrojs/vercel/serverless';
+
+export default defineConfig({
+  output: 'server',
+  adapter: vercel(),
+});
+```
+
+Push ไป Vercel — adapter จะ wrap server entry point ใน Vercel Serverless Functions อัตโนมัติ
+
+### Node.js (self-hosted)
+
+```bash
+npx astro add node
+```
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  output: 'server',
+  adapter: node({ mode: 'standalone' }),
+});
+```
+
+```bash
+# หลัง build:
+node dist/server/entry.mjs
+```
+
+`standalone` mode สร้าง Node.js HTTP server ที่รันตรงๆ หรือ wrap ใน Docker container ได้
+
+## เปรียบเทียบ Next.js vs Astro deployment
+
+export const deployNext = `// Next.js deployment options
+
+// 1. Vercel (zero-config)
+//    Push ไป GitHub → เชื่อมต่อกับ Vercel → เสร็จ
+
+// 2. Static export (ไม่มี SSR)
+// next.config.js
+const nextConfig = { output: 'export' };
+//    → โฟลเดอร์ out/ deploy ไปยัง static host ใดก็ได้
+
+// 3. Self-hosted Node.js
+//    next build → next start (port 3000)
+//    หรือ: node .next/standalone/server.js
+
+// 4. Docker
+// FROM node:20-alpine
+// COPY .next/standalone ./
+// CMD ["node", "server.js"]`;
+
+export const deployAstro = `// Astro deployment options
+
+// 1. Static (default) — CDN / static host ใดก็ได้
+//    astro build → โฟลเดอร์ dist/
+//    ใช้ได้กับ GitHub Pages, Netlify, Vercel, S3 + CloudFront, ฯลฯ
+
+// 2. Vercel SSR
+//    npx astro add vercel
+//    output: 'server' → push → Vercel จัดการทั้งหมด
+
+// 3. Self-hosted Node.js
+//    npx astro add node
+//    output: 'server', mode: 'standalone'
+//    astro build → node dist/server/entry.mjs
+
+// 4. Docker (Node standalone)
+// FROM node:20-alpine
+// COPY dist ./dist
+// CMD ["node", "./dist/server/entry.mjs"]`;
+
+<ReactAstro client:visible react={deployNext} astro={deployAstro} reactTitle="Next.js deploy" astroTitle="Astro deploy" />
+
+## CI pipeline — type-check + build + deploy
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run check      # astro check — type errors ทำให้ build ล้มเหลว
+      - run: npm run build      # astro build — compilation errors ทำให้ build ล้มเหลว
+```
+
+นี่สะท้อน CI pipeline ทั่วไปของ Next.js (`tsc --noEmit` + `next build`) — เพียงแต่ชื่อ script ต่างกัน
+
+<Diff title="Next.js deploy vs Astro deploy">
+- Static Next (`output: 'export'`) → `out/`; Static Astro → `dist/` — deploy ทั้งคู่ไปยัง CDN ใดก็ได้
+- Next SSR: `next start` (built-in server); Astro SSR: ต้องใช้ adapter แล้ว `node dist/server/entry.mjs`
+- ทั้งคู่มี zero-config Vercel + Netlify integrations; ทั้งคู่ใช้งานได้ใน Docker
+- `astro check` ใน CI แทนที่ `tsc --noEmit` — เพิ่มก่อน `astro build`
+</Diff>
+
+export const quizDeploy = [
+  {
+    q: "`astro build` วาง production artefact ไว้ที่ไหน?",
+    options: [
+      "`.astro/`",
+      "`build/`",
+      "`out/`",
+      "`dist/`",
+    ],
+    answer: 3,
+  },
+  {
+    q: "ต้องทำอะไรก่อน deploy Astro site ที่มี `output: 'server'` ไปยัง Vercel?",
+    options: [
+      "ตั้ง `serverless: true` ใน `astro.config.mjs`",
+      "ติดตั้งและลงทะเบียน `@astrojs/vercel` adapter",
+      "Export `getServerSideProps` จากแต่ละหน้า",
+      "รัน `vercel build` แทน `astro build`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "คำสั่งใดใน GitHub Actions CI step จับ type errors ก่อน build?",
+    options: [
+      "`npm run lint`",
+      "`npm run test`",
+      "`npm run check` (ซึ่งรัน `astro check`)",
+      "`npx tsc --noEmit`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "สำหรับ Node.js standalone SSR deployment ต้องรันไฟล์ใดหลัง `astro build`?",
+    options: [
+      "`dist/index.js`",
+      "`dist/server/entry.mjs`",
+      "`server.js` ใน project root",
+      "`.astro/server.mjs`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling/deploy" questions={quizDeploy} />
+
+<ProgressTracker client:visible id="tooling/deploy" />

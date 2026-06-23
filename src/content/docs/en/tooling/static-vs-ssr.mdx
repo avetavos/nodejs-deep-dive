@@ -1,0 +1,197 @@
+---
+title: 'Static vs SSR'
+description: 'Choose between static output and SSR in Astro. Add adapters for server rendering, and compare with Next.js static, SSR, and ISR modes.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Next.js gives you three rendering modes per page: static (SSG), server-side rendering (SSR), and incremental static regeneration (ISR). Astro starts from the opposite end — **static by default, opt into SSR per route** — using a simpler two-switch model: the global `output` option plus the per-page `prerender` export.
+
+## The `output` option
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+
+export default defineConfig({
+  // 'static'  — default; build-time HTML for every page
+  // 'server'  — every page is server-rendered unless prerender=true
+  // 'hybrid'  — alias for 'server' (Astro 4+ terminology)
+  output: 'static',
+});
+```
+
+When `output` is `'static'` (the default) Astro pre-renders every page at build time and writes static HTML files to `dist/`. No server process is needed — you can deploy to any CDN or static host.
+
+## Adding an SSR adapter
+
+To use `output: 'server'` you must install an adapter that tells Astro how to run server-side code in your target environment.
+
+```bash
+# Choose one:
+npx astro add vercel       # Vercel serverless functions
+npx astro add netlify      # Netlify Edge Functions
+npx astro add node         # Self-hosted Node.js (express/standalone)
+npx astro add cloudflare   # Cloudflare Workers / Pages
+```
+
+```js
+// astro.config.mjs — SSR with Vercel adapter
+import { defineConfig } from 'astro/config';
+import vercel from '@astrojs/vercel/serverless';
+
+export default defineConfig({
+  output: 'server',
+  adapter: vercel(),
+});
+```
+
+## Per-page `prerender` export
+
+With `output: 'server'`, every page is server-rendered by default. Opt individual pages back to static HTML by exporting `prerender = true`.
+
+```astro
+---
+// src/pages/about.astro
+// This page is still pre-rendered even though output: 'server'
+export const prerender = true;
+
+const title = "About us";
+---
+<h1>{title}</h1>
+```
+
+The reverse also works: with `output: 'static'`, mark a page as server-only with `export const prerender = false`.
+
+## Comparing rendering modes
+
+export const renderingNext = `// Next.js rendering modes (App Router)
+
+// Static (SSG) — default for Server Components
+// No special export needed; just write a Server Component.
+// next build pre-renders it to HTML.
+
+// SSR — opt in per route
+export const dynamic = 'force-dynamic';
+
+// ISR — revalidate on a schedule
+export const revalidate = 60; // seconds
+
+// Client-side only (CSR)
+'use client';
+import { useEffect, useState } from 'react';
+// ...`;
+
+export const renderingAstro = `// Astro rendering modes
+
+// astro.config.mjs
+// output: 'static'  → all pages are pre-rendered (default)
+// output: 'server'  → all pages are SSR by default
+
+// Per-page overrides (works in both modes):
+// Pre-render this specific page:
+export const prerender = true;
+
+// Server-render this specific page:
+export const prerender = false;
+
+// No ISR equivalent in core Astro — use adapter-specific
+// options (e.g. Vercel's isr: { expiration: 60 }) in
+// astro.config.mjs if your adapter supports it.`;
+
+<ReactAstro client:visible react={renderingNext} astro={renderingAstro} reactTitle="Next.js (App Router)" astroTitle="Astro" />
+
+## Dynamic routes with SSR
+
+When a page depends on request-time data (auth cookies, URL params, POST body), write it as an SSR page:
+
+```astro
+---
+// src/pages/dashboard.astro
+export const prerender = false;    // server-render this page
+
+const session = Astro.cookies.get('session')?.value;
+if (!session) return Astro.redirect('/login');
+
+const user = await fetchUser(session);
+---
+<h1>Welcome, {user.name}</h1>
+```
+
+This is the Astro equivalent of a Next.js `getServerSideProps` page or a dynamic Server Component that reads cookies.
+
+## ISR in Astro
+
+Astro does not have a built-in ISR equivalent like Next.js `revalidate`. Adapter-specific options exist:
+
+```js
+// astro.config.mjs — Vercel ISR via adapter config
+import { defineConfig } from 'astro/config';
+import vercel from '@astrojs/vercel/serverless';
+
+export default defineConfig({
+  output: 'server',
+  adapter: vercel({
+    isr: {
+      expiration: 60,   // re-generate after 60 seconds
+    },
+  }),
+});
+```
+
+<Diff title="Next.js rendering modes vs Astro">
+- Next.js: `dynamic = 'force-dynamic'` (SSR), `revalidate = N` (ISR), default = static.
+- Astro: `output: 'static'` (default) or `output: 'server'` (SSR), per-page `prerender` export to override.
+- Astro has no built-in ISR — ISR is an adapter-level option (Vercel, Netlify).
+- Both: static pages ship zero JavaScript; SSR pages execute on the server per request.
+</Diff>
+
+export const quizStaticSsr = [
+  {
+    q: "What is Astro's default rendering mode?",
+    options: [
+      "Server-side rendering (SSR) for every page",
+      "Client-side rendering via React",
+      "Static — all pages are pre-rendered at build time",
+      "Incremental static regeneration every 60 seconds",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What must you install before setting `output: 'server'` in `astro.config.mjs`?",
+    options: [
+      "A React integration (`@astrojs/react`)",
+      "An SSR adapter such as `@astrojs/node` or `@astrojs/vercel`",
+      "Node.js 20 or later",
+      "The `@astrojs/ssr` package",
+    ],
+    answer: 1,
+  },
+  {
+    q: "How do you pre-render one specific page when `output: 'server'` is set globally?",
+    options: [
+      "Add `static: true` to the page frontmatter YAML",
+      "Rename the file to `page.static.astro`",
+      "Export `export const prerender = true` from the page",
+      "Move the file to `src/pages/static/`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Which Next.js export is closest in concept to Astro's `export const prerender = false`?",
+    options: [
+      "`export const revalidate = 0`",
+      "`export const dynamic = 'force-dynamic'`",
+      "`'use client'`",
+      "`export const runtime = 'edge'`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling/static-vs-ssr" questions={quizStaticSsr} />
+
+<ProgressTracker client:visible id="tooling/static-vs-ssr" />

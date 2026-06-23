@@ -1,0 +1,162 @@
+---
+title: Tailwind
+description: 'Add Tailwind CSS to an Astro project with npx astro add tailwind and use utility classes exactly as you do in Next.js — with one key difference: use class= not className=.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In Next.js you add Tailwind by installing three packages, creating `tailwind.config.js`, adding the `@tailwind` directives to `globals.css`, and importing that file in `_app.tsx`. Astro ships an official integration that does all of that in one command.
+
+> **Playground note:** Tailwind requires its Vite integration to be installed in the project — a single-file `.astro` page in StackBlitz cannot load it without the full setup. This lesson is code-only. Copy any snippet to a local project created with `npx create astro@latest` and run the steps below to try it live.
+
+## Adding Tailwind to Astro
+
+```bash
+# inside your Astro project
+npx astro add tailwind
+```
+
+The CLI installs `@astrojs/tailwind` and `tailwindcss`, creates `tailwind.config.mjs`, and adds the integration to `astro.config.mjs`. Accept all prompts.
+
+```js
+// astro.config.mjs  — after running the command
+import { defineConfig } from 'astro/config';
+import tailwind from '@astrojs/tailwind';
+
+export default defineConfig({
+  integrations: [tailwind()],
+});
+```
+
+```js
+// tailwind.config.mjs  — auto-generated
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./src/**/*.{astro,html,js,jsx,ts,tsx,svelte,vue}'],
+  theme: { extend: {} },
+  plugins: [],
+};
+```
+
+No `globals.css` import needed — the integration handles that automatically.
+
+## Using utility classes in .astro vs React
+
+export const tailwindReact = `// Card.tsx  (Next.js + Tailwind)
+export default function Card({
+  title,
+  description,
+  featured = false,
+}: {
+  title: string;
+  description: string;
+  featured?: boolean;
+}) {
+  return (
+    <div className={\`rounded-xl border p-6 shadow-sm \${
+      featured ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 bg-white'
+    }\`}>
+      <h2 className="mb-2 text-lg font-semibold text-slate-900">{title}</h2>
+      <p className="text-sm text-slate-600">{description}</p>
+    </div>
+  );
+}`;
+
+export const tailwindAstro = `---
+// Card.astro  (Astro + Tailwind)
+interface Props { title: string; description: string; featured?: boolean; }
+const { title, description, featured = false } = Astro.props;
+---
+<div class:list={[
+  "rounded-xl border p-6 shadow-sm",
+  featured ? "border-indigo-500 bg-indigo-50" : "border-slate-200 bg-white",
+]}>
+  <h2 class="mb-2 text-lg font-semibold text-slate-900">{title}</h2>
+  <p class="text-sm text-slate-600">{description}</p>
+</div>`;
+
+<ReactAstro client:visible react={tailwindReact} astro={tailwindAstro} />
+
+The only mandatory change: `className` becomes `class`. Everything else — utility classes, responsive prefixes, dark-mode variants, arbitrary values — works identically.
+
+## Mixing Tailwind with scoped styles
+
+You can use Tailwind utilities and a `<style>` block in the same `.astro` file. This is useful when a component needs a complex selector (e.g., `nth-child`, `::before`) that Tailwind cannot express cleanly.
+
+```astro
+---
+// HeroSection.astro
+---
+<section class="py-24 px-6 bg-gradient-to-br from-indigo-600 to-purple-700">
+  <h1 class="text-4xl font-bold text-white mb-4">Ship faster</h1>
+  <p class="text-indigo-200 max-w-xl">Tailwind utilities + scoped styles in one component.</p>
+</section>
+
+<style>
+  /* Scoped rule for a complex selector Tailwind cannot express */
+  section > *:not(:last-child) { margin-bottom: 1rem; }
+</style>
+```
+
+## Tailwind and framework components (React / Vue inside Astro)
+
+Utility classes also work on framework components rendered inside Astro pages. Pass classes as `class` on the Astro wrapper or as `className` inside JSX if you are inside a `.tsx` Island component.
+
+```astro
+---
+// Page.astro
+import Counter from './Counter.tsx';
+---
+<!-- Tailwind class on the Astro element wrapper -->
+<div class="max-w-screen-lg mx-auto px-4">
+  <!-- className inside the React Island -->
+  <Counter className="mt-8" client:visible />
+</div>
+```
+
+<Diff title="Tailwind in Next.js vs Tailwind in Astro">
+- Next.js: manual install (`npm i tailwindcss postcss autoprefixer`), create config, add `@tailwind` directives, import `globals.css` in `_app.tsx`.
+- Astro: `npx astro add tailwind` — one command, zero manual config.
+- Utility classes: identical — same responsive/dark/hover prefixes, same arbitrary-value syntax.
+- Key difference: `className` in React/JSX → `class` in `.astro` templates (and `class:list` for conditionals).
+</Diff>
+
+export const quizTailwind = [
+  {
+    q: "What single command adds Tailwind to an Astro project and handles all configuration automatically?",
+    options: [
+      "`npm install tailwindcss && npx tailwindcss init`",
+      "`astro install tailwind`",
+      "`npx astro add tailwind`",
+      "`npm install @astrojs/tailwind && npx tailwind setup`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "In a `.astro` template you use Tailwind classes. Which attribute do you use?",
+    options: [
+      "`className` — same as React",
+      "`tw` — Astro's Tailwind-specific prop",
+      "`class` — Astro uses the HTML attribute, not the React JSX alias",
+      "`classList` — required when using Tailwind in Astro",
+    ],
+    answer: 2,
+  },
+  {
+    q: "After running `npx astro add tailwind`, do you need to manually import Tailwind's CSS in a layout file?",
+    options: [
+      "Yes — add `import 'tailwindcss/tailwind.css'` to every layout",
+      "No — the integration injects the styles automatically",
+      "Yes — create `globals.css` with `@tailwind` directives and import it in `_app.astro`",
+      "No — but only if you use `output: 'static'`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="styling/tailwind" questions={quizTailwind} />
+
+<ProgressTracker client:visible id="styling/tailwind" />

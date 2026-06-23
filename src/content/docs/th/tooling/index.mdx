@@ -1,0 +1,112 @@
+---
+title: 'Tooling, Testing & Deployment'
+description: 'ภาพรวมของโมดูลที่เปรียบเทียบ toolchain ของ Astro กับ toolchain ของ Next.js/React สำหรับนักพัฒนา React ที่มีประสบการณ์'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+หากคุณเคย deploy แอปพลิเคชัน Next.js มาก่อน คุณมี mental model สำหรับโมดูลนี้อยู่แล้ว: CLI ที่ขับเคลื่อน dev/build/preview, การตรวจสอบ TypeScript, ไฟล์ configuration, ระบบนิเวศ integration และ deployment target Astro แมปแบบหนึ่งต่อหนึ่งกับทุกเครื่องมือเหล่านั้น — เพียงแต่คำสั่งและชื่อไฟล์เปลี่ยนไป
+
+## ภาพรวม toolchain
+
+| Next.js / React | สิ่งเทียบเท่าใน Astro |
+|---|---|
+| `next dev` | `astro dev` |
+| `next build` | `astro build` |
+| `next start` | `astro preview` |
+| `next lint` | `astro check` (ตรวจสอบ type ในไฟล์ `.astro`) |
+| `next.config.js` | `astro.config.mjs` |
+| Next.js plugins (webpack) | Astro integrations (`@astrojs/*`) |
+| `npm install @next/bundle-analyzer` | `npx astro add react` / `npx astro add tailwind` |
+| Vercel / Netlify สำหรับ Next.js | Vercel / Netlify adapters สำหรับ Astro |
+| `tsc --noEmit` | `astro check` ครอบคลุม `.astro` + `.ts` |
+| Jest / Vitest | Vitest (config เหมือนกัน; Astro ไม่มี test runner ในตัว) |
+
+## บทเรียนในโมดูลนี้
+
+| บทเรียน | สิ่งที่คุณจะเรียนรู้ |
+|---|---|
+| **Astro CLI** | `astro dev` / `build` / `preview` / `add` / `check`; scripts ใน `package.json` |
+| **Integrations** | `npx astro add`, `astro.config.mjs`, ระบบนิเวศ integration |
+| **`astro check`** | ตรวจสอบ type ในไฟล์ `.astro`, editor tooling เทียบกับ `tsc`/ESLint |
+| **Static vs SSR** | `output: 'static'` เทียบกับ `output: 'server'`, adapters, `prerender` |
+| **Deploy** | `astro build`, static hosts, SSR adapters, GitHub Actions CI |
+
+export const overviewNext = `// next.config.js
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  images: { domains: ['cdn.example.com'] },
+};
+module.exports = nextConfig;
+
+// package.json scripts (typical Next project)
+// "dev":   "next dev"
+// "build": "next build"
+// "start": "next start"
+// "lint":  "next lint"
+// "type-check": "tsc --noEmit"`;
+
+export const overviewAstro = `// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+import tailwind from '@astrojs/tailwind';
+
+export default defineConfig({
+  integrations: [react(), tailwind()],
+});
+
+// package.json scripts (typical Astro project)
+// "dev":     "astro dev"
+// "build":   "astro build"
+// "preview": "astro preview"
+// "check":   "astro check"`;
+
+<ReactAstro client:visible react={overviewNext} astro={overviewAstro} reactTitle="Next.js config" astroTitle="Astro config" />
+
+<Diff title="Next.js toolchain vs Astro toolchain">
+- ทั้งคู่ใช้ Vite ภายใน (Astro v3+) และ scripts `npm`/`pnpm`/`yarn` มาตรฐาน
+- `astro check` แทนที่การใช้ `tsc --noEmit` + ESLint rule สำหรับ syntax `.astro`
+- `astro build` เขียน output ไปที่ `dist/` เสมอ — ไม่มี `.next/` cache directory ให้ลบ
+- Adapters (Vercel, Netlify, Node) แทนที่แนวคิด deployment targets ของ Next.js
+</Diff>
+
+export const quizToolingIndex = [
+  {
+    q: "คำสั่ง Astro CLI ใดที่ใกล้เคียงกับ `next build` มากที่สุด?",
+    options: [
+      "`astro preview`",
+      "`astro check`",
+      "`astro build`",
+      "`astro start`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "`astro check` ทำอะไรที่ Next.js ไม่มีคำสั่งเดียวครอบคลุม?",
+    options: [
+      "รัน unit tests กับ components",
+      "ตรวจสอบ type ทั้งไฟล์ `.astro` และ `.ts` ในครั้งเดียว",
+      "Lint CSS ภายใน Astro components",
+      "Validate schema ของ `astro.config.mjs`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ใน Astro, build output อยู่ที่ไหนโดย default?",
+    options: [
+      "`.next/`",
+      "`build/`",
+      "`out/`",
+      "`dist/`",
+    ],
+    answer: 3,
+  },
+];
+
+<Quiz client:visible id="tooling/index" questions={quizToolingIndex} />
+
+<ProgressTracker client:visible id="tooling/index" />

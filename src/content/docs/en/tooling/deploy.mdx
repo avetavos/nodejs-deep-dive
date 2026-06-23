@@ -1,0 +1,262 @@
+---
+title: Deploy
+description: 'Build and deploy an Astro site. Cover static hosts (GitHub Pages, Netlify, Vercel), SSR adapters, and a GitHub Actions CI example for React developers.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+You already know how to deploy a Next.js application: push to Vercel, connect a repo to Netlify, or run `next build && next start` on a server. Astro follows the same topology — static output goes to any CDN, SSR output goes through an adapter — but the build artefact is simpler and the deployment surface is much wider because a static Astro build is just a folder of HTML, CSS, and JS files.
+
+## Building for production
+
+```bash
+# Build the project
+npx astro build
+
+# The output is always in dist/
+# Static build:  dist/ contains .html, .css, .js, images
+# SSR build:     dist/ contains a server entry point + static assets
+```
+
+The `dist/` folder is your deployment artefact. For static sites you upload it directly; for SSR you run the server entry point through an adapter.
+
+## Deploying a static site
+
+### GitHub Pages
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+```
+
+Also set the `site` and `base` options in `astro.config.mjs` if your site lives at a sub-path (e.g. `https://user.github.io/repo/`):
+
+```js
+// astro.config.mjs
+export default defineConfig({
+  site: 'https://yourname.github.io',
+  base: '/your-repo-name',
+});
+```
+
+### Netlify — static
+
+Netlify auto-detects Astro. Add a `netlify.toml` for explicit config:
+
+```toml
+[build]
+  command = "npm run build"
+  publish = "dist"
+```
+
+### Vercel — static
+
+Vercel also auto-detects Astro. No config file is required for a static build. The zero-config path: connect your repo in the Vercel dashboard and push.
+
+## Deploying with SSR
+
+For SSR output you need an adapter. Install it with `npx astro add <adapter>` and set `output: 'server'`:
+
+### Vercel (SSR)
+
+```bash
+npx astro add vercel
+```
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import vercel from '@astrojs/vercel/serverless';
+
+export default defineConfig({
+  output: 'server',
+  adapter: vercel(),
+});
+```
+
+Push to Vercel — the adapter wraps your server entry point in Vercel Serverless Functions automatically.
+
+### Node.js (self-hosted)
+
+```bash
+npx astro add node
+```
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import node from '@astrojs/node';
+
+export default defineConfig({
+  output: 'server',
+  adapter: node({ mode: 'standalone' }),
+});
+```
+
+```bash
+# After building:
+node dist/server/entry.mjs
+```
+
+The `standalone` mode produces a Node.js HTTP server you can run directly or wrap in a Docker container.
+
+## Comparing Next.js vs Astro deployment
+
+export const deployNext = `// Next.js deployment options
+
+// 1. Vercel (zero-config)
+//    Push to GitHub → connect to Vercel → done.
+
+// 2. Static export (no SSR)
+// next.config.js
+const nextConfig = { output: 'export' };
+//    → out/ folder, deploy to any static host
+
+// 3. Self-hosted Node.js
+//    next build → next start (port 3000)
+//    Or: node .next/standalone/server.js
+
+// 4. Docker
+// FROM node:20-alpine
+// COPY .next/standalone ./
+// CMD ["node", "server.js"]`;
+
+export const deployAstro = `// Astro deployment options
+
+// 1. Static (default) — any CDN / static host
+//    astro build → dist/ folder
+//    Works on GitHub Pages, Netlify, Vercel, S3 + CloudFront, etc.
+
+// 2. Vercel SSR
+//    npx astro add vercel
+//    output: 'server' → push → Vercel handles the rest
+
+// 3. Self-hosted Node.js
+//    npx astro add node
+//    output: 'server', mode: 'standalone'
+//    astro build → node dist/server/entry.mjs
+
+// 4. Docker (Node standalone)
+// FROM node:20-alpine
+// COPY dist ./dist
+// CMD ["node", "./dist/server/entry.mjs"]`;
+
+<ReactAstro client:visible react={deployNext} astro={deployAstro} reactTitle="Next.js deploy" astroTitle="Astro deploy" />
+
+## CI pipeline — type-check + build + deploy
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run check      # astro check — type errors fail the build
+      - run: npm run build      # astro build — compilation errors fail the build
+```
+
+This mirrors the typical Next.js CI pipeline (`tsc --noEmit` + `next build`) — just with different script names.
+
+<Diff title="Next.js deploy vs Astro deploy">
+- Static Next (`output: 'export'`) → `out/`; Static Astro → `dist/` — deploy either to any CDN.
+- Next SSR: `next start` (built-in server); Astro SSR: requires an adapter, then `node dist/server/entry.mjs`.
+- Both have zero-config Vercel + Netlify integrations; both work in Docker.
+- `astro check` in CI replaces `tsc --noEmit` — add it before `astro build`.
+</Diff>
+
+export const quizDeploy = [
+  {
+    q: "Where does `astro build` place the production artefact?",
+    options: [
+      "`.astro/`",
+      "`build/`",
+      "`out/`",
+      "`dist/`",
+    ],
+    answer: 3,
+  },
+  {
+    q: "What must you do before deploying an Astro site with `output: 'server'` to Vercel?",
+    options: [
+      "Set `serverless: true` in `astro.config.mjs`",
+      "Install and register the `@astrojs/vercel` adapter",
+      "Export `getServerSideProps` from each page",
+      "Run `vercel build` instead of `astro build`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Which command in a GitHub Actions CI step catches type errors before the build?",
+    options: [
+      "`npm run lint`",
+      "`npm run test`",
+      "`npm run check` (which runs `astro check`)",
+      "`npx tsc --noEmit`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "For a Node.js standalone SSR deployment, which file do you run after `astro build`?",
+    options: [
+      "`dist/index.js`",
+      "`dist/server/entry.mjs`",
+      "`server.js` in the project root",
+      "`.astro/server.mjs`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling/deploy" questions={quizDeploy} />
+
+<ProgressTracker client:visible id="tooling/deploy" />

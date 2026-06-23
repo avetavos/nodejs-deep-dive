@@ -1,0 +1,155 @@
+---
+title: 'The Astro CLI'
+description: 'เรียนรู้ astro dev, build, preview, add และ check แมปทุกคำสั่งกับ Next.js CLI และตั้งค่า scripts ใน package.json'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+หากคุณเคยรัน `next dev` คุณรู้ pattern นี้แล้ว Astro มาพร้อม binary `astro` ตัวเดียวที่จัดการทุกขั้นตอนของ development lifecycle — dev server, production build, local preview, integration scaffolding และ type checking โดยแมปกับคำสั่ง Next.js CLI ที่คุณใช้อยู่ทุกวันได้แทบทุกคำสั่ง
+
+## คำสั่งหลัก
+
+```bash
+# เริ่ม dev server (hot module reloading, port 4321 โดย default)
+npx astro dev
+
+# Production build → dist/
+npx astro build
+
+# Serve โฟลเดอร์ dist/ ใน local (จำลอง production build ได้แม่นยำ)
+npx astro preview
+
+# เพิ่ม official integration และอัปเดต astro.config.mjs อัตโนมัติ
+npx astro add react
+npx astro add tailwind
+npx astro add sitemap
+
+# ตรวจสอบ type ของไฟล์ .astro และ .ts ทั้งหมด
+npx astro check
+```
+
+## package.json scripts
+
+ทั้งสอง framework ใช้ convention เดียวกันในการตั้งชื่อย่อให้กับคำสั่ง CLI ใน scripts
+
+export const scriptsNext = `// package.json — Next.js project
+{
+  "scripts": {
+    "dev":         "next dev",
+    "build":       "next build",
+    "start":       "next start",
+    "lint":        "next lint",
+    "type-check":  "tsc --noEmit"
+  }
+}`;
+
+export const scriptsAstro = `// package.json — Astro project
+{
+  "scripts": {
+    "dev":     "astro dev",
+    "build":   "astro build",
+    "preview": "astro preview",
+    "check":   "astro check"
+  }
+}`;
+
+<ReactAstro client:visible react={scriptsNext} astro={scriptsAstro} reactTitle="Next.js scripts" astroTitle="Astro scripts" />
+
+สองสิ่งที่ควรสังเกต:
+
+1. `astro preview` คือ local preview server — **ไม่ใช่** production server จริง ใช้ adapter (Node, Vercel, Cloudflare) สำหรับ SSR production จริงๆ
+2. `astro check` แทนที่สองขั้นตอน `tsc --noEmit` + linter ที่โปรเจกต์ Next.js มักต้องดูแลแยกกัน
+
+## คำสั่ง `astro add`
+
+`npx astro add` scaffold official integrations ในขั้นตอนเดียว: ติดตั้ง npm package, อัปเดต `astro.config.mjs` และพิมพ์สิ่งที่เปลี่ยนแปลง
+
+```bash
+# เพิ่ม React integration (เปิดใช้งาน .tsx islands)
+npx astro add react
+
+# เพิ่ม Tailwind CSS
+npx astro add tailwind
+
+# เพิ่ม Vercel SSR adapter
+npx astro add vercel
+
+# เพิ่มหลายอย่างพร้อมกัน
+npx astro add react tailwind sitemap
+```
+
+ไม่มีสิ่งเทียบเท่าใน Next.js — ใน Next คุณต้อง `npm install` package แล้วอัปเดต `next.config.js` ด้วยตนเอง คำสั่ง `astro add` อัตโนมัติขั้นตอน config ให้
+
+## CLI flags
+
+```bash
+# กำหนด port เอง
+astro dev --port 3000
+
+# Bind กับทุก interface (มีประโยชน์ใน Docker / WSL)
+astro dev --host
+
+# แสดง output แบบละเอียดระหว่าง build
+astro build --verbose
+
+# Watch mode สำหรับ astro check (รันใหม่เมื่อบันทึกไฟล์)
+astro check --watch
+```
+
+<Diff title="Next CLI vs Astro CLI">
+- `next dev` → `astro dev` (port default 3000 vs 4321)
+- `next build` → `astro build` (output: `.next/` vs `dist/`)
+- `next start` → `astro preview` (เฉพาะ local preview — ไม่ใช่ production SSR server)
+- `next lint` + `tsc --noEmit` → `astro check` (คำสั่งเดียวครอบคลุมทั้งหมด)
+- ไม่มีสิ่งเทียบเท่าของ `astro add` ใน Next.js — Next plugins ติดตั้งและ config ด้วยตนเอง
+</Diff>
+
+export const quizAstroCli = [
+  {
+    q: "`astro dev` เริ่มต้นบน port อะไรโดย default?",
+    options: [
+      "3000",
+      "8080",
+      "4321",
+      "5173",
+    ],
+    answer: 2,
+  },
+  {
+    q: "`npx astro add react` ทำอะไรนอกจากติดตั้ง npm package?",
+    options: [
+      "สร้าง React starter page ใน `src/pages/`",
+      "ติดตั้ง package และอัปเดต `astro.config.mjs` อัตโนมัติ",
+      "ตั้งค่า Babel สำหรับ JSX transpilation",
+      "สร้างไฟล์ `react.config.js`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "คำสั่งใดที่ควรรันเพื่อตรวจสอบ TypeScript errors ในไฟล์ `.astro`?",
+    options: [
+      "`tsc --noEmit`",
+      "`astro lint`",
+      "`astro check`",
+      "`eslint src/`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "`astro preview` เทียบเท่ากับการรัน production SSR server ใช่หรือไม่?",
+    options: [
+      "ใช่ — เหมือน production environment ทุกประการ",
+      "ไม่ใช่ — serve โฟลเดอร์ static `dist/` ใน local เท่านั้น; SSR server จริงต้องใช้ adapter",
+      "ใช่ แต่เฉพาะเมื่อตั้ง `output: 'server'`",
+      "ไม่ใช่ — มัน re-run build ก่อน serve",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="tooling/astro-cli" questions={quizAstroCli} />
+
+<ProgressTracker client:visible id="tooling/astro-cli" />

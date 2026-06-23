@@ -1,0 +1,182 @@
+---
+title: การส่ง Props ไปยัง Islands
+description: 'ส่ง serializable props ไปยัง React islands; ใช้ slots เพื่อประกอบ children ข้าม Astro/React boundary'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+การส่ง props ไปยัง React island ดูเหมือนกับการส่ง props ใน JSX — syntax เหมือนกัน มีข้อจำกัดสำคัญหนึ่งอย่าง: **props ที่ส่งข้าม Astro/island boundary ต้อง serialize เป็น JSON ได้**
+
+## Serializable props
+
+Astro render เพจของคุณบน server เมื่อพบ island ที่ hydrate แล้ว มันจะ serialize props เข้าไปใน HTML เพื่อให้เบราว์เซอร์ rehydrate component ด้วยข้อมูลเดิมทุกประการ
+
+นั่นหมายความว่า props ต้องเป็นค่าที่ JSON สามารถแสดงได้:
+
+- Strings, numbers, booleans
+- Plain objects และ arrays (ไม่ใช่ class instances)
+- `null` และ `undefined`
+
+**ไม่สามารถ serialize:** functions, Dates (ใช้ ISO strings แทน), class instances, React nodes, DOM elements
+
+export const propsSerializableReact = `// React app — any prop type works,
+// including functions passed from a parent.
+<Counter
+  start={10}
+  label="Score"
+  onReset={() => console.log('reset')}
+  date={new Date()}
+/>`;
+
+export const propsSerializableAstro = `---
+// Astro — props must be JSON-serializable.
+// Functions and class instances are NOT allowed
+// across the Astro→island boundary.
+import Counter from '../components/Counter.jsx';
+const iso = new Date().toISOString(); // Date → string ✓
+---
+<Counter
+  start={10}
+  label="Score"
+  date={iso}
+/>
+{/* onReset={() => ...} would throw a build error */}`;
+
+<ReactAstro client:visible react={propsSerializableReact} astro={propsSerializableAstro} />
+
+> **Functions เป็น props:** คุณไม่สามารถส่ง callback จาก `.astro` ไปยัง React island ได้ ถ้า island ต้องการ callback (เช่น modal ที่เรียก `onClose`) ให้จัดการ interaction นั้นทั้งหมดภายใน island — fetch ข้อมูล จัดการ state และ navigate โดยใช้ browser APIs ของ React
+
+## การส่ง children / slots
+
+React ส่ง children ผ่าน prop `children` Astro ใช้ `<slot />` เมื่อใช้ React island เป็น wrapper คุณสามารถส่งเนื้อหา HTML ไปยังมันผ่าน slot mechanism ของ Astro — แต่เนื้อหา child จะเป็น **HTML แบบ static** ไม่ใช่ React component tree
+
+```astro
+---
+import Card from '../components/Card.jsx';
+---
+<Card client:load title="Hello">
+  <p>This content is passed as a slot — static HTML inside the React component.</p>
+</Card>
+```
+
+ภายใน `Card.jsx` เนื้อหานั้นมาถึงเป็น `children` เหมือนที่คาดหวัง:
+
+```jsx
+// src/components/Card.jsx
+export default function Card({ title, children }) {
+  return (
+    <div className="card">
+      <h2>{title}</h2>
+      <div>{children}</div>
+    </div>
+  );
+}
+```
+
+## Named slots
+
+Astro รองรับ named slots ภายใน React island เนื้อหา named slot มาถึงเป็น prop ที่ใช้ชื่อ slot:
+
+```astro
+---
+import Modal from '../components/Modal.jsx';
+---
+<Modal client:load>
+  <h2 slot="header">Confirm deletion</h2>
+  <p>This action cannot be undone.</p>
+  <button slot="footer">Cancel</button>
+</Modal>
+```
+
+```jsx
+// src/components/Modal.jsx
+export default function Modal({ children, header, footer }) {
+  return (
+    <dialog>
+      <header>{header}</header>
+      <main>{children}</main>
+      <footer>{footer}</footer>
+    </dialog>
+  );
+}
+```
+
+## การเปรียบเทียบแบบเต็ม
+
+export const propsPassing = `// React parent → React child
+// Any prop type, including functions and Dates.
+function Page() {
+  return (
+    <UserCard
+      user={userObject}        // class instance ok
+      onEdit={() => setEdit(true)} // function ok
+      createdAt={new Date()}   // Date ok
+    />
+  );
+}`;
+
+export const propsPassingAstro = `---
+// Astro page → React island
+// Only JSON-serializable props allowed.
+import UserCard from '../components/UserCard.jsx';
+const user = await fetch('/api/user').then(r => r.json());
+---
+<UserCard
+  name={user.name}
+  avatarUrl={user.avatarUrl}
+  createdAt={user.createdAt}
+/>
+{/*
+  user object (plain JSON) ✓
+  ISO date string ✓
+  Function props ✗ — handle inside the island
+*/}`;
+
+<ReactAstro client:visible react={propsPassing} astro={propsPassingAstro} />
+
+<Diff title="React props vs Astro island props">
+- React: **prop type ใดก็ได้** — functions, Dates, class instances ล้วนใช้ได้
+- Astro islands: props ต้อง **JSON-serializable** — strings, numbers, booleans, plain objects/arrays
+- Children (slot content) ทำงานได้ แต่มาถึงเป็น HTML แบบ static — ไม่ใช่ React component
+- Functions-as-props ต้องอยู่ภายใน island จัดการ callbacks ด้วย internal state หรือ browser APIs
+</Diff>
+
+export const quizPassingProps = [
+  {
+    q: "ทำไม props ที่ส่งไปยัง Astro island จึงต้อง JSON-serializable?",
+    options: [
+      "Astro ไม่รองรับ TypeScript generics",
+      "Astro serialize props เข้า HTML ตอน build/SSR เพื่อให้เบราว์เซอร์ rehydrate ด้วยข้อมูลเดิม",
+      "React ไม่รับ non-serializable props",
+      "Vite bundler ลบ non-serializable values",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ข้อใดไม่ใช่ prop ที่ valid สำหรับส่งจาก .astro ไปยัง React island?",
+    options: [
+      "String: `title=\"Hello\"`",
+      "Number: `count={42}`",
+      "Callback: `onClose={() => setOpen(false)}`",
+      "Plain object: `user={{ name: 'Alice' }}`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "เนื้อหา slot/children ที่ส่งไปยัง React island จาก .astro มาถึง component อย่างไร?",
+    options: [
+      "เป็น React component tree ที่ re-render ได้",
+      "เป็น static HTML string ภายใน prop `children`",
+      "ไม่รองรับ — React islands ไม่รับ children",
+      "เป็น Svelte snippet",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/passing-props" questions={quizPassingProps} />
+
+<ProgressTracker client:visible id="islands/passing-props" />

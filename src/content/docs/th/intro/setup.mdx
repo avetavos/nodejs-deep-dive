@@ -1,0 +1,129 @@
+---
+title: การตั้งค่า
+description: "สร้างโปรเจกต์ Astro ใหม่ด้วย npm create astro และเริ่ม dev server — เทียบกับ CRA และ create-next-app"
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+{/* No AstroPlayground: setup is a CLI-only lesson — there is no runnable in-browser snippet that covers project scaffolding. */}
+
+การสร้างโปรเจกต์ Astro ใหม่ใช้ `npm create astro@latest` ซึ่งเทียบเท่ากับ `npx create-next-app` หรือ `npx create-react-app` แบบเก่าของ Astro มันเปิด wizard แบบ interactive และสร้างโครงสร้างโปรเจกต์ให้
+
+## การสร้างโครงสร้าง: wizard กับ flags
+
+export const setupReact = `# CRA (deprecated — shown for reference)
+npx create-react-app my-app
+cd my-app && npm start
+
+# Next.js (create-next-app wizard)
+npx create-next-app@latest my-app
+# Prompts: TypeScript? ESLint? Tailwind? App Router?
+cd my-app && npm run dev`;
+
+export const setupAstro = `# Astro
+npm create astro@latest my-app
+# Wizard prompts:
+#   How would you like to start your project?
+#     > A basic, minimal starter (recommended)
+#       Use blog template
+#       Use docs (Starlight) template
+#   Do you plan to write TypeScript? Yes (strict)
+#   Install dependencies? Yes
+#   Initialize a new git repository? Yes
+cd my-app && npm run dev`;
+
+<ReactAstro client:visible react={setupReact} astro={setupAstro} />
+
+คำสั่ง `npm create astro@latest` ดึง Astro scaffolding CLI ล่าสุด (`create-astro`) จาก npm — ไม่ต้องติดตั้ง global wizard เป็นแบบสนทนาและถามเฉพาะสิ่งที่จำเป็น
+
+## Dev server
+
+เมื่อสร้างโครงสร้างแล้ว:
+
+```bash
+npm run dev
+# or
+npx astro dev
+```
+
+Dev server ของ Astro เริ่มที่ `http://localhost:4321` ตามค่าเริ่มต้น (Next.js ใช้ `:3000`) มันใช้ **Vite** เบื้องหลัง — Vite ตัวเดียวกับที่คุณอาจรู้จักจากโปรเจกต์ Vite + React — ดังนั้น hot module replacement (HMR) และการเริ่มต้นที่รวดเร็วจึงมีติดตั้งมาแล้ว
+
+คำสั่ง dev ที่มีประโยชน์:
+
+```bash
+npx astro dev          # start the dev server
+npx astro build        # build for production (outputs to dist/)
+npx astro preview      # preview the production build locally
+npx astro check        # TypeScript type-check all .astro files
+npx astro add react    # add the React integration (adds @astrojs/react)
+npx astro add tailwind # add Tailwind CSS
+```
+
+## การเพิ่ม integration
+
+ใน Next.js การเพิ่ม React เป็นเรื่องโดยปริยาย — มันคือ framework อยู่แล้ว ใน Astro, React เป็น **integration** ที่คุณต้อง opt-in เข้ามา:
+
+```bash
+npx astro add react
+```
+
+คำสั่งนี้ติดตั้ง `@astrojs/react` และ `react`/`react-dom` และอัปเดต `astro.config.mjs` โดยอัตโนมัติ:
+
+```js
+// astro.config.mjs (after npx astro add react)
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+
+export default defineConfig({
+  integrations: [react()],
+});
+```
+
+หลังจากนี้คุณสามารถ import `.tsx` / `.jsx` React component ภายในไฟล์ `.astro` และใช้ directive `client:*` เพื่อ hydrate ได้
+
+## TypeScript
+
+Astro สร้าง `tsconfig.json` ที่ extends `astro/tsconfigs/strict` ไฟล์ `.astro` ของคุณถูก type-check ด้วย `npx astro check` — คำสั่งเดียวกับที่คุณรันใน CI ไม่ต้องตั้งค่า `tsc` แยกต่างหาก
+
+<Diff title="CRA / create-next-app vs npm create astro">
+- CRA: `npx create-react-app my-app` — deprecated; สร้าง SPA แบบ client-only
+- Next.js: `npx create-next-app@latest` — wizard สร้าง full-stack React framework
+- Astro: `npm create astro@latest` — wizard สร้าง MPA ที่เน้นเนื้อหา; React เป็น opt-in integration
+- Dev server: Next ใช้ค่าเริ่มต้น `:3000`; Astro ใช้ `:4321` ทั้งคู่ใช้ Vite (Astro ตลอด; Next จาก v15+)
+- Build output: Next ออก Node.js server (หรือ static export); Astro ออก `dist/` HTML แบบ static ตามค่าเริ่มต้น
+</Diff>
+
+export const quizSetup = [
+  {
+    q: "คำสั่งใดที่ใช้สร้างโปรเจกต์ Astro ใหม่?",
+    options: [
+      "`npx create-astro-app`",
+      "`npm create astro@latest`",
+      "`npx astro init`",
+      "`npm install astro`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Dev server ของ Astro ใช้ port ใดตามค่าเริ่มต้น?",
+    options: ["3000", "5173", "4321", "8080"],
+    answer: 2,
+  },
+  {
+    q: "วิธีเพิ่มการรองรับ React ในโปรเจกต์ Astro ที่มีอยู่แล้วทำอย่างไร?",
+    options: [
+      "มีติดมาแล้ว — ไม่ต้องทำขั้นตอนเพิ่มเติม",
+      "เพิ่ม `react: true` ใน `astro.config.mjs`",
+      "รัน `npx astro add react`",
+      "ติดตั้ง `@astrojs/react` เองและ restart",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/setup" questions={quizSetup} />
+
+<ProgressTracker client:visible id="intro/setup" />

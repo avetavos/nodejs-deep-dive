@@ -1,0 +1,159 @@
+---
+title: astro check
+description: 'ตรวจสอบ type ในไฟล์ .astro และ TypeScript ด้วยคำสั่งเดียว เปรียบเทียบกับ tsc และ ESLint ในโปรเจกต์ Next.js'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ในโปรเจกต์ Next.js การตรวจสอบ TypeScript เป็นกระบวนการสองขั้น: `tsc --noEmit` จัดการไฟล์ `.ts`/`.tsx` และ ESLint (มักใช้กับ `@typescript-eslint`) จับปัญหาเพิ่มเติม ไฟล์ `.astro` ไม่ใช่ไฟล์ TypeScript — มี frontmatter block และ HTML template — ดังนั้น `tsc` จึงไม่สามารถ parse ได้โดยตรง Astro มาพร้อม `astro check` เพื่อครอบคลุมทั้งคู่ในคำสั่งเดียว
+
+## รัน `astro check`
+
+```bash
+# One-shot check — exit code 1 หากมี errors
+npx astro check
+
+# Watch mode — รันใหม่ทุกครั้งที่บันทึกไฟล์ (เหมาะสำหรับ development)
+npx astro check --watch
+
+# ตรวจสอบ directory เฉพาะ
+npx astro check --root src/content
+```
+
+Output จะเหมือน TypeScript compiler output: file path, line number, column และข้อความ error Errors ใน `.astro` frontmatter, template expressions และ `.ts` modules ที่ import มาทั้งหมดจะแสดงที่นี่
+
+## `astro check` ครอบคลุมอะไรบ้าง
+
+```bash
+# astro check จับทั้งหมดนี้:
+# 1. Type errors ใน .astro frontmatter
+# 2. Missing หรือ wrong-typed Astro.props (หากประกาศ interface Props)
+# 3. Type errors ใน template expressions: {someVar}
+# 4. Type errors ในไฟล์ .ts / .tsx ที่ import
+# 5. Missing imports
+```
+
+## เปรียบเทียบกับ `tsc` และ ESLint
+
+export const checkNext = `// tsconfig.json — Next.js project
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }]
+  }
+}
+
+// package.json
+// "type-check": "tsc --noEmit",
+// "lint":       "next lint"
+// (สองคำสั่งแยกกัน — สอง pass แยกกัน)`;
+
+export const checkAstro = `// tsconfig.json — Astro project
+{
+  "extends": "astro/tsconfigs/strict",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@components/*": ["src/components/*"]
+    }
+  }
+}
+
+// package.json
+// "check": "astro check"
+// (คำสั่งเดียว — ครอบคลุมไฟล์ .astro + .ts)
+
+// astro/tsconfigs/strict extends:
+//   "strict": true
+//   "jsx": "react-jsx"        (เมื่อติดตั้ง @astrojs/react)
+//   "jsxImportSource": "react"
+//   etc.`;
+
+<ReactAstro client:visible react={checkNext} astro={checkAstro} reactTitle="Next.js (tsconfig + scripts)" astroTitle="Astro (tsconfig + scripts)" />
+
+Astro มาพร้อม base tsconfigs ที่ `astro/tsconfigs/strict`, `astro/tsconfigs/strictest` และ `astro/tsconfigs/base` — extend หนึ่งใน `tsconfig.json` เพื่อหลีกเลี่ยงการดูแล compiler options object ด้วยตนเองทั้งหมด
+
+## Editor tooling
+
+ติดตั้ง VS Code extension อย่างเป็นทางการเพื่อดู errors แบบ inline ในไฟล์ `.astro` โดยไม่ต้องรัน CLI:
+
+```bash
+# ใน VS Code — ค้นหา:
+# "Astro" โดย "Astro" (astro.build)
+# Extension ID: astro-build.astro-vscode
+```
+
+Extension ใช้ language server เดียวกับที่ขับเคลื่อน `astro check` เมื่อติดตั้งแล้ว คุณจะได้รับ:
+
+- เส้นสีแดงบน type errors ใน frontmatter และ template expressions
+- Autocomplete สำหรับ `Astro.props`, component imports และ HTML attributes
+- Go-to-definition ข้ามไฟล์ `.astro`
+
+## `astro check` ใน CI
+
+```yaml
+# .github/workflows/ci.yml
+- name: Type check
+  run: npx astro check
+```
+
+เพิ่ม step นี้ก่อน build step ใน CI เพื่อจับ type errors ก่อนที่จะถึง production `astro check` exit code 1 เมื่อมี error ดังนั้น workflow จะ fail อย่างถูกต้อง
+
+<Diff title="Next.js tsc/ESLint vs astro check">
+- Next.js: `tsc --noEmit` สำหรับ types + `next lint` (ESLint) — สองคำสั่งแยกกัน
+- Astro: `astro check` — คำสั่งเดียวครอบคลุม `.astro`, `.ts` และ `.tsx` ใน pass เดียว
+- Astro extend `astro/tsconfigs/strict` เพื่อหลีกเลี่ยง boilerplate ใน `tsconfig.json`
+- ทั้งคู่ integrate กับ VS Code ผ่าน language server; Astro ต้องใช้ extension `astro-build.astro-vscode`
+</Diff>
+
+export const quizAstroCheck = [
+  {
+    q: "ทำไมจึงไม่สามารถใช้ `tsc --noEmit` เพียงอย่างเดียวในการตรวจสอบโปรเจกต์ Astro?",
+    options: [
+      "Astro ใช้ Babel ไม่ใช่ TypeScript",
+      "ไฟล์ `.astro` มีโครงสร้าง frontmatter + template ที่ `tsc` parse โดยตรงไม่ได้",
+      "`tsc` ไม่ได้ติดตั้งในโปรเจกต์ Astro",
+      "Astro disable TypeScript compiler ใน default config",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Astro แนะนำให้ใช้ค่า extend ใดใน `tsconfig.json` สำหรับ strict type checking?",
+    options: [
+      "`\"extends\": \"@tsconfig/strictest\"`",
+      "`\"extends\": \"astro/tsconfigs/strict\"`",
+      "`\"extends\": \"next\"`",
+      "`\"strict\": true` inline — ไม่มี extends",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ส่ง flag อะไรให้ `astro check` เพื่อให้รันต่อเนื่องและตรวจสอบใหม่ทุกครั้งที่บันทึกไฟล์?",
+    options: [
+      "`--continuous`",
+      "`--daemon`",
+      "`--watch`",
+      "`--hot`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="tooling/astro-check" questions={quizAstroCheck} />
+
+<ProgressTracker client:visible id="tooling/astro-check" />

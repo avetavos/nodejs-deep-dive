@@ -1,0 +1,146 @@
+---
+title: 'Frontmatter Fetch'
+description: 'top-level await fetch() ใน frontmatter ทำงานตอน build (หรือ per-request ใน SSR) ไม่ใช่ใน browser — เทียบกับ getServerSideProps, getStaticProps และ useEffect+fetch'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน Next.js คุณเลือกว่าข้อมูลทำงานที่ไหน ไม่ว่าจะเป็น `getStaticProps` (build time), `getServerSideProps` (per request) หรือ `useEffect+fetch` (browser) ใน Astro frontmatter `---` คือ data layer top-level `await fetch()` ที่นั่นทำงานตอน build time โดย default หรือ per-request ถ้าหน้าใช้ SSR ไม่มี `useEffect` ไม่มีการ fetch ฝั่ง browser
+
+## Build-time fetch: getStaticProps vs frontmatter
+
+export const staticPropsReact = `// pages/blog.tsx (Next.js Pages Router)
+export async function getStaticProps() {
+  const res = await fetch('https://api.example.com/posts');
+  const posts = await res.json();
+  return { props: { posts } };
+}
+
+export default function Blog({ posts }) {
+  return (
+    <ul>
+      {posts.map(post => (
+        <li key={post.id}>{post.title}</li>
+      ))}
+    </ul>
+  );
+}`;
+
+export const staticPropsAstro = `---
+// src/pages/blog.astro (Astro — static by default)
+const res = await fetch('https://api.example.com/posts');
+const posts = await res.json();
+---
+<ul>
+  {posts.map((post) => (
+    <li>{post.title}</li>
+  ))}
+</ul>`;
+
+<ReactAstro client:visible react={staticPropsReact} astro={staticPropsAstro} />
+
+ด้วย static output ของ Astro `await fetch()` นี้จะทำงาน **ครั้งเดียวตอน build time** — เหมือน `getStaticProps` ทุกประการ ผลลัพธ์ถูก bake ลงใน static HTML ไม่มีการ fetch ตอน runtime เลย
+
+## Per-request fetch: getServerSideProps vs SSR frontmatter
+
+export const ssrReact = `// pages/dashboard.tsx (Next.js Pages Router)
+export async function getServerSideProps(context) {
+  const res = await fetch(
+    \`https://api.example.com/user/\${context.params.id}\`
+  );
+  const user = await res.json();
+  return { props: { user } };
+}
+
+export default function Dashboard({ user }) {
+  return <h1>Hello, {user.name}</h1>;
+}`;
+
+export const ssrAstro = `---
+// src/pages/dashboard.astro (Astro SSR mode)
+export const prerender = false; // opt into SSR
+
+const userId = Astro.url.searchParams.get('id');
+const res = await fetch(\`https://api.example.com/user/\${userId}\`);
+const user = await res.json();
+---
+<h1>Hello, {user.name}</h1>`;
+
+<ReactAstro client:visible react={ssrReact} astro={ssrAstro} />
+
+`export const prerender = false` ทำให้หน้าเดียวนี้ใช้ SSR — ทุก request จะรัน frontmatter ใหม่ ส่วนที่เหลือของ site ยังคงเป็น static
+
+## ตัวอย่าง inline data
+
+export const inlineCode = `---
+// Swap this for: const res = await fetch('https://...'); const posts = await res.json();
+const posts = [
+  { id: 1, title: "Why Astro ships zero JS by default", date: "2024-01-10" },
+  { id: 2, title: "Content collections vs contentlayer", date: "2024-02-03" },
+  { id: 3, title: "Islands: hydrate only what you need", date: "2024-03-15" },
+];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Blog</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <h1>Latest Posts</h1>
+    <ul style="list-style:none;padding:0">
+      {posts.map((post) => (
+        <li style="margin:1rem 0;padding:1rem;border:1px solid #e2e8f0;border-radius:8px">
+          <strong>{post.title}</strong>
+          <span style="display:block;color:#718096;font-size:0.875rem">{post.date}</span>
+        </li>
+      ))}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={inlineCode} />
+
+<Diff title="Next.js data patterns vs Astro frontmatter">
+- `getStaticProps` → **Astro frontmatter** ด้วย default static output: ทำงานครั้งเดียวตอน build time
+- `getServerSideProps` → **Astro frontmatter** ด้วย `export const prerender = false` + SSR adapter: ทำงานต่อ request
+- `useEffect+fetch` → **ไม่มี equivalent โดยตรง** — Astro ไม่ส่ง fetch logic ไปที่ browser โดย default ใช้ island (`client:load`) ถ้าต้องการ browser-side fetching จริงๆ
+- Astro ใช้ **syntax เดียว** สำหรับทุก server-side data pattern; Next.js ใช้สาม API แยกกัน
+</Diff>
+
+export const quizFrontmatterFetch = [
+  {
+    q: "`await fetch()` ใน Astro frontmatter ทำงานเมื่อไหร่โดย default?",
+    options: [
+      "ใน browser เมื่อโหลดหน้า",
+      "ตอน build time บน server",
+      "ใน Web Worker",
+      "เฉพาะหลังจาก page hydrates",
+    ],
+    answer: 1,
+  },
+  {
+    q: "อะไรคือ equivalent ของ Next.js `getStaticProps` ใน Astro?",
+    options: [
+      "`useEffect` ใน island component",
+      "ฟังก์ชัน `load()` ในไฟล์แยก",
+      "top-level `await fetch()` ใน frontmatter (static output)",
+      "`Astro.request.body`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "ทำอย่างไรให้ Astro page ดึงข้อมูล per-request (เหมือน getServerSideProps)?",
+    options: [
+      "เพิ่ม `export const prerender = false` และใช้ SSR adapter",
+      "ใช้ `getServerSideProps()` ใน frontmatter",
+      "เพิ่ม `client:load` ให้กับ page",
+      "ตั้งค่า `dynamic = true` ใน astro.config.mjs",
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content/frontmatter-fetch" questions={quizFrontmatterFetch} />
+
+<ProgressTracker client:visible id="content/frontmatter-fetch" />

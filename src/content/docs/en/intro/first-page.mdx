@@ -1,0 +1,209 @@
+---
+title: Your First Page
+description: Build a real .astro page with a frontmatter block and HTML template, and compare it to a React component.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In React, a "page" is a component — a JavaScript function that returns JSX. In Astro, a "page" is a `.astro` file — an HTML document with an optional JavaScript/TypeScript **frontmatter** block at the top delimited by `---`.
+
+The two-zone anatomy of a `.astro` file:
+
+```
+---                          ← fence open
+// FRONTMATTER: runs on the server / at build time
+// fetch data, compute values, import components
+const title = "My Page";
+---                          ← fence close
+<!-- TEMPLATE: HTML + {expressions} -->
+<html lang="en">
+  <head><title>{title}</title></head>
+  <body><h1>{title}</h1></body>
+</html>
+```
+
+Everything above the second `---` is **Node.js** code. Everything below is an **HTML template** that can embed expressions with `{expr}` — like JSX but rendered once to a string, never re-executed in the browser.
+
+## React page vs Astro page
+
+export const firstPageReact = `// src/app/page.tsx  (Next.js App Router)
+interface PageProps {
+  params: { slug: string };
+}
+
+export default function BlogPost({ params }: PageProps) {
+  // Runs on server AND can re-run on client
+  const publishedAt = new Date().toLocaleDateString();
+
+  return (
+    <article>
+      <h1>My First Post</h1>
+      <time>{publishedAt}</time>
+      <p>Welcome to my blog built with React.</p>
+    </article>
+  );
+}`;
+
+export const firstPageAstro = `---
+// src/pages/blog/first-post.astro
+// Runs ONLY on the server / at build time
+const title = "My First Post";
+const publishedAt = new Date().toLocaleDateString();
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <article>
+      <h1>{title}</h1>
+      <time>{publishedAt}</time>
+      <p>Welcome to my blog built with Astro.</p>
+    </article>
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={firstPageReact} astro={firstPageAstro} />
+
+Two things stand out immediately:
+
+1. **The Astro page is a complete HTML document** — it includes `<html>`, `<head>`, and `<body>`. React components return fragments; layout wrappers add the shell. In Astro, pages are responsible for the full document (or they delegate to a Layout component that provides the shell).
+2. **`new Date()` in the frontmatter runs once at build time** — the resulting string is baked into the HTML. In Next.js App Router, it also runs on the server, but the distinction matters: in Astro there is no React runtime, no hydration, and no possibility of the date recomputing in the browser.
+
+## Adding styles
+
+Styles in an Astro page can be inline `<style>` tags in the template — Astro automatically scopes them to the component, just like CSS Modules, with zero configuration:
+
+```astro
+---
+const color = "#6366f1";
+---
+<h1>Hello</h1>
+<style>
+  /* This style is scoped to this component automatically */
+  h1 { color: #6366f1; }
+</style>
+```
+
+Global styles go in a separate CSS file and are imported in the frontmatter:
+
+```astro
+---
+import '../styles/global.css';
+---
+```
+
+## Runnable example
+
+export const firstPageCode = `---
+const title = "My First Astro Page";
+const author = "A React Developer";
+const publishedAt = "2026-06-23";
+const tags = ["astro", "web", "frontend"];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>{title}</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 680px;
+        margin: 0 auto;
+        padding: 2rem 1.5rem;
+        color: #1e293b;
+      }
+      .meta { color: #64748b; font-size: 0.875rem; margin-bottom: 1.5rem; }
+      .tags { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1.5rem; }
+      .tag {
+        background: #ede9fe;
+        color: #5b21b6;
+        padding: 0.2rem 0.7rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+      }
+    </style>
+  </head>
+  <body>
+    <article>
+      <h1>{title}</h1>
+      <p class="meta">By {author} &middot; {publishedAt}</p>
+      <p>
+        This page was built with Astro. The frontmatter ran at build time —
+        no JavaScript was shipped to the browser to render this content.
+      </p>
+      <p>
+        The tags below are rendered with a <code>.map()</code> in the template.
+        In React that would hydrate a component. Here it is pure HTML.
+      </p>
+      <div class="tags">
+        {tags.map(tag => <span class="tag">#{tag}</span>)}
+      </div>
+    </article>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={firstPageCode} />
+
+Open the browser DevTools Network tab — there is no JavaScript bundle. The `.map()` over `tags` produced three `<span>` elements at build time and disappeared.
+
+<Diff title="React component / Next.js page vs .astro page">
+- React/Next: function returns JSX → React runtime renders it → hydrates in browser.
+- Astro: frontmatter computes values → template renders to HTML → browser receives HTML only.
+- Styling: React → CSS Modules or Tailwind; Astro → `<style>` inside `.astro` is scoped automatically.
+- `.map()` in JSX creates React elements that hydrate; `.map()` in Astro template creates static HTML.
+- Both: `{expr}` syntax, TypeScript types, component imports, `public/` for static assets.
+</Diff>
+
+export const quizFirstPage = [
+  {
+    q: "What are the two zones of a `.astro` file?",
+    options: [
+      "A `<script>` block and a `<template>` block",
+      "A frontmatter block (between `---`) and an HTML template below it",
+      "A `export default` function and a `styles` export",
+      "A server component and a client component",
+    ],
+    answer: 1,
+  },
+  {
+    q: "You call `new Date()` in an Astro frontmatter. When does it execute?",
+    options: [
+      "In the browser on every page load",
+      "On every component re-render",
+      "Once at build time (or per request in SSR mode) on the server",
+      "Inside a useEffect after hydration",
+    ],
+    answer: 2,
+  },
+  {
+    q: "How are `<style>` tags inside a `.astro` file scoped by default?",
+    options: [
+      "They are global — they apply to the entire page",
+      "They require a CSS Modules file extension",
+      "They are automatically scoped to the component — no config needed",
+      "They must use the `scoped` attribute explicitly",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What does `.map()` over an array inside an Astro template produce?",
+    options: [
+      "A reactive list that updates when the array changes",
+      "A React fragment that hydrates in the browser",
+      "Static HTML elements baked into the page at build time",
+      "A JSON payload sent to the client",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/first-page" questions={quizFirstPage} />
+
+<ProgressTracker client:visible id="intro/first-page" />

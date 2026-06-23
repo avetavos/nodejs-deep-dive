@@ -1,0 +1,167 @@
+---
+title: 'Global Styles'
+description: 'ใช้ <style is:global> หรือ import CSS file ที่ระดับ layout เพื่อใช้ style กับทั้งไซต์ — เทียบเท่ากับการ import ใน _app.tsx'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน Next.js คุณวาง CSS reset, typography พื้นฐาน และ CSS custom properties สำหรับ design token ไว้ใน `styles/globals.css` แล้ว import ไฟล์นั้นครั้งเดียวใน `_app.tsx` ทุกหน้าจะ inherit style เหล่านั้นโดยอัตโนมัติ
+
+Astro มีกลไกที่เทียบเท่ากันสองแบบ คุณสามารถวาง `<style is:global>` block ไว้ในไฟล์ `.astro` ใดก็ได้ — directive `is:global` บอก compiler ให้ข้าม scoping หรือจะสร้างไฟล์ `.css` ธรรมดาแล้ว import ที่ระดับ layout ซึ่งเป็น pattern ที่พบบ่อยที่สุดในโปรเจกต์จริง
+
+## `is:global` — inline global styles
+
+export const globalIsGlobalReact = `// _app.tsx  (Next.js)
+// Global CSS goes in a separate file, imported here:
+import '../styles/globals.css';
+
+export default function App({ Component, pageProps }) {
+  return <Component {...pageProps} />;
+}
+
+// styles/globals.css
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; }
+:root { --color-primary: #6366f1; }`;
+
+export const globalIsGlobalAstro = `---
+// Layout.astro  (or any .astro file)
+---
+<html lang="en">
+  <head><meta charset="utf-8" /></head>
+  <body><slot /></body>
+</html>
+
+<style is:global>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; }
+  :root { --color-primary: #6366f1; }
+</style>`;
+
+<ReactAstro client:visible react={globalIsGlobalReact} astro={globalIsGlobalAstro} />
+
+`is:global` มีประโยชน์สำหรับ CSS พื้นฐานจำนวนน้อยที่อยู่ใกล้กับ layout markup สำหรับ stylesheet ขนาดใหญ่กว่านั้น ควรใช้ไฟล์ `.css` แยกและ import แทน
+
+## การ import global stylesheet
+
+export const globalImportReact = `// _app.tsx  (Next.js)
+import '../styles/globals.css';   // one import, applied to every page
+
+export default function App({ Component, pageProps }) {
+  return <Component {...pageProps} />;
+}`;
+
+export const globalImportAstro = `---
+// src/layouts/BaseLayout.astro
+import '../styles/globals.css';   // same idea — imported once at the layout level
+const { title } = Astro.props;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={globalImportReact} astro={globalImportAstro} />
+
+Vite ประมวลผลไฟล์ CSS ที่ import มา — PostCSS, `@import` chains และ custom properties ทำงานได้โดยไม่ต้องตั้งค่าพิเศษ
+
+## ตัวอย่างที่รันได้
+
+playground ด้านล่างใช้ `is:global` เพื่อกำหนด CSS custom properties บน `:root` และ reset จากนั้นใช้ variable เหล่านั้นใน scoped component styles
+
+export const globalCode = `---
+const sections = ["About", "Work", "Contact"];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Global styles demo</title></head>
+  <body>
+    <header>
+      <nav>
+        {sections.map(s => <a href="#" class="link">{s}</a>)}
+      </nav>
+    </header>
+    <main>
+      <h1>Global + Scoped</h1>
+      <p>Custom properties from <code>:root</code> are global. The <code>.link</code> style is scoped.</p>
+      <button class="btn">Primary action</button>
+    </main>
+  </body>
+</html>
+
+<style is:global>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f8fafc; color: #1e293b; }
+  :root {
+    --color-primary: #6366f1;
+    --color-primary-dark: #4f46e5;
+    --radius: 8px;
+  }
+</style>
+
+<style>
+  header { background: #1e293b; padding: .75rem 1.5rem; }
+  nav { display: flex; gap: 1rem; }
+  .link { color: #94a3b8; text-decoration: none; font-size: .9rem; }
+  .link:hover { color: #fff; }
+  main { padding: 2rem; }
+  h1 { color: var(--color-primary); margin: 0 0 .5rem; }
+  p { color: #64748b; margin: 0 0 1.5rem; }
+  code { background: #e2e8f0; padding: .1em .35em; border-radius: 4px; font-size: .875em; }
+  .btn { background: var(--color-primary); color: #fff; border: none; border-radius: var(--radius); padding: .6rem 1.25rem; cursor: pointer; font-size: .95rem; }
+  .btn:hover { background: var(--color-primary-dark); }
+</style>`;
+
+<AstroPlayground client:visible code={globalCode} />
+
+<Diff title="Next.js global CSS vs Astro global CSS">
+- Next.js: `import '../styles/globals.css'` ใน `_app.tsx` — entry point ที่จำเป็นสำหรับ global styles
+- Astro: `import './globals.css'` ใน layout `.astro` file **หรือ** `<style is:global>` block ในไฟล์ `.astro` ใดก็ได้
+- เหมือนกัน: CSS custom properties บน `:root` ทำงานเหมือนกันและเข้าถึงได้ใน scoped styles ทั้งหมด
+- ข้อพิเศษของ Astro: ผสม `<style is:global>` (reset/tokens) และ `<style>` ธรรมดา (scoped) **ในไฟล์เดียวกัน** ได้
+</Diff>
+
+export const quizGlobal = [
+  {
+    q: "directive ใดทำให้ `<style>` block ใน Astro ทำงานแบบ global แทนที่จะถูก scoped?",
+    options: [
+      "`<style scope:none>`",
+      "`<style global>`",
+      "`<style is:global>`",
+      "`<style module={false}>`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "ที่ที่พบบ่อยที่สุดในการ import ไฟล์ `.css` แบบ global ในโปรเจกต์ Astro คือที่ใด?",
+    options: [
+      "ในทุกไฟล์ `.astro` page แยกกัน",
+      "ใน layout `.astro` component ที่ใช้ร่วมกัน ซึ่ง wrap ทุกหน้า",
+      "ใน `astro.config.mjs` ภายใต้ option `css`",
+      "ใน `src/env.d.ts`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ใช้ทั้ง `<style is:global>` และ `<style>` ธรรมดาในไฟล์ `.astro` เดียวกันได้ไหม?",
+    options: [
+      "ไม่ได้ — อนุญาตเพียง style block เดียวต่อ component",
+      "ได้ — global block ตั้ง token/reset, scoped block ตกแต่ง element ภายใน",
+      "ได้ — แต่ global block ต้องมาหลัง scoped block เท่านั้น",
+      "ไม่ได้ — ใช้อย่างใดอย่างหนึ่ง ไม่ใช้ทั้งคู่",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="styling/global-styles" questions={quizGlobal} />
+
+<ProgressTracker client:visible id="styling/global-styles" />

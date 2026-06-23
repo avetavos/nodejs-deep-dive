@@ -1,0 +1,126 @@
+---
+title: 'Styling in Astro'
+description: 'Overview of the styling module — scoped styles, global styles, CSS variables, class:list, and Tailwind compared to React and Next.js patterns.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In React you reach for CSS Modules, styled-components, emotion, or Tailwind. You wire up global CSS through `_app.tsx` or a layout component. Class toggling means `clsx(...)` or a ternary on `className`.
+
+Astro keeps the same CSS you already know — no new syntax to learn. What changes is where styles live and how they are scoped. A `<style>` block inside a `.astro` file is **automatically scoped** to that component by the compiler. Global CSS comes in through `<style is:global>` or a stylesheet import. And Tailwind works exactly as it does in Next, once you add the integration.
+
+This module walks through each approach anchored to what you already know from React.
+
+## Module lessons
+
+| Lesson | What you will learn |
+|---|---|
+| [Scoped Styles](/astro-for-react-developers/en/styling/scoped-styles/) | `<style>` auto-scoped vs CSS Modules |
+| [Global Styles](/astro-for-react-developers/en/styling/global-styles/) | `is:global` and stylesheet imports vs `_app.tsx` |
+| [CSS Variables and class:list](/astro-for-react-developers/en/styling/css-variables-classlist/) | `define:vars` and `class:list` vs clsx / inline styles |
+| [Tailwind](/astro-for-react-developers/en/styling/tailwind/) | Adding Tailwind to Astro vs Tailwind in Next |
+
+## A styled component at a glance
+
+export const indexReact = `// Card.jsx  (CSS Modules)
+import styles from './Card.module.css';
+import clsx from 'clsx';
+
+export default function Card({ title, featured }) {
+  return (
+    <div className={clsx(styles.card, featured && styles.featured)}>
+      <h2 className={styles.title}>{title}</h2>
+    </div>
+  );
+}`;
+
+export const indexAstro = `---
+// Card.astro
+const { title, featured } = Astro.props;
+---
+<div class:list={["card", { featured }]}>
+  <h2 class="title">{title}</h2>
+</div>
+
+<style>
+  .card  { border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; }
+  .title { font-size: 1.25rem; margin: 0; }
+  .featured { border-color: #6366f1; background: #eef2ff; }
+</style>`;
+
+<ReactAstro client:visible react={indexReact} astro={indexAstro} />
+
+Notice what disappears: no CSS Module import, no `clsx` import, no `.module.css` file. The `<style>` block travels with the component and the compiler handles scoping automatically.
+
+## Runnable example
+
+export const indexCode = `---
+const title = "Astro Styling Overview";
+const featured = true;
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Styling</title></head>
+  <body>
+    <div class:list={["card", { featured }]}>
+      <h2 class="title">{title}</h2>
+      <p>Styles are scoped to this component automatically.</p>
+    </div>
+  </body>
+</html>
+
+<style>
+  body { font-family: sans-serif; padding: 2rem; background: #f8fafc; }
+  .card { border: 2px solid #e2e8f0; border-radius: 8px; padding: 1.5rem; max-width: 360px; }
+  .title { font-size: 1.4rem; margin: 0 0 .5rem; }
+  .featured { border-color: #6366f1; background: #eef2ff; }
+</style>`;
+
+<AstroPlayground client:visible code={indexCode} />
+
+<Diff title="React styling vs Astro styling">
+- React: choose a strategy (CSS Modules, styled-components, Tailwind) and configure it for the project.
+- Astro: every `.astro` file gets a `<style>` block that is **automatically scoped** — no configuration needed.
+- Both: Tailwind utility classes work the same way once the integration is installed.
+- Key difference: no `className`, no `clsx` import, no separate `.module.css` file — `class:list` and `<style>` are built in.
+</Diff>
+
+export const quizIndex = [
+  {
+    q: "What happens to a plain `<style>` block inside a .astro file by default?",
+    options: [
+      "It is applied globally to the entire page",
+      "It is automatically scoped to that component by the compiler",
+      "It requires a CSS Module file extension to work",
+      "It is ignored unless you add `is:scoped`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What is the Astro equivalent of `clsx(styles.card, active && styles.active)`?",
+    options: [
+      "`className={styles.card + (active ? ' ' + styles.active : '')}`",
+      "`class:list={['card', { active }]}`",
+      "`class={clsx('card', { active })}`",
+      "`classList={{ card: true, active }}`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "How do you apply styles globally in an Astro component?",
+    options: [
+      "Use a regular `<style>` block — it is global by default",
+      "Use `<style module>` to opt out of scoping",
+      "Use `<style is:global>` or import a CSS file at the layout level",
+      "Pass a `global` prop to the `<style>` tag",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="styling/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="styling/index" />

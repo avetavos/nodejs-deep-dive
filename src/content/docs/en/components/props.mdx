@@ -1,0 +1,153 @@
+---
+title: Props
+description: Pass data into .astro components with Astro.props. Add TypeScript types with an interface Props.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In React, props arrive as the first argument of the component function. In Astro, props arrive via the global `Astro.props` object, which you destructure in the frontmatter — the same destructuring syntax you already know.
+
+## Receiving props
+
+export const propsReact = `// Button.jsx
+export default function Button({ label, variant = "primary" }) {
+  return (
+    <button className={\`btn btn--\${variant}\`}>
+      {label}
+    </button>
+  );
+}
+
+// Usage:
+// <Button label="Save" />
+// <Button label="Delete" variant="danger" />`;
+
+export const propsAstro = `---
+// Button.astro
+const { label, variant = "primary" } = Astro.props;
+---
+<button class={\`btn btn--\${variant}\`}>
+  {label}
+</button>
+
+<!-- Usage:
+<Button label="Save" />
+<Button label="Delete" variant="danger" />
+-->`;
+
+<ReactAstro client:visible react={propsReact} astro={propsAstro} />
+
+Two things to notice:
+
+1. `Astro.props` is the Astro equivalent of the React props object — destructure from it exactly as you would from a function parameter.
+2. Default values work with standard JavaScript destructuring defaults (`= "primary"`).
+
+## TypeScript: interface Props
+
+Astro components support TypeScript natively. Declare an `interface Props` (or `type Props`) in the frontmatter and the compiler enforces it at build time.
+
+export const propsTypedReact = `// Card.tsx
+interface Props {
+  title: string;
+  description?: string;
+  href: string;
+}
+
+export default function Card({ title, description = "", href }: Props) {
+  return (
+    <a href={href} className="card">
+      <h2>{title}</h2>
+      {description && <p>{description}</p>}
+    </a>
+  );
+}`;
+
+export const propsTypedAstro = `---
+// Card.astro
+interface Props {
+  title: string;
+  description?: string;
+  href: string;
+}
+
+const { title, description = "", href } = Astro.props;
+---
+<a href={href} class="card">
+  <h2>{title}</h2>
+  {description && <p>{description}</p>}
+</a>`;
+
+<ReactAstro client:visible react={propsTypedReact} astro={propsTypedAstro} />
+
+The `interface Props` declaration is the idiomatic Astro pattern. Astro's language server reads it to power editor autocomplete when you use the component.
+
+## Runnable example
+
+export const propsCode = `---
+interface Props {
+  name: string;
+  role?: string;
+  color?: string;
+}
+
+const { name, role = "Developer", color = "#6366f1" } = Astro.props;
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Props demo</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <div style={\`border-left:4px solid \${color};padding-left:1rem\`}>
+      <h1>{name}</h1>
+      <p style="color:#888">{role}</p>
+    </div>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={propsCode} />
+
+<Diff title="React props vs Astro.props">
+- React: props are the **first function argument** — `function Card({ title }: Props)`.
+- Astro: props come from **`Astro.props`** — `const { title } = Astro.props;`.
+- Both support destructuring with defaults and TypeScript interfaces.
+- Astro props are **read-only build-time values** — no `setState`, no re-render when a prop changes.
+</Diff>
+
+export const quizProps = [
+  {
+    q: "How do you access props inside an Astro component's frontmatter?",
+    options: [
+      "As the first function argument: `function(props)`",
+      "Via `Astro.props` — e.g. `const { title } = Astro.props;`",
+      "Via `this.props`",
+      "Via `import props from 'astro:props'`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "How do you set a default value for an optional prop in Astro?",
+    options: [
+      "`Astro.props.defaultValue('color', 'red')`",
+      "Using `defaultProps` on the component",
+      "Standard JS destructuring default: `const { color = 'red' } = Astro.props;`",
+      "Add `default:` to the interface Props declaration",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What is the idiomatic way to add TypeScript types to Astro component props?",
+    options: [
+      "Export a `PropTypes` object",
+      "Declare `interface Props` in the frontmatter",
+      "Use `React.FC<Props>` as the component type",
+      "Pass a generic to `Astro.props<Props>`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="components/props" questions={quizProps} />
+
+<ProgressTracker client:visible id="components/props" />

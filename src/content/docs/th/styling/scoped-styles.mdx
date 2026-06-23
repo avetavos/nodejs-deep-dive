@@ -1,0 +1,170 @@
+---
+title: 'Scoped Styles'
+description: '<style> block ธรรมดาใน .astro จะถูก scoped อัตโนมัติโดย compiler — ไม่ต้องตั้งค่า CSS Modules หรือ styled-components'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน React คุณ scope style ให้กับ component โดยตั้งชื่อไฟล์เป็น `Button.module.css` แล้ว import มา — bundler จะ rewrite ชื่อ class ให้เป็น hash ที่ unique ตอน build ใน Astro คุณเขียน CSS ธรรมดาใน `<style>` block ในไฟล์ `.astro` เดียวกัน compiler จะเพิ่ม data attribute hash ที่ unique ให้ทุก selector และทุก HTML element ใน component นั้น ให้ผลลัพธ์เดียวกันโดยไม่ต้องตั้งค่าใดๆ
+
+## เปรียบเทียบแบบ side-by-side
+
+export const scopedReact = `// Button.tsx  +  Button.module.css
+// Button.module.css
+.button { background: #6366f1; color: #fff; border-radius: 6px; padding: .5rem 1rem; border: none; cursor: pointer; }
+.button:hover { background: #4f46e5; }
+
+// Button.tsx
+import styles from './Button.module.css';
+export default function Button({ label }: { label: string }) {
+  return <button className={styles.button}>{label}</button>;
+}`;
+
+export const scopedAstro = `---
+// Button.astro
+const { label } = Astro.props;
+---
+<button class="button">{label}</button>
+
+<style>
+  .button { background: #6366f1; color: #fff; border-radius: 6px; padding: .5rem 1rem; border: none; cursor: pointer; }
+  .button:hover { background: #4f46e5; }
+</style>`;
+
+<ReactAstro client:visible react={scopedReact} astro={scopedAstro} />
+
+สิ่งที่ Astro compiler สร้างขึ้นเบื้องหลัง:
+
+```html
+<!-- compiled output — คุณไม่ต้องเขียนสิ่งนี้ด้วยตัวเอง -->
+<button class="button astro-aBcD1234">Click me</button>
+
+<style>
+  .button.astro-aBcD1234 { background: #6366f1; ... }
+</style>
+```
+
+hash suffix (`astro-aBcD1234`) ถูก inject อัตโนมัติ rule `.button` ใน component อื่นจะได้รับ hash ที่แตกต่างกัน ดังนั้น style จึงไม่ชนกัน
+
+## อะไรใส่ใน style block ได้บ้าง
+
+`<style>` block รับ CSS มาตรฐาน — custom properties, media queries, pseudo-selectors, nesting, `@keyframes` ทุกอย่างที่ browser target รองรับ ไม่มี CSS-in-JS API ให้เรียนรู้เพิ่มเติม
+
+export const scopedFeaturesReact = `// Card.module.css
+.card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; transition: transform .15s; }
+.card:hover { transform: translateY(-2px); }
+@media (max-width: 480px) { .card { padding: .75rem; } }
+
+// Card.tsx
+import styles from './Card.module.css';
+export default function Card({ title }: { title: string }) {
+  return <div className={styles.card}><h2>{title}</h2></div>;
+}`;
+
+export const scopedFeaturesAstro = `---
+// Card.astro
+const { title } = Astro.props;
+---
+<div class="card"><h2>{title}</h2></div>
+
+<style>
+  .card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; transition: transform .15s; }
+  .card:hover { transform: translateY(-2px); }
+  @media (max-width: 480px) { .card { padding: .75rem; } }
+</style>`;
+
+<ReactAstro client:visible react={scopedFeaturesReact} astro={scopedFeaturesAstro} />
+
+## ตัวอย่างที่รันได้
+
+export const scopedCode = `---
+const items = ["Dashboard", "Projects", "Settings"];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Scoped styles</title></head>
+  <body>
+    <nav>
+      {items.map(item => (
+        <a href="#" class="nav-link">{item}</a>
+      ))}
+    </nav>
+    <main>
+      <div class="card">
+        <h1>Scoped Styles Demo</h1>
+        <p>The <code>.card</code> and <code>.nav-link</code> styles live in this file and are scoped here by the Astro compiler — they cannot bleed into other components.</p>
+      </div>
+    </main>
+  </body>
+</html>
+
+<style>
+  body { font-family: sans-serif; margin: 0; background: #f8fafc; }
+  nav { background: #1e293b; padding: .75rem 1.5rem; display: flex; gap: 1rem; }
+  .nav-link { color: #94a3b8; text-decoration: none; font-size: .875rem; }
+  .nav-link:hover { color: #fff; }
+  main { padding: 2rem; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1.5rem; max-width: 480px; }
+  .card h1 { font-size: 1.25rem; margin: 0 0 .75rem; color: #1e293b; }
+  .card p { color: #64748b; line-height: 1.6; margin: 0; }
+  code { background: #f1f5f9; padding: .1em .35em; border-radius: 4px; font-size: .875em; }
+</style>`;
+
+<AstroPlayground client:visible code={scopedCode} />
+
+<Diff title="CSS Modules vs Astro scoped styles">
+- CSS Modules: ไฟล์ `.module.css` แยก, `import styles from ...`, `className={styles.button}`
+- Astro: `<style>` block ในไฟล์ `.astro` เดียวกัน, `class="button"` ธรรมดา, ไม่ต้อง import
+- เหมือนกัน: compiler เพิ่ม hash ที่ unique เพื่อป้องกันชื่อ class ชนกันระหว่าง component
+- ข้อดีของ Astro: syntax CSS ธรรมดา — ไม่ต้อง camelCase property access ไม่มี template literal API
+</Diff>
+
+export const quizScoped = [
+  {
+    q: "Astro ป้องกัน style ใน component หนึ่งไม่ให้กระทบ component อื่นได้อย่างไร?",
+    options: [
+      "ต้องใช้ CSS Modules — CSS ธรรมดาเป็น global เสมอ",
+      "Compiler เพิ่ม data-attribute hash ที่ unique ให้ selector และ element ในแต่ละ component",
+      "Astro ใช้ Shadow DOM เพื่อ isolate styles",
+      "ต้อง prefix ชื่อ class ด้วยชื่อ component เองทุกครั้ง",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ใช้ CSS feature ใดได้บ้างใน `<style>` block ของ Astro?",
+    options: [
+      "เฉพาะ class selector — ID และ pseudo-selector ไม่รองรับ",
+      "เพียงบางส่วน: ไม่มี media queries หรือ keyframes",
+      "CSS มาตรฐานทุกอย่าง — media queries, pseudo-selectors, keyframes, custom properties",
+      "เฉพาะ inline property declarations เท่านั้น",
+    ],
+    answer: 2,
+  },
+  {
+    q: "ใน Astro คุณเขียน `class=\"card\"` แล้ว HTML attribute ที่ compile แล้วหน้าตาเป็นอย่างไร?",
+    options: [
+      "`class=\"card\"` — ไม่เปลี่ยนแปลง",
+      "`data-astro-card=\"true\"`",
+      "`class=\"card astro-XXXX\"` โดย XXXX คือ hash เฉพาะของ component",
+      "`className=\"card__scoped\"`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "คุณต้องการ hover transition บน card ใน Astro ควรเขียนที่ไหน?",
+    options: [
+      "ในไฟล์ `.module.css` แยก แล้ว import ที่ด้านบนของไฟล์ .astro",
+      "เป็น inline `style` attribute ผ่าน JavaScript",
+      "ใน `<style>` block ในไฟล์ `.astro` เดียวกัน — CSS ธรรมดา ไม่มี syntax พิเศษ",
+      "ใน global stylesheet — local styles ไม่รองรับ pseudo-selectors",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="styling/scoped-styles" questions={quizScoped} />
+
+<ProgressTracker client:visible id="styling/scoped-styles" />

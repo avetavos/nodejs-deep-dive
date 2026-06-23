@@ -1,0 +1,145 @@
+---
+title: Island คืออะไร?
+description: 'Partial hydration vs full-app hydration: ทำไมการส่ง React runtime ทั้งหมดถึงแพง และ islands ช่วยลดค่าใช้จ่ายได้อย่างไร'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ในแอป React หรือ Next.js เบราว์เซอร์ได้รับ **JavaScript bundle ขนาดใหญ่หนึ่งก้อน** React บูต เดิน component tree ทั้งหมด และแนบ event listeners ทุกที่ — แม้แต่กับ component ที่ไม่มีการโต้ตอบใดๆ นี่คือ full-app hydration
+
+Island Architecture ที่คิดค้นโดย Jason Miller และทำให้เป็นที่นิยมโดย Astro พลิกค่าเริ่มต้น: เพจเป็น HTML ที่ไม่ทำงาน มีเฉพาะ component ที่ต้องการ interactivity เท่านั้นที่ถูก hydrate และ hydrate **อย่างอิสระ** — เหมือนเกาะในทะเลของ markup แบบ static
+
+## ค่าใช้จ่ายของ hydration ใน React vs Astro
+
+export const hydrationReact = `// Next.js page — the WHOLE tree hydrates.
+// Even <Header> and <Footer> download JS.
+export default function BlogPost({ post }) {
+  return (
+    <>
+      <Header />         {/* JS downloaded + hydrated */}
+      <article>{post.content}</article>  {/* JS downloaded + hydrated */}
+      <LikeButton postId={post.id} />    {/* JS downloaded + hydrated */}
+      <RelatedPosts posts={post.related} />{/* JS downloaded + hydrated */}
+      <Footer />         {/* JS downloaded + hydrated */}
+    </>
+  );
+}
+// Total JS budget: EVERYTHING`;
+
+export const hydrationAstro = `---
+// Astro page — only <LikeButton> needs JS.
+import Header from '../components/Header.astro';
+import LikeButton from '../components/LikeButton.jsx';
+import RelatedPosts from '../components/RelatedPosts.astro';
+import Footer from '../components/Footer.astro';
+const { post } = Astro.props;
+---
+<Header />                        <!-- 0 KB JS -->
+<article>{post.content}</article>  <!-- 0 KB JS -->
+<LikeButton client:visible postId={post.id} /> <!-- hydrated -->
+<RelatedPosts posts={post.related} />  <!-- 0 KB JS -->
+<Footer />                        <!-- 0 KB JS -->
+{/* Total JS budget: ONE component */}`;
+
+<ReactAstro client:visible react={hydrationReact} astro={hydrationAstro} />
+
+ในหน้าเพจที่มีเนื้อหาเป็นหลัก เช่น บล็อก, landing page, หรือเว็บ docs — ส่วนใหญ่ของ component เป็นแค่การแสดงผล ไม่ตอบสนองต่อการคลิก การ hydrate เหล่านั้นสิ้นเปลือง CPU และทำให้ Time to Interactive ช้าลง
+
+## ประสิทธิภาพที่ได้รับ
+
+Astro วัดสิ่งนี้อย่างแม่นยำ เพจที่มี island `LikeButton` เดียวจะดาวน์โหลดเฉพาะ JavaScript สำหรับปุ่มนั้นและ React runtime ของมัน — ไม่มีอื่นนอกจากนั้น Next.js เทียบเท่าส่ง React บวก component ทุกตัวบนเพจ
+
+ผลลัพธ์จริงในเว็บที่มีเนื้อหาหนาแน่น:
+
+- **ลด JavaScript ที่ส่งได้ 90%+**
+- **Largest Contentful Paint เร็วขึ้น** — HTML มาถึงพร้อม parse แล้ว ไม่มี hydration blocking การ render
+- **Time to Interactive ต่ำลง** — มีเพียง island เดียวที่ต้องบูท
+
+## "Partial hydration" หมายความว่าอะไร
+
+รูปแบบนี้เรียกว่า **partial hydration** เพราะมีเพียง *บางส่วน* ของเพจที่ถูก hydrate แต่ละ island:
+
+1. Render เป็น HTML บน server/build (เหมือน `.astro` component ทั่วไป)
+2. ส่ง JS bundle ของตัวเองไปยังเบราว์เซอร์
+3. Hydrate **อย่างอิสระ** — islands ไม่แชร์ React root
+
+จุดสุดท้ายสำคัญมาก: islands ถูกแยกออกจากกัน ไม่มี React tree เดียวที่เชื่อมต่อกัน ซึ่งหมายความว่าไม่มีการแชร์ React context ข้าม islands โดยค่าเริ่มต้น คุณจะได้เรียนรู้วิธีจัดการกับนั้นใน [เมื่อใดควรใช้ Island](/astro-for-react-developers/th/islands/when-to-island/)
+
+export const islandConceptReact = `// React: ONE root, one reconciler, shared context
+import ReactDOM from 'react-dom/client';
+ReactDOM.createRoot(document.getElementById('root'))
+  .render(<App />);
+// Every component inside <App> is part of this tree.
+// React.createContext() works across the whole tree.`;
+
+export const islandConceptAstro = `---
+// Astro: MULTIPLE roots, one per island
+// Astro mounts each island independently:
+//   ReactDOM.createRoot(islandEl).render(<Counter />)
+//   ReactDOM.createRoot(likeEl).render(<LikeButton />)
+// Each island has its own React root.
+// React.createContext() does NOT cross island boundaries.
+import Counter from '../components/Counter.jsx';
+import LikeButton from '../components/LikeButton.jsx';
+---
+<Counter client:load />
+<LikeButton client:visible postId={42} />`;
+
+<ReactAstro client:visible react={islandConceptReact} astro={islandConceptAstro} />
+
+<Diff title="Full hydration vs Partial hydration">
+- React/Next.js: **React root เดียว** ที่ `document.getElementById('root')` — ทั้งแอป
+- Astro: **React root หนึ่งอันต่อ island** — แต่ละ component hydrate แบบแยกตัว
+- React Context ทำงานทั่วทั้งแอป React; ใน Astro ทำงานได้เฉพาะภายใน island เดียว
+- Astro ยังใช้ React ภายใต้: hooks, context และ state ทั้งหมดทำงาน **ภายใน** island หนึ่ง
+</Diff>
+
+export const quizWhatIsIsland = [
+  {
+    q: "'Partial hydration' คืออะไร?",
+    options: [
+      "Hydrate เฉพาะ component ที่ต้องการ JavaScript interactivity",
+      "Render เพียงครึ่งหน้าบน server",
+      "React feature สำหรับ lazy loading components",
+      "การส่ง JavaScript แบบบีบอัดไปยังเบราว์เซอร์",
+    ],
+    answer: 0,
+  },
+  {
+    q: "ใน Astro เพจที่มี React islands สามอันจะสร้าง React roots กี่อัน?",
+    options: [
+      "Root เดียวที่แชร์กันทุก islands",
+      "ไม่มีเลย — Astro ไม่ใช้ React roots",
+      "สามอัน — หนึ่งต่อ island",
+      "ขึ้นอยู่กับว่า islands แชร์ state หรือไม่",
+    ],
+    answer: 2,
+  },
+  {
+    q: "ทำไม full-app hydration จึงเพิ่ม Time to Interactive แม้ในเพจที่เป็น static เป็นส่วนใหญ่?",
+    options: [
+      "Server ใช้เวลาในการ render HTML นานขึ้น",
+      "เบราว์เซอร์ต้องดาวน์โหลดและรัน JS สำหรับทุก component รวมถึง component ที่แสดงผลล้วนๆ",
+      "React ต้องการการเชื่อมต่อฐานข้อมูลเพื่อ hydrate",
+      "เบราว์เซอร์ cache React bundles ทำให้โหลดครั้งแรกช้าลง",
+    ],
+    answer: 1,
+  },
+  {
+    q: "React Context ทำงานข้าม Astro islands สองอันบนเพจเดียวกันหรือไม่?",
+    options: [
+      "ใช่ — Astro เชื่อม islands ด้วย global context bridge",
+      "ไม่ — แต่ละ island เป็น React root อิสระ context ไม่ข้าม island boundaries",
+      "เฉพาะเมื่อ islands ทั้งสอง import context file เดียวกัน",
+      "เฉพาะกับ `client:only`",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/what-is-an-island" questions={quizWhatIsIsland} />
+
+<ProgressTracker client:visible id="islands/what-is-an-island" />

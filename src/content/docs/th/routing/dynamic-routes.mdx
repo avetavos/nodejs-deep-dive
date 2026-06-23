@@ -1,0 +1,183 @@
+---
+title: 'Dynamic Routes'
+description: 'สร้าง URL segment แบบ dynamic ด้วย [slug].astro และ getStaticPaths() — เทียบเท่ากับ generateStaticParams ของ Next.js'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน Next.js App Router คุณใช้ `[slug]/page.tsx` + `generateStaticParams()` เพื่อ pre-render หน้าแบบ dynamic ณ build time Astro ใช้ convention ชื่อไฟล์แบบ bracket เดียวกัน — `[slug].astro` — คู่กับ `getStaticPaths()` export ที่ **จำเป็น** ภายใน frontmatter
+
+> Dynamic route ต้องการการสร้างหลายหน้า — รัน example เหล่านี้ใน Astro project เต็มรูปแบบ (`npm create astro@latest`) ในเครื่องของคุณ
+
+## การกำหนด dynamic segment
+
+export const dynReact = `// app/blog/[slug]/page.tsx  (Next.js App Router)
+export async function generateStaticParams() {
+  const posts = await getPosts();
+  return posts.map((post) => ({ slug: post.slug }));
+}
+
+export default function BlogPost({
+  params,
+}: {
+  params: { slug: string };
+}) {
+  return <h1>Post: {params.slug}</h1>;
+}`;
+
+export const dynAstro = `---
+// src/pages/blog/[slug].astro
+export async function getStaticPaths() {
+  const posts = await getPosts();
+  return posts.map((post) => ({
+    params: { slug: post.slug },
+    props:  { post },         // ส่งข้อมูลพร้อม params
+  }));
+}
+
+const { slug } = Astro.params;
+const { post } = Astro.props;
+---
+<h1>{post.title}</h1>`;
+
+<ReactAstro client:visible react={dynReact} astro={dynAstro} reactTitle="Next.js" />
+
+สิ่งสำคัญที่ควรสังเกต:
+
+1. `getStaticPaths()` ถูก export **จากภายใน frontmatter** — ไม่ใช่เป็น separate file export แบบ Next.js
+2. แต่ละ path object มี field `props` เพื่อนำข้อมูลที่ fetch มาไว้คู่กับ path — ไม่ต้อง fetch ซ้ำในหน้า
+3. `Astro.params` เก็บค่า dynamic segment เทียบเท่ากับ `params.slug` ใน Next.js
+
+## การเข้าถึง params และ props
+
+export const dynParamsReact = `// Next.js Pages Router equivalent
+// pages/blog/[slug].tsx
+import type { GetStaticPaths, GetStaticProps } from 'next';
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  const posts = await getPosts();
+  return {
+    paths: posts.map((p) => ({ params: { slug: p.slug } })),
+    fallback: false,
+  };
+};
+
+export const getStaticProps: GetStaticProps = async ({ params }) => {
+  const post = await getPost(params!.slug as string);
+  return { props: { post } };
+};
+
+export default function BlogPost({ post }: { post: Post }) {
+  return <article><h1>{post.title}</h1></article>;
+}`;
+
+export const dynParamsAstro = `---
+// src/pages/blog/[slug].astro
+// getStaticPaths + data fetching ในฟังก์ชันเดียว:
+export async function getStaticPaths() {
+  const posts = await getPosts();
+  return posts.map((post) => ({
+    params: { slug: post.slug },
+    props:  { post },
+  }));
+}
+
+// props มาทาง Astro.props เหมือน component ทั่วไป
+const { post } = Astro.props;
+---
+<article>
+  <h1>{post.title}</h1>
+  <div set:html={post.body} />
+</article>`;
+
+<ReactAstro client:visible react={dynParamsReact} astro={dynParamsAstro} reactTitle="Next.js Pages Router" />
+
+## File tree สำหรับ blog
+
+```
+src/pages/
+└── blog/
+    ├── index.astro          → /blog       (แสดงรายการ post ทั้งหมด)
+    └── [slug].astro         → /blog/:slug (post แต่ละรายการ)
+```
+
+## Catch-all routes
+
+Astro รองรับ catch-all route แบบ rest-parameter ด้วย `[...path].astro` ซึ่งแมปกับ `[[...slug]]/page.tsx` ใน Next.js
+
+export const catchAllReact = `// app/docs/[[...slug]]/page.tsx
+export default function DocsPage({
+  params,
+}: {
+  params: { slug?: string[] };
+}) {
+  const path = params.slug?.join('/') ?? '';
+  return <div>Docs path: {path}</div>;
+}`;
+
+export const catchAllAstro = `---
+// src/pages/docs/[...path].astro
+const { path } = Astro.params;
+// path เป็น string เช่น "getting-started/intro"
+---
+<div>Docs path: {path}</div>`;
+
+<ReactAstro client:visible react={catchAllReact} astro={catchAllAstro} reactTitle="Next.js" />
+
+<Diff title="Next.js dynamic routes vs Astro dynamic routes">
+- Next.js App Router: `[slug]/page.tsx` + `generateStaticParams()` เป็น named export จากไฟล์
+- Next.js Pages Router: `[slug].tsx` + `getStaticPaths` + `getStaticProps` แยกกัน
+- Astro: `[slug].astro` + `getStaticPaths()` ภายใน frontmatter; field `props` ในแต่ละ path ช่วยลดการ fetch ซ้ำ
+- Catch-all: Next `[[...slug]]` → Astro `[...slug]`
+- `Astro.params.slug` เป็น `string` เสมอ (ไม่ใช่ array สำหรับ `[slug]`); catch-all `[...path]` ให้ string ที่คั่นด้วย slash
+</Diff>
+
+export const quizDynamicRoutes = [
+  {
+    q: "ต้อง export ฟังก์ชันใดจากหน้า .astro แบบ dynamic เพื่อบอก Astro ว่าจะ pre-render path ใดบ้าง?",
+    options: [
+      "generateStaticParams()",
+      "getStaticPaths()",
+      "getServerSideProps()",
+      "getPaths()",
+    ],
+    answer: 1,
+  },
+  {
+    q: "`getStaticPaths()` ถูกประกาศไว้ที่ใดในไฟล์ Astro dynamic route?",
+    options: [
+      "ในไฟล์ +page.server.js แยกต่างหาก",
+      "เป็น default export จากไฟล์ .astro",
+      "ภายใน frontmatter (--- block) ของไฟล์ .astro",
+      "ใน astro.config.mjs",
+    ],
+    answer: 2,
+  },
+  {
+    q: "จะเข้าถึงค่า dynamic segment (เช่น slug) ภายในหน้า Astro ได้อย่างไร?",
+    options: [
+      "ผ่าน `props.params.slug`",
+      "ผ่าน `useParams()` hook",
+      "ผ่าน `Astro.params.slug`",
+      "ผ่าน `this.slug`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Astro เทียบเท่ากับ `[[...slug]]` catch-all segment ของ Next.js ด้วยอะไร?",
+    options: [
+      "`[slug].astro`",
+      "`{...slug}.astro`",
+      "`[...slug].astro`",
+      "`*.astro`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="routing/dynamic-routes" questions={quizDynamicRoutes} />
+
+<ProgressTracker client:visible id="routing/dynamic-routes" />

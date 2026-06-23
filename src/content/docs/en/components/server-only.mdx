@@ -1,0 +1,173 @@
+---
+title: Server-Only & Scripts
+description: '.astro components ship zero JS by default. Add browser JS with a plain <script> tag.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+This is the concept that surprises React developers most. In React, every component you write ships JavaScript to the browser — even a component that just renders a heading. Astro inverts this default: **a plain `.astro` component produces zero JavaScript**.
+
+## React always ships JS — Astro does not
+
+export const serverOnlyReact = `// Heading.jsx — React
+// This component ships JS to the browser.
+// React needs a runtime to mount it, diff it,
+// and re-render it if props change.
+export default function Heading({ title }) {
+  return <h1>{title}</h1>;
+}
+
+// React also ships event-wiring, reconciler, etc.
+// even when none of that is needed here.`;
+
+export const serverOnlyAstro = `---
+// Heading.astro — Astro
+// This compiles to:
+//   <h1>My Title</h1>
+// No JavaScript. No runtime. No hydration.
+const { title } = Astro.props;
+---
+<h1>{title}</h1>`;
+
+<ReactAstro client:visible react={serverOnlyReact} astro={serverOnlyAstro} />
+
+The Astro compiler turns `Heading.astro` into a function that returns an HTML string. The browser receives that string. Done. No script tags, no React runtime, nothing.
+
+## What you cannot do in a plain .astro component
+
+Because the frontmatter runs **at build/server time** and the template produces **static HTML**, you cannot:
+
+- Call `useState`, `useReducer`, or any React hook.
+- Attach event listeners in the frontmatter (no `onClick` that runs in the browser).
+- Read `window`, `document`, or `localStorage` in the frontmatter (they do not exist at build time).
+- Make the UI react to user input — that requires an **island** (covered in the next module).
+
+## Adding vanilla browser JS with a script tag
+
+When you need a small amount of browser JavaScript — a toggle, a counter, an analytics event — Astro lets you include a `<script>` tag directly in the template. Astro bundles and deduplicates these scripts automatically.
+
+export const scriptReact = `// Counter.jsx — React
+// Ships React + hydration + component JS
+import { useState } from 'react';
+
+export default function Counter() {
+  const [count, setCount] = useState(0);
+  return (
+    <div>
+      <p>Count: {count}</p>
+      <button onClick={() => setCount(count + 1)}>
+        Increment
+      </button>
+    </div>
+  );
+}`;
+
+export const scriptAstro = `---
+// Counter.astro — vanilla JS via <script>
+// Ships only the tiny script below — no framework runtime
+---
+<div>
+  <p id="count">Count: 0</p>
+  <button id="btn">Increment</button>
+</div>
+
+<script>
+  let count = 0;
+  const display = document.getElementById('count');
+  const btn = document.getElementById('btn');
+  btn.addEventListener('click', () => {
+    count++;
+    display.textContent = 'Count: ' + count;
+  });
+</script>`;
+
+<ReactAstro client:visible react={scriptReact} astro={scriptAstro} />
+
+The `<script>` tag in an Astro component is processed by Vite: it is bundled, tree-shaken, and injected once per page even if the component is used multiple times. For complex interactivity, use an island (a React, Preact, Svelte, or other framework component with a `client:*` directive).
+
+## Runnable example with a script
+
+export const serverOnlyCode = `---
+const items = ["Astro", "React", "TypeScript", "Vite"];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Script demo</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <h1>Tech Stack</h1>
+    <ul id="list" style="padding-left:1.5rem">
+      {items.map((item) => <li>{item}</li>)}
+    </ul>
+    <button id="toggle" style="margin-top:1rem;padding:.5rem 1rem;cursor:pointer">
+      Toggle list
+    </button>
+  </body>
+</html>
+
+<script>
+  const list = document.getElementById('list');
+  const btn = document.getElementById('toggle');
+  btn.addEventListener('click', () => {
+    list.style.display = list.style.display === 'none' ? '' : 'none';
+  });
+</script>`;
+
+<AstroPlayground client:visible code={serverOnlyCode} />
+
+<Diff title="React (always JS) vs Astro (zero JS by default)">
+- React: every component ships JS — the React runtime, reconciler, and component code all run in the browser.
+- Astro `.astro`: ships **zero JavaScript** — compiles to a plain HTML string.
+- React state/hooks: browser-only, require hydration.
+- Astro `<script>`: opt-in vanilla JS, bundled by Vite, no framework runtime required.
+- For stateful interactivity in Astro: use an **island** — a React/Preact/Svelte component with a `client:*` directive (next module).
+</Diff>
+
+export const quizServerOnly = [
+  {
+    q: "How much JavaScript does a plain .astro component send to the browser?",
+    options: [
+      "The Astro runtime (~10 kB)",
+      "The same as an equivalent React component",
+      "Zero JavaScript",
+      "Depends on how many props it receives",
+    ],
+    answer: 2,
+  },
+  {
+    q: "You need a click handler that toggles a menu in an .astro component. What is the lightest approach that stays within .astro (no island)?",
+    options: [
+      "Add `onClick` directly to the button in the template",
+      "Use `useState` in the frontmatter",
+      "Add a `<script>` tag with a vanilla JS `addEventListener`",
+      "Import React and use `useEffect`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What happens to a `<script>` tag inside an .astro component when the component is used multiple times on the same page?",
+    options: [
+      "The script is duplicated once per component instance",
+      "Astro throws a build error",
+      "Astro deduplicates it — the script is injected only once",
+      "The script is ignored on the second and subsequent uses",
+    ],
+    answer: 2,
+  },
+  {
+    q: "Which of these CAN you do inside an Astro component's frontmatter?",
+    options: [
+      "Call `useState(0)` to track user interactions",
+      "Read `window.location.href`",
+      "Fetch data with `await fetch('/api/posts')` at build time",
+      "Add a `document.addEventListener` for click events",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="components/server-only" questions={quizServerOnly} />
+
+<ProgressTracker client:visible id="components/server-only" />

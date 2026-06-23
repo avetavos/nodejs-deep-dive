@@ -1,0 +1,192 @@
+---
+title: เมื่อใดควรใช้ Island
+description: 'ค่าเริ่มต้นคือ static; ใช้ island เฉพาะส่วนที่ interactive; islands แยกตัวออกจากกัน — ไม่มีการแชร์ React context ข้าม islands'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ปรัชญาหลักของ Astro นั้นเรียบง่าย: **เริ่มต้นด้วย static แล้ว opt เข้า JS เฉพาะเมื่อต้องการ** นี่คือตรงข้ามกับ React SPA ที่ทุกอย่างเป็น JavaScript จนกว่าคุณจะทำงานเพื่อลบมันออก
+
+## กฎ default-static
+
+ถามคำถามนี้สำหรับทุก component บนเพจ:
+
+> "Component นี้ตอบสนองต่อ user interaction หรือเปลี่ยนแปลงตามเวลาในเบราว์เซอร์หรือไม่?"
+
+ถ้า **ใช่** — ทำให้เป็น island ด้วย `client:*` directive ที่เหมาะสม
+ถ้า **ไม่** — คงไว้เป็น `.astro` component หรือ React component ที่ไม่มี directive (render เป็น HTML แบบ static)
+
+export const whenToIslandReact = `// In a React/Next.js app everything is a component.
+// Making something "static" requires extra effort.
+export default function BlogPage({ post, related }) {
+  return (
+    <div>
+      {/* These are all in the React tree, all hydrated */}
+      <Header />           {/* purely presentational */}
+      <ArticleContent post={post} />  {/* purely presentational */}
+      <LikeButton postId={post.id} /> {/* interactive */}
+      <ShareMenu url={post.url} />    {/* interactive */}
+      <RelatedPosts posts={related} />{/* purely presentational */}
+    </div>
+  );
+}`;
+
+export const whenToIslandAstro = `---
+// In Astro, ask "does this need JS?" for each piece.
+import Header from '../components/Header.astro';       // no JS
+import ArticleContent from '../components/ArticleContent.astro'; // no JS
+import LikeButton from '../components/LikeButton.jsx'; // needs JS
+import ShareMenu from '../components/ShareMenu.jsx';   // needs JS
+import RelatedPosts from '../components/RelatedPosts.astro';     // no JS
+const { post, related } = Astro.props;
+---
+<Header />
+<ArticleContent post={post} />
+<LikeButton client:visible postId={post.id} />
+<ShareMenu client:idle url={post.url} />
+<RelatedPosts posts={related} />`;
+
+<ReactAstro client:visible react={whenToIslandReact} astro={whenToIslandAstro} />
+
+ในหน้าบล็อกโพสต์ทั่วไป มีเพียงสอง islands (`LikeButton` และ `ShareMenu`) ที่ส่ง JavaScript ทุกอย่างอื่นเป็น HTML ที่ไม่มี JS
+
+## Islands แยกตัวออกจากกัน
+
+นี่คือความแตกต่างทางสถาปัตยกรรมที่สำคัญที่สุดจาก React SPA ในแอป React มี **component tree เดียว** React Context ไหลจาก top-level Provider ลงไปยัง descendant ใดก็ได้ ไม่ว่าจะลึกแค่ไหน
+
+ใน Astro แต่ละ island เป็น React root แยกกัน Context ไม่ข้าม island boundaries
+
+```jsx
+// This does NOT work across islands:
+//
+// .astro page:
+//   <ThemeProvider client:load>   ← island A
+//   <ThemedButton client:load />  ← island B (separate root!)
+//
+// ThemeProvider's context is not visible to ThemedButton.
+```
+
+### การทำงานรอบข้อจำกัดนี้
+
+**ตัวเลือกที่ 1 — ห่อทั้งสองใน single island:**
+
+```astro
+---
+import ThemedApp from '../components/ThemedApp.jsx';
+---
+<ThemedApp client:load />
+```
+
+```jsx
+// ThemedApp.jsx — one island, one React root, context works
+import { ThemeProvider } from './ThemeContext';
+import ThemedButton from './ThemedButton';
+
+export default function ThemedApp() {
+  return (
+    <ThemeProvider>
+      <ThemedButton />
+    </ThemeProvider>
+  );
+}
+```
+
+**ตัวเลือกที่ 2 — ใช้ shared signal/store ภายนอก React:**
+
+Libraries อย่าง `nanostores` (tiny store ที่ Astro แนะนำ) ให้ islands แชร์ state โดยไม่ต้องมี React root ร่วมกัน:
+
+```js
+// src/stores/theme.js
+import { atom } from 'nanostores';
+export const theme = atom('light');
+```
+
+```jsx
+// island A
+import { useStore } from '@nanostores/react';
+import { theme } from '../stores/theme';
+export default function ThemeToggle() {
+  const t = useStore(theme);
+  return <button onClick={() => theme.set(t === 'light' ? 'dark' : 'light')}>{t}</button>;
+}
+```
+
+```jsx
+// island B — reads the same store
+import { useStore } from '@nanostores/react';
+import { theme } from '../stores/theme';
+export default function ThemedButton() {
+  const t = useStore(theme);
+  return <button class={t}>Click me</button>;
+}
+```
+
+## Checklist การตัดสินใจ
+
+| Component | ต้องการ hydration? | ใช้อะไร |
+|---|---|---|
+| Navigation header | ไม่ (แค่ links) | `.astro` component |
+| Hero image | ไม่ | `<img>` ใน `.astro` |
+| Article body | ไม่ | `.astro` component |
+| ปุ่ม Like / upvote | ใช่ — click handler | React island `client:visible` |
+| Comment section | ใช่ — fetch + render | React island `client:visible` |
+| Mobile menu toggle | ใช่ — open/close state | React island `client:media` |
+| Page layout | ไม่ | `.astro` layout |
+| Date formatter | ไม่ (build-time) | `.astro` หรือ React แบบ static |
+
+<Diff title="React SPA tree vs Astro island isolation">
+- React SPA: **tree เดียว** context ไหลทุกที่ ทุก component subscribe global state ได้
+- Astro: **root หนึ่งอันต่อ island** React context ขอบเขตอยู่แค่ island นั้น
+- Cross-island state: ใช้ tiny external store (nanostores, Zustand) แชร์ระหว่าง islands
+- ท่าทางเริ่มต้น: `.astro` ก่อน เพิ่ม `client:*` เฉพาะเมื่อต้องการ interactivity
+</Diff>
+
+export const quizWhenToIsland = [
+  {
+    q: "Navigation bar ที่ render เฉพาะ links ไม่มี dropdown ไม่มี state ควรเป็นอะไรใน Astro?",
+    options: [
+      "React island ด้วย `client:load`",
+      "React island ด้วย `client:idle`",
+      "`.astro` component ธรรมดา — ไม่ต้องการ JS",
+      "React island ด้วย `client:only`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "React islands สองอันบนหน้า Astro เดียวกันต้องการแชร์ theme state วิธีที่ถูกต้องคืออะไร?",
+    options: [
+      "ห่อทั้งสองใน parent React island ที่มี shared Context Provider",
+      "ใช้ `client:share` directive",
+      "เพิ่ม `global:true` ใน Context creation",
+      "Islands แชร์ context อัตโนมัติเมื่อ import context file เดียวกัน",
+    ],
+    answer: 0,
+  },
+  {
+    q: "ทำไม React Context จึงไม่ทำงานข้าม two separate islands โดยค่าเริ่มต้น?",
+    options: [
+      "Astro ลบ React Context ระหว่าง build",
+      "แต่ละ island ถูก mount เป็น React root อิสระ ไม่แชร์ component tree",
+      "React Context ต้องการ server เพื่อทำงาน",
+      "Astro รองรับเฉพาะ Zustand สำหรับการแชร์ state",
+    ],
+    answer: 1,
+  },
+  {
+    q: "Astro-native solution ที่แนะนำสำหรับการแชร์ reactive state ระหว่างหลาย islands คืออะไร?",
+    options: [
+      "Redux ด้วย global store",
+      "nanostores (หรือ tiny store ที่คล้ายกัน) แชร์เป็น JS module",
+      "localStorage polling",
+      "การส่ง props ลงผ่านไฟล์ `.astro` layout",
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="islands/when-to-island" questions={quizWhenToIsland} />
+
+<ProgressTracker client:visible id="islands/when-to-island" />

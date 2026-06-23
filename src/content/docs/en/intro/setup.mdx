@@ -1,0 +1,129 @@
+---
+title: Setup
+description: Scaffold a new Astro project with npm create astro and start the dev server — compared to CRA and create-next-app.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+{/* No AstroPlayground: setup is a CLI-only lesson — there is no runnable in-browser snippet that covers project scaffolding. */}
+
+Creating a new Astro project uses `npm create astro@latest`, which is Astro's equivalent of `npx create-next-app` or the old `npx create-react-app`. It launches an interactive wizard and scaffolds a project.
+
+## Scaffolding: wizard vs flags
+
+export const setupReact = `# CRA (deprecated — shown for reference)
+npx create-react-app my-app
+cd my-app && npm start
+
+# Next.js (create-next-app wizard)
+npx create-next-app@latest my-app
+# Prompts: TypeScript? ESLint? Tailwind? App Router?
+cd my-app && npm run dev`;
+
+export const setupAstro = `# Astro
+npm create astro@latest my-app
+# Wizard prompts:
+#   How would you like to start your project?
+#     > A basic, minimal starter (recommended)
+#       Use blog template
+#       Use docs (Starlight) template
+#   Do you plan to write TypeScript? Yes (strict)
+#   Install dependencies? Yes
+#   Initialize a new git repository? Yes
+cd my-app && npm run dev`;
+
+<ReactAstro client:visible react={setupReact} astro={setupAstro} />
+
+The `npm create astro@latest` command pulls the latest Astro scaffolding CLI (`create-astro`) from npm — no global install needed. The wizard is conversational and asks only what it needs.
+
+## The dev server
+
+Once scaffolded:
+
+```bash
+npm run dev
+# or
+npx astro dev
+```
+
+Astro's dev server starts at `http://localhost:4321` by default (Next.js uses `:3000`). It uses **Vite** under the hood — the same Vite you may know from Vite + React projects — so hot module replacement (HMR) and fast cold starts are built in.
+
+Useful dev commands:
+
+```bash
+npx astro dev          # start the dev server
+npx astro build        # build for production (outputs to dist/)
+npx astro preview      # preview the production build locally
+npx astro check        # TypeScript type-check all .astro files
+npx astro add react    # add the React integration (adds @astrojs/react)
+npx astro add tailwind # add Tailwind CSS
+```
+
+## Adding integrations
+
+In Next.js, adding React is implicit — it is the framework. In Astro, React is an **integration** you opt into:
+
+```bash
+npx astro add react
+```
+
+This installs `@astrojs/react` and `react`/`react-dom`, and updates `astro.config.mjs` automatically:
+
+```js
+// astro.config.mjs (after npx astro add react)
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+
+export default defineConfig({
+  integrations: [react()],
+});
+```
+
+After this you can import `.tsx` / `.jsx` React components inside `.astro` files and use `client:*` directives to hydrate them.
+
+## TypeScript
+
+Astro generates a `tsconfig.json` that extends `astro/tsconfigs/strict`. Your `.astro` files are type-checked with `npx astro check` — the same command you'd run in CI. No separate `tsc` setup needed.
+
+<Diff title="CRA / create-next-app vs npm create astro">
+- CRA: `npx create-react-app my-app` — deprecated; creates a client-only SPA.
+- Next.js: `npx create-next-app@latest` — wizard scaffolds a full-stack React framework.
+- Astro: `npm create astro@latest` — wizard scaffolds a content-first MPA; React is an opt-in integration.
+- Dev server: Next defaults to `:3000`; Astro defaults to `:4321`. Both use Vite (Astro always; Next from v15+).
+- Build output: Next outputs a Node.js server (or static export); Astro outputs `dist/` static HTML by default.
+</Diff>
+
+export const quizSetup = [
+  {
+    q: "What command scaffolds a new Astro project?",
+    options: [
+      "`npx create-astro-app`",
+      "`npm create astro@latest`",
+      "`npx astro init`",
+      "`npm install astro`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What port does the Astro dev server use by default?",
+    options: ["3000", "5173", "4321", "8080"],
+    answer: 2,
+  },
+  {
+    q: "How do you add React support to an existing Astro project?",
+    options: [
+      "It is built in — no extra step needed",
+      "Add `react: true` to `astro.config.mjs`",
+      "Run `npx astro add react`",
+      "Install `@astrojs/react` manually and restart",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/setup" questions={quizSetup} />
+
+<ProgressTracker client:visible id="intro/setup" />

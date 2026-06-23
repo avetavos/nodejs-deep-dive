@@ -1,0 +1,154 @@
+---
+title: 'Dynamic Pages from Data'
+description: 'สร้าง static pages จาก content collection ด้วย getStaticPaths() ใน src/pages/blog/[slug].astro เทียบกับ generateStaticParams ใน Next.js App Router'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Next.js App Router ใช้ `generateStaticParams()` เพื่อระบุ dynamic routes ตอน build time Next Pages Router ใช้ `getStaticPaths()` Astro ใช้ `getStaticPaths()` ในไฟล์ `[slug].astro` ชื่อเดียวกันกับ Pages Router แต่ pattern ต่างกันเล็กน้อย คุณ export async function `getStaticPaths` ที่คืนค่า array ของ object `{ params }` (optionally พร้อม `props`)
+
+> ต้องใช้โปรเจกต์ Astro เต็มรูปแบบ ใช้ `npm create astro@latest` เพื่อสร้างโปรเจกต์
+
+## App Router: generateStaticParams vs Astro getStaticPaths
+
+export const gspAppReact = `// app/blog/[slug]/page.tsx (Next.js App Router)
+import { allPosts } from 'contentlayer/generated';
+
+export async function generateStaticParams() {
+  return allPosts.map((post) => ({ slug: post.slugAsParams }));
+}
+
+export default function PostPage({ params }: { params: { slug: string } }) {
+  const post = allPosts.find((p) => p.slugAsParams === params.slug)!;
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <p>{post.description}</p>
+    </article>
+  );
+}`;
+
+export const gspAppAstro = `---
+// src/pages/blog/[slug].astro (Astro)
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((entry) => ({
+    params: { slug: entry.slug },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+<article>
+  <h1>{entry.data.title}</h1>
+  <p>{entry.data.description}</p>
+  <Content />
+</article>`;
+
+<ReactAstro client:visible react={gspAppReact} astro={gspAppAstro} />
+
+Astro ส่ง `props` พร้อมกับ `params` — ทำให้ page component รับ `entry` ได้โดยตรงจาก `Astro.props` โดยไม่ต้อง look up ซ้ำอีกครั้ง
+
+## Pages Router: getStaticPaths + getStaticProps vs Astro
+
+export const gspPagesReact = `// pages/blog/[slug].tsx (Next.js Pages Router)
+import { allPosts } from 'contentlayer/generated';
+import { useMDXComponent } from 'next-contentlayer/hooks';
+
+export async function getStaticPaths() {
+  return {
+    paths: allPosts.map((p) => ({ params: { slug: p.slugAsParams } })),
+    fallback: false,
+  };
+}
+
+export async function getStaticProps({ params }) {
+  const post = allPosts.find((p) => p.slugAsParams === params.slug)!;
+  return { props: { post } };
+}
+
+export default function PostPage({ post }) {
+  const MDXContent = useMDXComponent(post.body.code);
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <MDXContent />
+    </article>
+  );
+}`;
+
+export const gspPagesAstro = `---
+// src/pages/blog/[slug].astro (Astro — same file handles both path gen + rendering)
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((entry) => ({
+    params: { slug: entry.slug },
+    props:  { entry },          // props flow directly into Astro.props
+  }));
+}
+
+const { entry } = Astro.props; // typed from your zod schema
+const { Content } = await render(entry);
+---
+<article>
+  <h1>{entry.data.title}</h1>
+  <Content />
+</article>`;
+
+<ReactAstro client:visible react={gspPagesReact} astro={gspPagesAstro} />
+
+ใน Next.js Pages Router ต้องใช้ทั้ง `getStaticPaths` และ `getStaticProps` แยกกัน Astro รวมทั้งสองไว้ในไฟล์เดียวกันโดยการส่ง `props` ใน `getStaticPaths` return value
+
+<Diff title="generateStaticParams / getStaticPaths vs Astro getStaticPaths">
+- Next App Router: `generateStaticParams` export จาก page component ไม่มี `getStaticProps` แยก — data fetching อยู่ใน component โดยตรง
+- Next Pages Router: `getStaticPaths` + `getStaticProps` แยกกัน สองฟังก์ชัน สอง round-trips ไปที่ data layer
+- Astro: **ฟังก์ชันเดียว** `getStaticPaths` ที่ return `{ params, props }` — component รับ props โดยตรงจาก `Astro.props` ไม่ต้อง look up ซ้ำ
+- Astro `getStaticPaths` มี type inference จาก zod schema ผ่าน `Astro.props`
+- ทั้งหมดทำงานตอน **build time** เท่านั้น (ใน static mode)
+</Diff>
+
+export const quizDynamicFromData = [
+  {
+    q: "`getStaticPaths()` อยู่ที่ไหนในโปรเจกต์ Astro?",
+    options: [
+      "ใน `src/content.config.ts`",
+      "ใน `astro.config.mjs`",
+      "ในไฟล์ dynamic route เช่น `src/pages/blog/[slug].astro`",
+      "ในไฟล์ `paths.ts` แยกต่างหาก",
+    ],
+    answer: 2,
+  },
+  {
+    q: "แต่ละ object ในอาร์เรย์ที่ `getStaticPaths` คืนค่าแทนอะไร?",
+    options: [
+      "Schema ของ collection entry",
+      "หนึ่งหน้าที่จะสร้าง โดย `{ params }` กำหนด URL segment",
+      "กฎ redirect",
+      "Server-side request handler",
+    ],
+    answer: 1,
+  },
+  {
+    q: "อะไรคือ equivalent ของ Next App Router `generateStaticParams` ใน Astro?",
+    options: [
+      "`getStaticPaths()` ที่ export จากไฟล์ `.astro` page",
+      "`Astro.params` ใน frontmatter",
+      "`getCollection()` ที่เรียกระดับ top level",
+      "อาร์เรย์ `export const paths`",
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content/dynamic-from-data" questions={quizDynamicFromData} />
+
+<ProgressTracker client:visible id="content/dynamic-from-data" />

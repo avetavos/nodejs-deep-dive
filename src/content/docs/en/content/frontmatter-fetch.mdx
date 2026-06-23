@@ -1,0 +1,146 @@
+---
+title: 'Frontmatter Fetch'
+description: 'Top-level await fetch() in the --- frontmatter runs at build time (or per-request in SSR), never in the browser — versus getServerSideProps, getStaticProps, and useEffect+fetch.'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+In Next.js you choose where data runs — `getStaticProps` (build time), `getServerSideProps` (per request), or `useEffect+fetch` (browser). In Astro, the frontmatter `---` block IS the data layer. Top-level `await fetch()` there runs at build time by default, or per-request if the page opts into SSR. No `useEffect`, no browser fetch.
+
+## Build-time fetch: getStaticProps vs frontmatter
+
+export const staticPropsReact = `// pages/blog.tsx (Next.js Pages Router)
+export async function getStaticProps() {
+  const res = await fetch('https://api.example.com/posts');
+  const posts = await res.json();
+  return { props: { posts } };
+}
+
+export default function Blog({ posts }) {
+  return (
+    <ul>
+      {posts.map(post => (
+        <li key={post.id}>{post.title}</li>
+      ))}
+    </ul>
+  );
+}`;
+
+export const staticPropsAstro = `---
+// src/pages/blog.astro (Astro — static by default)
+const res = await fetch('https://api.example.com/posts');
+const posts = await res.json();
+---
+<ul>
+  {posts.map((post) => (
+    <li>{post.title}</li>
+  ))}
+</ul>`;
+
+<ReactAstro client:visible react={staticPropsReact} astro={staticPropsAstro} />
+
+With Astro's default static output, this `await fetch()` runs **once at build time** — exactly like `getStaticProps`. The result is baked into static HTML, zero fetching at runtime.
+
+## Per-request fetch: getServerSideProps vs SSR frontmatter
+
+export const ssrReact = `// pages/dashboard.tsx (Next.js Pages Router)
+export async function getServerSideProps(context) {
+  const res = await fetch(
+    \`https://api.example.com/user/\${context.params.id}\`
+  );
+  const user = await res.json();
+  return { props: { user } };
+}
+
+export default function Dashboard({ user }) {
+  return <h1>Hello, {user.name}</h1>;
+}`;
+
+export const ssrAstro = `---
+// src/pages/dashboard.astro (Astro SSR mode)
+export const prerender = false; // opt into SSR
+
+const userId = Astro.url.searchParams.get('id');
+const res = await fetch(\`https://api.example.com/user/\${userId}\`);
+const user = await res.json();
+---
+<h1>Hello, {user.name}</h1>`;
+
+<ReactAstro client:visible react={ssrReact} astro={ssrAstro} />
+
+`export const prerender = false` opts this single page into SSR — every request re-runs the frontmatter. The rest of your site stays static.
+
+## Inline data demo
+
+export const inlineCode = `---
+// Swap this for: const res = await fetch('https://...'); const posts = await res.json();
+const posts = [
+  { id: 1, title: "Why Astro ships zero JS by default", date: "2024-01-10" },
+  { id: 2, title: "Content collections vs contentlayer", date: "2024-02-03" },
+  { id: 3, title: "Islands: hydrate only what you need", date: "2024-03-15" },
+];
+---
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Blog</title></head>
+  <body style="font-family:sans-serif;padding:2rem">
+    <h1>Latest Posts</h1>
+    <ul style="list-style:none;padding:0">
+      {posts.map((post) => (
+        <li style="margin:1rem 0;padding:1rem;border:1px solid #e2e8f0;border-radius:8px">
+          <strong>{post.title}</strong>
+          <span style="display:block;color:#718096;font-size:0.875rem">{post.date}</span>
+        </li>
+      ))}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={inlineCode} />
+
+<Diff title="Next.js data patterns vs Astro frontmatter">
+- `getStaticProps` → **Astro frontmatter** with default static output: runs once at build time.
+- `getServerSideProps` → **Astro frontmatter** with `export const prerender = false` + an SSR adapter: runs per request.
+- `useEffect+fetch` → **No direct equivalent** — Astro doesn't ship fetch logic to the browser by default. Use an island (`client:load`) if you truly need browser-side fetching.
+- Astro uses **one syntax** for all server-side data patterns; Next.js uses three separate APIs.
+</Diff>
+
+export const quizFrontmatterFetch = [
+  {
+    q: "When does `await fetch()` in Astro frontmatter run by default?",
+    options: [
+      "In the browser on page load",
+      "At build time, on the server",
+      "Inside a Web Worker",
+      "Only after the page hydrates",
+    ],
+    answer: 1,
+  },
+  {
+    q: "What is the Astro equivalent of Next.js `getStaticProps`?",
+    options: [
+      "`useEffect` in an island component",
+      "A `load()` function in a separate file",
+      "Top-level `await fetch()` in the frontmatter (default static output)",
+      "`Astro.request.body`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "How do you make an Astro page fetch data per-request (like `getServerSideProps`)?",
+    options: [
+      "Add `export const prerender = false` and use an SSR adapter",
+      "Use `getServerSideProps()` in the frontmatter",
+      "Add `client:load` to the page",
+      "Set `dynamic = true` in astro.config.mjs",
+    ],
+    answer: 0,
+  },
+];
+
+<Quiz client:visible id="content/frontmatter-fetch" questions={quizFrontmatterFetch} />
+
+<ProgressTracker client:visible id="content/frontmatter-fetch" />

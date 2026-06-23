@@ -1,0 +1,174 @@
+---
+title: 'บทนำ: Astro สำหรับนักพัฒนา React'
+description: ทำไมต้องใช้ Astro, islands architecture หมายความว่าอะไรสำหรับนักพัฒนา React และคอร์สนี้ครอบคลุมอะไรบ้าง
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+คุณสร้าง UI ด้วย React ได้อยู่แล้ว เข้าใจ component, hook, state, และ JSX ดีอยู่แล้ว Astro ไม่ได้มาแทนที่ความรู้เหล่านั้น — มันคือวิธีส่งมอบที่แตกต่างออกไป ซึ่งนำ mental model ของ React มาใช้ในจุดที่ควรใช้ และถอยออกไปในจุดที่ไม่จำเป็น
+
+การเปลี่ยนแปลงที่ใหญ่ที่สุด: **React ส่ง JavaScript runtime ไปยังเบราว์เซอร์และ render UI ที่นั่น ส่วน Astro render UI ที่ server (หรือขณะ build) แล้วส่ง HTML ออกมา JavaScript จะถึงเบราว์เซอร์เฉพาะส่วนที่ต้องการ interactivity จริงๆ เท่านั้น**
+
+สำหรับเว็บไซต์ที่เน้นเนื้อหา — docs, หน้า marketing, blog, landing page — ความแตกต่างนี้มีนัยสำคัญมาก: Time to First Contentful Paint ที่เร็วขึ้น, bundle ที่เล็กลง, และ Core Web Vitals ที่ดีขึ้นโดยไม่ต้องปรับแต่งเอง
+
+## ทำไมต้องใช้ Astro แทน Next.js?
+
+Next.js เป็น full-stack React framework ที่ยอดเยี่ยม Astro เหมาะสมเมื่อ:
+
+- **เนื้อหาของคุณมีน้ำหนักมากกว่า interactivity** หน้า static, blog, docs site, และ marketing site แทบไม่ส่ง JavaScript เลยกับ Astro ตามค่าเริ่มต้น
+- **คุณต้องการผสมหลาย framework** Astro ให้คุณวาง React, Svelte, Vue, หรือ Preact component ไว้คู่กันได้ — หรือจะไม่ใช้เลยก็ได้
+- **คุณสนใจเรื่องขนาด bundle** islands architecture ของ Astro ทำให้แต่ละ interactive widget ถูก hydrate แยกกัน ส่วนที่เหลือของหน้าเป็น HTML ล้วนๆ
+- **คุณต้องการ routing แบบ file-based โดยไม่มี client-side router** ทุก `.astro` page ใน `src/pages/` กลายเป็น URL — ไม่มี Link component, ไม่มี router config, ไม่มี hydration overhead
+
+## สิ่งที่เปลี่ยนไปจาก React
+
+| React / Next.js | เทียบเท่าใน Astro |
+|---|---|
+| ไฟล์ component `.jsx` / `.tsx` | ไฟล์ component `.astro` |
+| Function body | Frontmatter (บล็อก `---`) |
+| `return (<JSX />)` | HTML template ด้านล่าง `---` |
+| argument `props` | `Astro.props` |
+| prop `children` | `<slot />` |
+| `useEffect` / `useState` | Framework island ที่มี directive `client:*` |
+| `getServerSideProps` | Frontmatter (`fetch` ขณะ build/request) |
+| ไฟล์ Pages Router | `src/pages/*.astro` |
+
+## สิ่งที่ยังคงเดิม
+
+- syntax `{expr}` แบบ JSX ใน template
+- การประกอบ component (`<Header />`, `<Footer />`)
+- TypeScript ทุกที่ (`interface Props`)
+- React component เดิมของคุณ — นำมาใส่เป็น island ได้เลย
+- tooling `npm`/`pnpm`, มี Vite อยู่เบื้องหลัง
+
+## คอร์สนี้ครอบคลุมอะไรบ้าง
+
+| โมดูล | สิ่งที่คุณจะได้เรียน |
+|---|---|
+| **Intro** *(โมดูลนี้)* | ทำไมต้อง Astro, islands architecture, การตั้งค่า, โครงสร้างโปรเจกต์, หน้าแรก |
+| **Components** | anatomy ของ `.astro` component, props, slots, expressions |
+| **Layouts** | shared layout, nested layout, pattern ของ `<slot />` |
+| **Routing** | routing แบบ file-based, dynamic route, หน้า 404 |
+| **Data Fetching** | `fetch` ใน frontmatter, `getStaticPaths`, content collection |
+| **Islands** | การใช้ React/Svelte/Vue component กับ directive `client:*` |
+
+## หน้า .astro แรก
+
+นี่คือการเปรียบเทียบที่กระชับที่สุด: React component ที่ render ส่วน hero กับ Astro page ที่เทียบเท่ากัน
+
+export const indexReact = `// src/app/page.tsx  (Next.js App Router)
+export default function HeroPage() {
+  return (
+    <html lang="en">
+      <head><title>My Site</title></head>
+      <body>
+        <h1>Hello from React</h1>
+        <p>This page ships a full React runtime.</p>
+      </body>
+    </html>
+  );
+}`;
+
+export const indexAstro = `---
+// src/pages/index.astro
+const title = "My Site";
+---
+<html lang="en">
+  <head><title>{title}</title></head>
+  <body>
+    <h1>Hello from Astro</h1>
+    <p>This page ships zero JavaScript.</p>
+  </body>
+</html>`;
+
+<ReactAstro client:visible react={indexReact} astro={indexAstro} />
+
+หน้า Astro ด้านบนส่ง **JavaScript ศูนย์ชิ้นไปยังเบราว์เซอร์** — ตัวแปร `title` ถูกประเมินครั้งเดียวขณะ build และฝังลงใน HTML เลย ไม่มี React runtime, ไม่มี hydration, ไม่มี virtual DOM
+
+## ตัวอย่างที่รันได้
+
+export const indexCode = `---
+const framework = "Astro";
+const audience = "React developer";
+const year = new Date().getFullYear();
+const features = ["Zero JS by default", "Islands architecture", "Use React components as islands", "File-based routing"];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Welcome to {framework}</title>
+    <style>
+      body { font-family: sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+      ul { line-height: 2; }
+      li::marker { color: #6366f1; }
+    </style>
+  </head>
+  <body>
+    <h1>Welcome, {audience}!</h1>
+    <p>This is an Astro page rendered in {year}. Check the browser DevTools — no JS bundle.</p>
+    <h2>Why Astro?</h2>
+    <ul>
+      {features.map(f => <li>{f}</li>)}
+    </ul>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={indexCode} />
+
+<Diff title="React / Next.js page vs Astro page">
+- React/Next: ส่ง JS runtime ไปยังเบราว์เซอร์; component re-render เมื่อ state/prop เปลี่ยน
+- Astro: render เป็น HTML ขณะ build/server; ส่ง JS ศูนย์ชิ้น ยกเว้นคุณเพิ่ม island ด้วย `client:*`
+- ทั้งคู่: ใช้ `{expr}` เพื่อฝังค่า, รองรับ TypeScript, ใช้ tooling `npm` / Vite
+- จุดแข็งสำคัญ: `.map()` ด้านบนสร้าง element `<li>` แบบ static — ไม่มี hydration, ไม่มี bundle
+</Diff>
+
+export const quizIntroIndex = [
+  {
+    q: "หน้า Astro ส่งอะไรไปยังเบราว์เซอร์ตามค่าเริ่มต้น?",
+    options: [
+      "React runtime เต็มรูปแบบพร้อม virtual DOM",
+      "Astro runtime ขนาดเล็กสำหรับ routing",
+      "JavaScript ศูนย์ชิ้น — มีแต่ HTML",
+      "Service worker สำหรับใช้งาน offline",
+    ],
+    answer: 2,
+  },
+  {
+    q: "โค้ดภายใน frontmatter ของ Astro (บล็อก ---) รันเมื่อใด?",
+    options: [
+      "ในเบราว์เซอร์ทุกครั้งที่โหลดหน้า",
+      "ครั้งเดียวขณะ build หรือต่อ request บน server",
+      "ภายใน Web Worker",
+      "เฉพาะเมื่อ component mount",
+    ],
+    answer: 1,
+  },
+  {
+    q: "ฟีเจอร์ใดของ Astro ที่ให้คุณใช้ React component ภายใน Astro page ได้?",
+    options: [
+      "directive `use client`",
+      "การห่อด้วย `<Suspense>`",
+      "directive hydration `client:*` บน component",
+      "การ import จาก `astro/react`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "อะไรคือสิ่งที่เทียบเท่า `getServerSideProps` ของ Next.js ใน Astro?",
+    options: [
+      "ฟังก์ชัน `loader()` ที่ export จาก page",
+      "การ export `getProps()`",
+      "การเรียก `fetch` ตรงๆ ใน frontmatter (บล็อก ---)",
+      "ไฟล์ middleware แบบ custom",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/index" questions={quizIntroIndex} />
+
+<ProgressTracker client:visible id="intro/index" />

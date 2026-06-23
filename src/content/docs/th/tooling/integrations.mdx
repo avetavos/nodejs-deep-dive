@@ -1,0 +1,173 @@
+---
+title: Integrations
+description: 'เพิ่ม React, Tailwind, sitemap และอื่นๆ ด้วย npx astro add ทำความเข้าใจ astro.config.mjs และเปรียบเทียบกับ next.config.js'
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+ใน Next.js คุณขยาย framework ผ่าน `next.config.js` — webpack plugins, Babel transforms, `rewrites`, `redirects` และ third-party packages ที่ hook เข้า build pipeline Astro มีแนวคิดชั้นหนึ่งที่เรียกว่า **integrations** ที่ครอบคลุม surface area เดียวกัน แต่ชัดเจนกว่า: แต่ละ integration คือ npm package ที่ลงทะเบียนใน `astro.config.mjs` และสามารถแตะ build pipeline, dev server และ output ได้
+
+## `astro.config.mjs` vs `next.config.js`
+
+export const configNext = `// next.config.js
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+});
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  swcMinify: true,
+  images: {
+    domains: ['images.unsplash.com'],
+  },
+  async redirects() {
+    return [
+      { source: '/old', destination: '/new', permanent: true },
+    ];
+  },
+};
+
+module.exports = withBundleAnalyzer(nextConfig);`;
+
+export const configAstro = `// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+import tailwind from '@astrojs/tailwind';
+import sitemap from '@astrojs/sitemap';
+import vercel from '@astrojs/vercel/serverless';
+
+export default defineConfig({
+  site: 'https://example.com',
+  integrations: [
+    react(),
+    tailwind(),
+    sitemap(),
+  ],
+  adapter: vercel(),
+  redirects: {
+    '/old': '/new',
+  },
+});`;
+
+<ReactAstro client:visible react={configNext} astro={configAstro} reactTitle="next.config.js" astroTitle="astro.config.mjs" />
+
+helper `defineConfig` ให้ TypeScript autocomplete เต็มรูปแบบใน editor integration ทั้งหมดอยู่ใน array `integrations: []` — ไม่มี pattern การ wrap/compose แบบ `withBundleAnalyzer(nextConfig)`
+
+## เพิ่ม integrations ด้วย `astro add`
+
+```bash
+# UI framework integrations
+npx astro add react          # @astrojs/react — เปิดใช้งาน .tsx islands
+npx astro add preact         # @astrojs/preact — ทางเลือก React-compatible ที่เบากว่า
+npx astro add svelte         # @astrojs/svelte
+npx astro add vue            # @astrojs/vue
+
+# Styling
+npx astro add tailwind       # @astrojs/tailwind — inject Tailwind เข้าทุกหน้าอัตโนมัติ
+
+# Site utilities
+npx astro add sitemap        # @astrojs/sitemap — สร้าง sitemap.xml ตอน build
+npx astro add mdx            # @astrojs/mdx    — รองรับ MDX สำหรับ content pages
+
+# SSR adapters (เลือกหนึ่งอัน)
+npx astro add vercel         # @astrojs/vercel
+npx astro add netlify        # @astrojs/netlify
+npx astro add node           # @astrojs/node (self-hosted Node.js)
+npx astro add cloudflare     # @astrojs/cloudflare
+```
+
+แต่ละคำสั่งติดตั้ง package **และ** แก้ไข `astro.config.mjs` ให้คุณ คุณสามารถแก้ไข config ด้วยตนเองภายหลังได้เสมอ
+
+## รูปแบบ integration
+
+Astro integration คือเพียง function ที่ return config object นี่คือ custom integration แบบ minimal:
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+
+function myPlugin() {
+  return {
+    name: 'my-plugin',
+    hooks: {
+      'astro:build:done': ({ dir }) => {
+        console.log('Build finished. Output:', dir.pathname);
+      },
+    },
+  };
+}
+
+export default defineConfig({
+  integrations: [myPlugin()],
+});
+```
+
+คุณจะแทบไม่ต้องเขียน custom integrations เอง — package `@astrojs/*` อย่างเป็นทางการครอบคลุมกรณีทั่วไปแล้ว — แต่การเข้าใจรูปแบบจะช่วยเมื่อคุณอ่าน source code ของ integration
+
+## ส่ง options ให้ integrations
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+import tailwind from '@astrojs/tailwind';
+
+export default defineConfig({
+  integrations: [
+    react({
+      include: ['**/interactive/**'],  // hydrate เฉพาะ components ใน dir นี้
+    }),
+    tailwind({
+      applyBaseStyles: false,          // ข้าม Tailwind's base reset
+    }),
+  ],
+});
+```
+
+<Diff title="next.config.js vs astro.config.mjs">
+- Next.js ใช้ CommonJS `module.exports`; Astro ใช้ ESM `export default defineConfig()`
+- Next.js wrap plugins ด้วย HOF pattern (`withX(nextConfig)`); Astro ใส่ทุกอย่างใน array `integrations: []`
+- `npx astro add` อัตโนมัติทั้ง installation + config; Next.js plugins ต้อง `require()` + wrap ด้วยตนเอง
+- ทั้งคู่รองรับ `redirects`, `rewrites` และ environment variable injection ที่ config layer
+</Diff>
+
+export const quizIntegrations = [
+  {
+    q: "วิธีเพิ่ม React integration ในโปรเจกต์ Astro?",
+    options: [
+      "`npm install react react-dom` เท่านั้น — Astro ตรวจจับอัตโนมัติ",
+      "`npx astro add react` — ติดตั้ง package และอัปเดต `astro.config.mjs`",
+      "เพิ่ม `jsx: 'react'` ใน `tsconfig.json`",
+      "Import React ใน frontmatter ของ `.astro`",
+    ],
+    answer: 1,
+  },
+  {
+    q: "สิ่งเทียบเท่าของ pattern `withBundleAnalyzer(nextConfig)` ใน Astro คืออะไร?",
+    options: [
+      "Wrap `defineConfig` ด้วย custom function",
+      "เพิ่ม integration ใน array `integrations: []` ใน `defineConfig`",
+      "ใช้ `astro.config.ts` แทน `.mjs` เพื่อเปิดใช้ composition",
+      "ไม่มีสิ่งเทียบเท่า — Astro ไม่รองรับ plugins",
+    ],
+    answer: 1,
+  },
+  {
+    q: "`npx astro add tailwind` แก้ไขไฟล์ใดอัตโนมัติ?",
+    options: [
+      "`tailwind.config.js`",
+      "`package.json`",
+      "`astro.config.mjs`",
+      "`src/styles/global.css`",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="tooling/integrations" questions={quizIntegrations} />
+
+<ProgressTracker client:visible id="tooling/integrations" />

@@ -1,0 +1,156 @@
+---
+title: Project Structure
+description: How Astro organises src/pages, src/components, src/layouts, public/, and astro.config.mjs — compared to a Next.js or CRA project.
+---
+
+import ReactAstro from '../../../../components/ReactAstro.tsx';
+import AstroPlayground from '../../../../components/AstroPlayground.tsx';
+import Diff from '../../../../components/Diff.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+A freshly scaffolded Astro project looks familiar if you know Next.js, but several conventions are subtly different. The most important: **`src/pages/` is the only directory Astro treats as special for routing** — everything else is up to you.
+
+## Side-by-side structure
+
+export const structureReact = `my-next-app/
+├── src/
+│   ├── app/              # App Router pages (Next 13+)
+│   │   ├── page.tsx      # → /
+│   │   └── about/
+│   │       └── page.tsx  # → /about
+│   ├── components/       # Shared React components
+│   └── lib/              # Utilities
+├── public/               # Static assets (served at /)
+├── next.config.mjs       # Framework config
+└── package.json`;
+
+export const structureAstro = `my-astro-app/
+├── src/
+│   ├── pages/            # File-based routes (special)
+│   │   ├── index.astro   # → /
+│   │   └── about.astro   # → /about
+│   ├── components/       # .astro and framework components
+│   ├── layouts/          # Layout wrappers (Astro convention)
+│   └── content/          # Content Collections (MDX, YAML, JSON)
+├── public/               # Static assets (served at /)
+├── astro.config.mjs      # Framework config
+└── package.json`;
+
+<ReactAstro client:visible react={structureReact} astro={structureAstro} />
+
+Key differences to notice:
+
+1. **`src/pages/` — not `src/app/`.** Astro uses the Pages Router mental model: a file at `src/pages/about.astro` renders at `/about`. No special `page.tsx` wrapper needed.
+2. **`src/layouts/` is a convention, not a framework rule.** Astro does not enforce a `layouts/` directory — but every Astro project uses one by convention because layout components are a first-class pattern (covered in the Layouts module).
+3. **`src/content/` is for Content Collections** — structured content like MDX blog posts, team member YAML files, or JSON data. Astro provides a typed API to query it. You would use `getStaticPaths` + `getEntry` instead of `getStaticProps` + a file read.
+4. **`astro.config.mjs` replaces `next.config.mjs`.** Same idea — framework config, integrations, Vite overrides.
+
+## The `public/` folder
+
+Both Next.js and Astro have a `public/` directory. Files placed there are served at the root URL as-is — no bundling, no transforms. A file at `public/logo.png` is available at `/logo.png`.
+
+The difference: in Next.js you reference images with the `<Image>` component for optimisation. In Astro you use a plain `<img>` tag (or Astro's built-in image optimisation — `import { Image } from 'astro:assets'`).
+
+## `astro.config.mjs`
+
+```js
+// astro.config.mjs
+import { defineConfig } from 'astro/config';
+import react from '@astrojs/react';
+import tailwind from '@astrojs/tailwind';
+
+export default defineConfig({
+  site: 'https://my-site.com',
+  integrations: [react(), tailwind()],
+  // Vite config lives inside vite: {}
+});
+```
+
+Compare to `next.config.mjs` — the shape is similar (a default export returning a config object) but the keys differ. Astro does not have `experimental`, `rewrites`, or `redirects` as top-level keys; those go through Vite or Astro middleware.
+
+## Runnable page demonstrating structure
+
+export const structureCode = `---
+// src/pages/index.astro
+// Frontmatter: runs at build/server time
+const siteName = "My Astro Site";
+const navLinks = [
+  { href: "/", label: "Home" },
+  { href: "/about", label: "About" },
+  { href: "/blog", label: "Blog" },
+];
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{siteName}</title>
+    <style>
+      body { font-family: sans-serif; margin: 0; }
+      nav { background: #1e1b4b; padding: 1rem 2rem; display: flex; gap: 1.5rem; }
+      nav a { color: #c7d2fe; text-decoration: none; font-size: 0.9rem; }
+      nav a:hover { color: #fff; }
+      main { padding: 2rem; }
+      .badge { background: #ede9fe; color: #4c1d95; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      {navLinks.map(link => (
+        <a href={link.href}>{link.label}</a>
+      ))}
+    </nav>
+    <main>
+      <span class="badge">src/pages/index.astro</span>
+      <h1>Welcome to {siteName}</h1>
+      <p>This page lives at <code>src/pages/index.astro</code> and renders at <code>/</code>.</p>
+      <p>Components go in <code>src/components/</code>, layouts in <code>src/layouts/</code>.</p>
+    </main>
+  </body>
+</html>`;
+
+<AstroPlayground client:visible code={structureCode} />
+
+<Diff title="Next.js project structure vs Astro project structure">
+- Next App Router: `src/app/page.tsx` → `/`; layouts via `layout.tsx` files in each segment folder.
+- Astro: `src/pages/index.astro` → `/`; layouts via a shared `src/layouts/` component (explicit import).
+- Both: `public/` for static assets, `package.json`, Vite under the hood, TypeScript support.
+- Astro extra: `src/content/` for Content Collections (typed MDX/YAML/JSON), `astro.config.mjs` for integrations.
+</Diff>
+
+export const quizStructure = [
+  {
+    q: "Which directory in an Astro project determines the URL routes?",
+    options: [
+      "`src/app/`",
+      "`src/routes/`",
+      "`src/pages/`",
+      "`src/views/`",
+    ],
+    answer: 2,
+  },
+  {
+    q: "What is `src/content/` used for in Astro?",
+    options: [
+      "Storing React context providers",
+      "Content Collections — typed MDX, YAML, and JSON data queried with Astro's content API",
+      "The production build output",
+      "Shared CSS files",
+    ],
+    answer: 1,
+  },
+  {
+    q: "A file placed in `public/logo.png` is available at which URL?",
+    options: [
+      "`/public/logo.png`",
+      "`/assets/logo.png`",
+      "`/logo.png`",
+      "It must be imported to be accessible",
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="intro/project-structure" questions={quizStructure} />
+
+<ProgressTracker client:visible id="intro/project-structure" />
