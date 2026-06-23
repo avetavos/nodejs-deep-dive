@@ -1,6 +1,60 @@
 ---
 title: Node.js Deep Dive
-description: Master the Node.js runtime and JavaScript for the server.
+description: เชี่ยวชาญ runtime ของ Node.js และ JavaScript ฝั่งเซิร์ฟเวอร์ตั้งแต่พื้นฐาน
 template: splash
+hero:
+  tagline: เจาะลึกทั้งภาษาและ runtime — event loop, async, streams, core API, modules และ tooling สนิปเป็ตภาษา JavaScript รันสดในเบราว์เซอร์ ส่วนตัวอย่างที่ใช้ Node API เปิดเป็นโปรเจกต์ Node จริงบน StackBlitz
+  actions:
+    - text: เริ่มที่นี่
+      link: /nodejs-deep-dive/th/js-essentials/
+      icon: right-arrow
+      variant: primary
+    - text: ข้ามไปที่ Event Loop
+      link: /nodejs-deep-dive/th/event-loop-async/
+      icon: rocket
 ---
-Coming soon.
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## สิ่งที่คุณจะได้เรียน
+
+<CardGrid>
+  <Card title="JavaScript Essentials" icon="seti:javascript">
+    type &amp; coercion, scope &amp; closure, `this`, ESM เทียบ CommonJS modules [เริ่ม →](/nodejs-deep-dive/th/js-essentials/)
+  </Card>
+  <Card title="Event Loop & Async" icon="rocket">
+    event loop เธรดเดียว, callback, promise, async/await, micro/macrotask, timer [เรียน async →](/nodejs-deep-dive/th/event-loop-async/)
+  </Card>
+  <Card title="Core APIs" icon="setting">
+    process &amp; env, Buffer, โมดูล fs และ EventEmitter [สำรวจ →](/nodejs-deep-dive/th/core-apis/)
+  </Card>
+  <Card title="Streams & I/O" icon="bars">
+    readable &amp; writable stream, pipe/pipeline และ backpressure [สตรีม →](/nodejs-deep-dive/th/streams/)
+  </Card>
+  <Card title="HTTP & Networking" icon="laptop">
+    http server, การ routing เอง, fetch ขาออก, JSON API เล็ก ๆ [เสิร์ฟ →](/nodejs-deep-dive/th/http-networking/)
+  </Card>
+  <Card title="Modules & npm" icon="open-book">
+    package.json, module resolution, dependencies, การ publish [จัดการแพ็กเกจ →](/nodejs-deep-dive/th/modules-npm/)
+  </Card>
+  <Card title="Testing & Tooling" icon="approve-check">
+    ตัวรันเทสต์ในตัว node:test, debugging, performance, ecosystem [ส่งงานจริง →](/nodejs-deep-dive/th/testing-tooling/)
+  </Card>
+</CardGrid>
+
+## คอร์สนี้ทำงานยังไง
+
+<CardGrid>
+  <Card title="รันในเบราว์เซอร์" icon="rocket">
+    ตัวอย่างภาษา JavaScript รันสดในแซนด์บ็อกซ์ iframe — แก้แล้วรันใหม่ได้ ไม่ต้องติดตั้ง
+  </Card>
+  <Card title="Node จริงเมื่อจำเป็น" icon="external">
+    ตัวอย่างที่ใช้ Node API (fs, http, streams) เปิดเป็นโปรเจกต์ Node จริงบน StackBlitz ด้วยคลิกเดียว
+  </Card>
+  <Card title="แบบทดสอบ & ความคืบหน้า" icon="bars">
+    ทบทวนความเข้าใจหลังแต่ละบท ความคืบหน้าถูกบันทึกไว้ในเครื่อง
+  </Card>
+  <Card title="สองภาษา" icon="translate">
+    มีทั้งภาษาอังกฤษและไทย — สลับได้ตลอดจากแถบด้านบน
+  </Card>
+</CardGrid>

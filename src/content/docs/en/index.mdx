@@ -1,6 +1,60 @@
 ---
 title: Node.js Deep Dive
-description: Master the Node.js runtime and JavaScript for the server.
+description: Master the Node.js runtime and server-side JavaScript from the ground up.
 template: splash
+hero:
+  tagline: Go deep on the language and the runtime — the event loop, async, streams, core APIs, modules, and tooling. Language snippets run live in your browser; Node-API examples open in a real Node project on StackBlitz.
+  actions:
+    - text: Start here
+      link: /nodejs-deep-dive/en/js-essentials/
+      icon: right-arrow
+      variant: primary
+    - text: Jump to the Event Loop
+      link: /nodejs-deep-dive/en/event-loop-async/
+      icon: rocket
 ---
-Coming soon.
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What you'll learn
+
+<CardGrid>
+  <Card title="JavaScript Essentials" icon="seti:javascript">
+    Types &amp; coercion, scope &amp; closures, `this`, ESM vs CommonJS modules. [Start →](/nodejs-deep-dive/en/js-essentials/)
+  </Card>
+  <Card title="Event Loop & Async" icon="rocket">
+    The single-threaded event loop, callbacks, promises, async/await, micro/macrotasks, timers. [Learn async →](/nodejs-deep-dive/en/event-loop-async/)
+  </Card>
+  <Card title="Core APIs" icon="setting">
+    process &amp; env, Buffer, the fs module, and EventEmitter. [Explore →](/nodejs-deep-dive/en/core-apis/)
+  </Card>
+  <Card title="Streams & I/O" icon="bars">
+    Readable &amp; writable streams, pipe/pipeline, and backpressure. [Stream →](/nodejs-deep-dive/en/streams/)
+  </Card>
+  <Card title="HTTP & Networking" icon="laptop">
+    The http server, manual routing, outbound fetch, a tiny JSON API. [Serve →](/nodejs-deep-dive/en/http-networking/)
+  </Card>
+  <Card title="Modules & npm" icon="open-book">
+    package.json, module resolution, dependencies, publishing. [Package →](/nodejs-deep-dive/en/modules-npm/)
+  </Card>
+  <Card title="Testing & Tooling" icon="approve-check">
+    The built-in node:test runner, debugging, performance, the ecosystem. [Ship it →](/nodejs-deep-dive/en/testing-tooling/)
+  </Card>
+</CardGrid>
+
+## How this course works
+
+<CardGrid>
+  <Card title="Runs in your browser" icon="rocket">
+    JavaScript language examples execute live in a sandboxed iframe — edit and re-run, no setup.
+  </Card>
+  <Card title="Real Node when it counts" icon="external">
+    Examples using Node APIs (fs, http, streams) open in a real Node project on StackBlitz with one click.
+  </Card>
+  <Card title="Quizzes & progress" icon="bars">
+    Check your understanding after each lesson; your progress is saved locally.
+  </Card>
+  <Card title="Bilingual" icon="translate">
+    Available in English and ไทย — switch anytime from the top bar.
+  </Card>
+</CardGrid>
