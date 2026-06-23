@@ -1,6 +1,6 @@
-# Astro for React Developers
+# Node.js Deep Dive
 
-A bilingual, interactive course that teaches **Astro** to developers who already know **React/Next**, using a comparison-first approach. Every concept is introduced from the React perspective first (component → `.astro` file, function body → server-side `---` frontmatter, returned JSX → HTML-first template, props → `Astro.props`, `children` → `<slot>`, full-app hydration → **islands** with `client:` directives, `getServerSideProps`/`useEffect` → top-level `await` in frontmatter), then mapped to the Astro equivalent — with the key differences called out. A recurring theme: **you can keep using your React components** inside Astro as islands.
+A bilingual (EN/TH), interactive, standalone course that teaches the **Node.js runtime and server-side JavaScript** in depth — from JavaScript essentials and the event loop to streams, core APIs, modules/npm, and tooling. It is language-core focused (the runtime and the language), not a framework tutorial.
 
 ## Tech Stack
 
@@ -8,14 +8,12 @@ A bilingual, interactive course that teaches **Astro** to developers who already
 | ----- | ---------- |
 | Site framework | [Astro 6](https://astro.build) + [Starlight 0.40](https://starlight.astro.build) |
 | UI islands | [Preact](https://preactjs.com) (via `@astrojs/preact`) |
-| Runnable Astro | **"Open in StackBlitz"** — each example shows the `.astro` code with a button that opens a real, runnable Astro project in [StackBlitz](https://stackblitz.com) (WebContainer, in-browser) via the StackBlitz SDK; `astro.new` fallback |
+| Runnable code | **Hybrid `<NodeRunner>`** — pure-JS snippets run live in a sandboxed iframe (editable; `console.*` output captured); Node-API snippets show an "Open in StackBlitz" button that opens a real Node project (WebContainer) via the StackBlitz SDK |
 | Unit tests | [Vitest](https://vitest.dev) + `@testing-library/preact` |
 | Styling | Starlight default + custom CSS (`src/styles/custom.css`) |
 | i18n | Starlight built-in, `defaultLocale: 'en'`, locales: `en` + `th` |
 
 ## Commands
-
-Run all commands from the project root.
 
 ```bash
 npm install        # Install dependencies
@@ -25,78 +23,58 @@ npm run preview    # Preview the production build locally
 npm test           # Run Vitest unit tests
 ```
 
-> There is **no runner build step** — example Astro code runs on the external StackBlitz service via the "Open in StackBlitz" button (no backend, no embedded compiler).
+> No runner build step — JavaScript runs in the browser; Node examples run on StackBlitz. No backend.
 
 ## Content Structure
 
 ```
 src/content/docs/
-  en/              # English content — served at /en/...
-    intro/
-    components/
-    islands/
-    routing/
-    content/
-    styling/
-    tooling/
-    index.mdx      # EN landing page (splash template)
-  th/              # Thai content — served at /th/...
+  en/                  # English — served at /en/...
+    js-essentials/
+    event-loop-async/
+    core-apis/
+    streams/
+    http-networking/
+    modules-npm/
+    testing-tooling/
+    index.mdx          # EN landing (splash)
+  th/                  # Thai — served at /th/...
     (same module directories)
-    index.mdx      # TH landing page (splash template)
+    index.mdx          # TH landing (splash)
 ```
 
 ### The 7 Modules
 
-| Directory | Module | Topics |
+| Directory | Module | Runner |
 | --------- | ------ | ------ |
-| `intro` | Introduction & Setup | Why Astro, islands architecture, MPA vs SPA, ship-less-JS, first page |
-| `components` | .astro Components | Frontmatter (server), `Astro.props`, slots, expressions, zero-JS by default vs JSX |
-| `islands` | Islands & Using React | `client:` directives, partial vs full-app hydration, **using React in Astro** |
-| `routing` | Routing & Layouts | File-based routing, dynamic routes + `getStaticPaths`, layouts vs react-router/Next |
-| `content` | Content & Data | Frontmatter `await`, content collections vs `getServerSideProps`/`useEffect` |
-| `styling` | Styling | Scoped `<style>`, global styles, `define:vars`/`class:list`, Tailwind |
-| `tooling` | Tooling, Testing & Deployment | `astro` CLI, integrations, `astro check`, static vs SSR, deploy |
-
-### Lesson File IDs
-
-Content IDs follow the `<module>/<slug>` convention, e.g. `components/props`. The Starlight sidebar uses `autogenerate: { directory }` per locale root.
+| `js-essentials` | JavaScript Essentials | in-browser JS (modules lesson: node) |
+| `event-loop-async` | Event Loop & Async | in-browser JS |
+| `core-apis` | Core APIs (process/Buffer/fs/events) | node (StackBlitz) |
+| `streams` | Streams & I/O | node (StackBlitz) |
+| `http-networking` | HTTP & Networking | node (StackBlitz) |
+| `modules-npm` | Modules & npm | code / node |
+| `testing-tooling` | Testing & Tooling | code / node |
 
 ### Lesson Template
 
-1. **Intro** — React-analogy framing
-2. **Concept** — prose explanation
-3. **ReactAstro** — `<ReactAstro react={...} astro={...} />` side-by-side React ↔ Astro code
-4. **AstroPlayground** — `<AstroPlayground code={...} />` a complete runnable `.astro` page + "Open in StackBlitz" button (omitted in CLI/multi-file lessons, which use code blocks)
-5. **Diff** — `<Diff>` callout for key React → Astro differences
-6. **Quiz** — `<Quiz questions={...} />`
-7. **ProgressTracker** — `<ProgressTracker id="module/slug" />` (always last)
+frontmatter (`title`, `description`, `sidebar.order`) → imports → concept intro → prose → hoisted `export const ...Code` + `<NodeRunner code={...} [node] />` → `<Callout>` (key point / gotcha) → `<Quiz>` → `<ProgressTracker>` (last). IDs follow `<module>/<slug>`.
 
-Code is hoisted into `export const` template literals and passed by reference.
+> **⚠️ Authoring notes:**
+> - **`<NodeRunner code={...} />`** runs JS in the browser (editable, click Run). **`<NodeRunner code={...} node />`** is for snippets needing the Node runtime (process/Buffer/fs/http/streams/require/npm) — code + "Open in StackBlitz", no in-browser run.
+> - **In `export const` snippets, prefer string concatenation over template literals** to avoid escaping. If you must use a template literal, escape interpolation as `\${...}` and backticks as `` \` ``.
+> - **Never put a bare `{...}` in prose or headings** — keep object/destructuring examples in backtick code spans or fenced ```js blocks.
+> - **Internal links must include the base path**, e.g. `/nodejs-deep-dive/en/event-loop-async/`.
+> - **Do NOT run a `\n`/`\t`-doubling escaping codemod** on this content — it corrupts indentation. Verify by building + browser-testing instead.
 
-> **⚠️ Authoring gotchas (MDX is sensitive to braces; Astro templates use `{ }`):**
-> - **Never put a bare `{...}` in prose or headings** — Astro `{expr}`/`{items.map(...)}` in a heading or paragraph is parsed as a JS expression and breaks the build. Keep them inside backtick code spans or `export const` strings. (Quiz strings, `<Diff title="…">` attributes, and frontmatter are safe — MDX doesn't parse those.)
-> - **In `export const` code literals, escape `${`→`\${`** — JS/Astro template-literal interpolation (e.g. `` `btn--${x}` ``) inside an `export const` backtick string must be `\${`; double-escape `\\n`/`\\t` too.
-> - **Frontmatter `title`/`description`**: single-quote values with a colon/backtick (double-quote if they contain an apostrophe); never use a `\` escape inside a YAML scalar.
-> - **Internal links must include the base path**, e.g. `/astro-for-react-developers/en/components/props/`.
+## How the Hybrid Runner Works
 
-## How the Runner Works
+`<NodeRunner>` (`src/components/NodeRunner.tsx`) has two modes, both backed by pure helpers in `src/components/node-runner.ts`:
 
-Astro renders at build/SSR time, so a single `.astro` component can't be compiled and rendered client-side. Instead, `<AstroPlayground>` (`src/components/AstroPlayground.tsx`) shows the `.astro` source and an **"Open in StackBlitz ▸"** button that lazy-loads the [StackBlitz SDK](https://developer.stackblitz.com/platform/api/javascript-sdk) from esm.sh and calls `sdk.openProject(...)` with a minimal runnable Astro project (`src/components/astro-project.ts` builds `package.json` + `astro.config.mjs` + your snippet as `src/pages/index.astro`). StackBlitz boots a WebContainer dev server in the browser. If the SDK fails, it copies the code and opens `astro.new`.
+- **JS mode (default):** `buildJsSrcdoc(code)` builds an iframe `srcdoc` that overrides `console.*` to print into the page and runs the snippet in an async IIFE. Sync, promises, microtasks, and `setTimeout` all execute with correct ordering. Editable + re-runnable.
+- **Node mode (`node` prop):** `buildNodeProject(code)` builds a minimal Node project (`package.json` with `"type":"module"` + `index.js`); the button calls the StackBlitz SDK's `openProject` to launch it in a WebContainer. Falls back to opening `stackblitz.com/fork/node` + copying the code.
 
 ## Deployment
 
-Fully static (`output: 'static'`). Build output → `dist/`. Deploy to any static host (GitHub Pages, Netlify, Vercel, Cloudflare Pages).
+Fully static (`output: 'static'`) → `dist/`. Deploys to GitHub Pages via `.github/workflows/deploy.yml` (build with `withastro/action` on Node 22, publish with `actions/deploy-pages`).
 
-### GitHub Pages (configured)
-
-Deploys via `.github/workflows/deploy.yml` (build with `withastro/action` on Node 22, publish with `actions/deploy-pages`).
-
-One-time setup:
-
-1. Create a GitHub repo and push (`main`).
-2. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
-3. Confirm the base path in `astro.config.mjs`:
-   - **Project site** (`https://USER.github.io/REPO/`): `site: 'https://USER.github.io'`, `base: '/REPO'` (currently `avetavos` / `astro-for-react-developers`).
-   - **User/org site** or **custom domain**: set `site` and **remove `base`** (served at root).
-
-If you change `base`, update the base-prefixed links in `src/content/docs/**` (landing pages and module index lesson tables).
+One-time setup: create the repo, push `main`, set **Settings → Pages → Source: GitHub Actions**. The base path in `astro.config.mjs` is `site: 'https://avetavos.github.io'`, `base: '/nodejs-deep-dive'`. If you change `base`, update the base-prefixed links in `src/content/docs/{en,th}/index.mdx`.
