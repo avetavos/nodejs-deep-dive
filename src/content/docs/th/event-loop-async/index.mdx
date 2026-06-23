@@ -1,5 +1,88 @@
 ---
-title: Event Loop & Async
-description: The event loop, callbacks, promises, and async/await in Node.js.
+title: 'Event Loop & Async'
+description: 'ภาพรวมของ event loop, รูปแบบ async และสิ่งที่โมดูลนี้ครอบคลุม'
+sidebar:
+  order: 1
 ---
-Coming soon.
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Event Loop คืออะไร?
+
+JavaScript ใน Node.js ทำงานบน **เธรดเดียว** (single thread) แต่กลับรองรับการเชื่อมต่อพร้อมกันได้นับพันโดยไม่บล็อก ความลับอยู่ที่ **event loop** — กลไกที่มอบงานช้า (อ่านไฟล์, เรียก network) ให้ระบบปฏิบัติการจัดการ แล้วค่อยประมวลผลผลลัพธ์เมื่อมันพร้อม
+
+แก่นของ runtime มีโครงสร้างสำคัญสามอย่าง:
+
+- **Call stack** — ที่ที่โค้ดแบบ synchronous ทำงาน ทีละเฟรม
+- **Microtask queue** — เก็บ callback ของ Promise และ `queueMicrotask` ระบายจนหมดหลังจากทุก task
+- **Macrotask queue** (task queue) — เก็บ callback ของ `setTimeout`/`setInterval` ประมวลผลทีละหนึ่ง macrotask ต่อรอบ event loop
+
+ลูปทำงานต่อเนื่อง: หยิบ macrotask → รันมัน → ระบาย microtask ทั้งหมด → หยิบ macrotask ถัดไป
+
+## สิ่งที่โมดูลนี้ครอบคลุม
+
+| บทเรียน | หัวข้อ |
+|--------|-------|
+| Call Stack | การทำงานแบบ synchronous และทำไมการบล็อกจึงสำคัญ |
+| Callbacks | รูปแบบ async ดั้งเดิมและขนบ error-first ของ Node |
+| Promises | สถานะ, การ chain และ combinator |
+| Async/Await | อ่านโค้ด async ได้เหมือนโค้ด synchronous |
+| Microtasks & Macrotasks | ลำดับความสำคัญของคิวและลำดับการระบาย |
+| Timers | `setTimeout`, `setInterval` และความแม่นยำของ timer |
+
+## เดโม async ตัวแรก
+
+สนิปเป็ตด้านล่างรันโค้ดสามชิ้น สังเกตว่ามัน **ไม่ได้** ทำงานจากบนลงล่างตามลำดับที่เขียน — log แบบ synchronous ทำงานก่อน, callback ของ Promise ทำงานถัดมา (microtask), และ callback ของ `setTimeout` ทำงานเป็นอันสุดท้าย (macrotask)
+
+```js
+// อะไรทำงานก่อน?
+console.log('A — sync');
+Promise.resolve().then(() => console.log('B — microtask (Promise)'));
+setTimeout(() => console.log('C — macrotask (setTimeout)'), 0);
+```
+
+ลองรันเพื่อยืนยันลำดับ:
+
+export const indexDemoCode = `
+console.log('A — sync');
+Promise.resolve().then(function() { console.log('B — microtask (Promise)'); });
+setTimeout(function() { console.log('C — macrotask (setTimeout)'); }, 0);
+`;
+
+<NodeRunner client:visible code={indexDemoCode} />
+
+ผลลัพธ์จะเป็น `A` แล้วตามด้วย `B` แล้ว `C` เสมอ — event loop รับประกันลำดับนี้
+
+<Callout title="เธรดเดียว ไม่บล็อก">
+Node.js รัน JavaScript ของคุณบนเธรดเดียว มันยังตอบสนองได้ตลอดเพราะมอบงาน I/O ให้ OS จัดการและประมวลผลผลลัพธ์แบบ asynchronous
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'หลังจากรัน task หนึ่ง event loop ประมวลผลคิวตามลำดับใด?',
+    options: [
+      'Macrotask ก่อน แล้วค่อย microtask',
+      'Microtask ก่อน แล้วค่อยไป macrotask ถัดไป',
+      'ประมวลผลทั้งสองคิวพร้อมกัน',
+      'Microtask กับ macrotask สลับกันทีละอัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ข้อใดต่อไปนี้ถูกใส่ลงใน microtask queue?',
+    options: [
+      'callback ของ setTimeout',
+      'callback ของ setInterval',
+      'callback ของ Promise .then',
+      'handler ของ DOM click event',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/index" />

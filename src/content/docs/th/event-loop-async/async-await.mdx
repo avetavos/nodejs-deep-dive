@@ -1,0 +1,140 @@
+---
+title: 'Async / Await'
+description: 'เขียนโค้ด async ให้อ่านได้เหมือนโค้ด synchronous ด้วย async/await'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## async function
+
+คีย์เวิร์ด `async` หน้าการประกาศฟังก์ชันทำให้มันเป็น **async function** ฟังก์ชัน async คืน Promise เสมอ — แม้คุณจะ `return` ค่าธรรมดา มันจะถูกห่อด้วย `Promise.resolve(value)` โดยอัตโนมัติ
+
+```js
+async function greet() {
+  return 'hello';
+}
+
+greet().then(function(v) { console.log(v); }); // hello
+```
+
+## await
+
+ภายในฟังก์ชัน async `await` หยุดการทำงานชั่วคราวจนกว่า Promise จะ settle แล้วทำงานต่อด้วยค่าที่ resolve มา ส่วนที่เหลือของโปรแกรมยังทำงานต่อระหว่างที่ await
+
+```js
+async function loadUser() {
+  var user = await fetchUser(42);   // หยุดตรงนี้จนกว่า fetchUser resolve
+  var posts = await fetchPosts(user.id);
+  return posts;
+}
+```
+
+## การจัดการ error
+
+ห่อ expression `await` ด้วย `try/catch` เพื่อจัดการการ reject:
+
+```js
+async function run() {
+  try {
+    var data = await fetchData();
+    console.log(data);
+  } catch (err) {
+    console.error('Failed:', err.message);
+  }
+}
+```
+
+## Sequential vs concurrent
+
+การเรียก `await` สองครั้งแบบเรียงลำดับจะทำงานทีละอัน — อันที่สองเริ่มหลังอันแรกทำเสร็จเท่านั้น:
+
+```js
+var a = await fetchA();  // รอ
+var b = await fetchB();  // แล้วรออีกครั้ง
+```
+
+หากต้องการรันทั้งสองพร้อมกัน ให้เริ่ม Promise ก่อนแล้ว await มันพร้อมกัน:
+
+```js
+var [a, b] = await Promise.all([fetchA(), fetchB()]);
+```
+
+## เดโมที่รันได้
+
+สนิปเป็ตด้านล่างใช้ตัวช่วย `fakeFetch` (อิง setTimeout) เพื่อจำลองการเรียก async มันเรียกแบบเรียงลำดับก่อน แล้วเรียกทั้งสองแบบขนานด้วย `Promise.all`
+
+export const asyncAwaitCode = `
+function fakeFetch(label) {
+  return new Promise(function(resolve) {
+    setTimeout(function() { resolve(label); }, 0);
+  });
+}
+
+async function runSequential() {
+  var a = await fakeFetch('A');
+  var b = await fakeFetch('B');
+  console.log('Sequential: ' + a + ' then ' + b);
+}
+
+async function runParallel() {
+  var results = await Promise.all([fakeFetch('A'), fakeFetch('B')]);
+  console.log('Parallel: ' + results[0] + ' and ' + results[1]);
+}
+
+async function main() {
+  await runSequential();
+  await runParallel();
+}
+
+main();
+`;
+
+<NodeRunner client:visible code={asyncAwaitCode} />
+
+ผลลัพธ์: `Sequential: A then B`, แล้ว `Parallel: A and B`
+
+<Callout title="การ await ในลูปทำให้ทำงานเรียงลำดับ">
+การใช้ `await` ในลูป `for` ทำให้แต่ละรอบทำงานทีละอัน หากต้องการรันงานพร้อมกัน ให้รวบรวม Promise ไว้ในอาร์เรย์แล้วส่งให้ `Promise.all`
+</Callout>
+
+export const asyncAwaitQuiz = [
+  {
+    q: 'async function คืนค่าอะไรเสมอ?',
+    options: [
+      'ค่าดิบที่คุณส่งให้ return',
+      'Promise',
+      'ฟังก์ชัน callback',
+      'undefined',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'วิธีที่ถูกต้องในการจัดการการ reject จาก Promise ที่ await คือข้อใด?',
+    options: [
+      'ตรวจค่าที่คืนมาว่าเป็น null หรือไม่',
+      'แนบ .catch() หลัง expression ที่ await',
+      'ห่อ await ไว้ในบล็อก try/catch',
+      'ใช้ if/else หลัง await',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'รูปแบบใดรันสองงาน async พร้อมกันแทนที่จะเรียงลำดับ?',
+    options: [
+      'var a = await fetchA(); var b = await fetchB();',
+      'var [a, b] = await Promise.all([fetchA(), fetchB()]);',
+      'await fetchA(); await fetchB();',
+      'fetchA().then(function() { return fetchB(); });',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/async-await" questions={asyncAwaitQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/async-await" />

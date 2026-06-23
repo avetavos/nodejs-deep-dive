@@ -1,0 +1,116 @@
+---
+title: 'Timers'
+description: 'setTimeout, setInterval, clearTimeout และพฤติกรรมของ timer ใน event loop'
+sidebar:
+  order: 7
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## setTimeout
+
+`setTimeout(fn, delay)` จัดคิวให้ `fn` ทำงานเป็น **macrotask** หลังจากผ่านไปอย่างน้อย `delay` มิลลิวินาที ค่า delay เป็น **ค่าต่ำสุด** — ไม่ใช่การรับประกัน ถ้า call stack ไม่ว่างตอน timer ทำงาน callback จะรอจนกว่า stack จะว่าง
+
+```js
+var id = setTimeout(function() {
+  console.log('Runs after at least 100 ms');
+}, 100);
+
+// ยกเลิกก่อนมันทำงาน:
+clearTimeout(id);
+```
+
+## setInterval
+
+`setInterval(fn, delay)` จัดคิวให้ `fn` ซ้ำ ๆ ทุก `delay` ms ใช้ `clearInterval` เพื่อหยุดมัน
+
+```js
+var count = 0;
+var id = setInterval(function() {
+  count++;
+  console.log('tick', count);
+  if (count >= 3) clearInterval(id);
+}, 500);
+```
+
+## setTimeout ที่มี delay เป็น 0
+
+`setTimeout(fn, 0)` **ไม่ได้** หมายถึง "รันทันที" มันจัดคิว `fn` เป็น macrotask microtask ที่ค้างอยู่ (callback ของ Promise, `queueMicrotask`) จะทำงานก่อน
+
+```js
+setTimeout(function() { console.log('Timer'); }, 0);
+Promise.resolve().then(function() { console.log('Promise'); });
+// Output: Promise, then Timer
+```
+
+## queueMicrotask
+
+หากต้องการจัดคิว callback ให้ทำงานก่อน macrotask ถัดไป ใช้ `queueMicrotask`:
+
+```js
+queueMicrotask(function() {
+  console.log('This runs in the microtask queue, before any timer');
+});
+```
+
+## เดโมที่รันได้
+
+เดโมนี้แสดงว่า `setTimeout(fn, 0)` ยังทำงาน **หลัง** `.then` ของ Promise ที่ resolve แล้ว เพราะ callback ของ timer เป็น macrotask และ microtask ระบายก่อน
+
+export const timersCode = `
+setTimeout(function() {
+  console.log('Timer ran second');
+}, 0);
+
+Promise.resolve().then(function() {
+  console.log('Promise ran first');
+});
+`;
+
+<NodeRunner client:visible code={timersCode} />
+
+ผลลัพธ์จะเป็นเสมอ: `Promise ran first`, แล้ว `Timer ran second`
+
+<Callout title="delay คือค่าต่ำสุด ไม่ใช่การรับประกัน">
+`setTimeout(fn, 100)` หมายถึง callback ทำงานไม่เร็วกว่า 100 ms แต่ถ้า call stack ไม่ว่างหรือมี microtask อื่นกำลังทำงาน มันอาจทำงานช้ากว่านั้น อย่าพึ่งพาความแม่นยำของ timer แบบเป๊ะ ๆ เพื่อความถูกต้องของโปรแกรม
+</Callout>
+
+export const timersQuiz = [
+  {
+    q: 'setTimeout(fn, 0) รับประกันหรือไม่ว่าจะรัน fn ทันทีหลังโค้ด synchronous ปัจจุบัน?',
+    options: [
+      'ใช่ — delay 0 หมายถึงรันเร็วที่สุดก่อนอย่างอื่น',
+      'ไม่ — มันจัดคิว fn เป็น macrotask; microtask ที่ค้างอยู่ทำงานก่อน',
+      'ใช่ — แต่เฉพาะเมื่อไม่มี timer อื่นค้างอยู่',
+      'ไม่ — setTimeout รออย่างน้อย 4 ms เสมอไม่ว่าค่า delay จะเป็นเท่าใด',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณหยุด setInterval ไม่ให้ทำงานอีกได้อย่างไร?',
+    options: [
+      'เรียก clearTimeout ด้วย ID ของ interval',
+      'ตั้งตัวแปร interval เป็น null',
+      'เรียก clearInterval ด้วย ID ของ interval',
+      'return false จากภายใน callback ของ interval',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'ฟังก์ชันใดจัดคิว callback ใน microtask queue (ไม่ใช่ timer queue)?',
+    options: [
+      'setTimeout(fn, 0)',
+      'setImmediate(fn)',
+      'setInterval(fn, 0)',
+      'queueMicrotask(fn)',
+    ],
+    answer: 3,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/timers" questions={timersQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/timers" />

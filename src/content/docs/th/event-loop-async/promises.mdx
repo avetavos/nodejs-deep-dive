@@ -1,0 +1,114 @@
+---
+title: 'Promises'
+description: 'สถานะของ Promise, การ chain และ Promise combinator'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Promise คืออะไร?
+
+**Promise** คือออบเจ็กต์ที่แทนค่าที่จะพร้อมใช้งานในอนาคต มันมีสามสถานะ:
+
+- **Pending** — งานยังดำเนินอยู่
+- **Fulfilled** — งานสำเร็จ Promise ถือค่าผลลัพธ์ไว้
+- **Rejected** — งานล้มเหลว Promise ถือ error ไว้
+
+Promise เปลี่ยนจาก pending ไปเป็น fulfilled หรือ rejected — แล้วไม่ย้อนกลับ เมื่อ settle แล้วจะคงอยู่อย่างนั้น
+
+```js
+var p = new Promise(function(resolve, reject) {
+  // เรียก resolve(value) เพื่อ fulfill หรือ reject(error) เพื่อ reject
+  resolve('hello');
+});
+```
+
+## การ chain ด้วย .then / .catch / .finally
+
+`.then(onFulfilled)` คืน Promise ใหม่ ทำให้ chain ขั้นตอนต่อกันได้ `.catch(onRejected)` จัดการการ reject `.finally(fn)` ทำงานไม่ว่าผลจะเป็นอย่างไร — มีประโยชน์สำหรับการ cleanup
+
+```js
+fetchData()
+  .then(function(data) { return process(data); })
+  .then(function(result) { console.log('Done:', result); })
+  .catch(function(err) { console.error('Failed:', err.message); })
+  .finally(function() { console.log('Cleanup'); });
+```
+
+## Promise combinator
+
+| Combinator | พฤติกรรม |
+|------------|----------|
+| `Promise.all(arr)` | resolve เมื่อทุกตัว resolve; reject ทันทีที่มีตัวแรก reject |
+| `Promise.race(arr)` | settle ด้วย Promise ตัวแรกที่ settle (ไม่ว่า fulfilled หรือ rejected) |
+| `Promise.allSettled(arr)` | resolve เมื่อทุกตัว settle; ให้ผลของแต่ละตัว (ไม่เคย reject) |
+| `Promise.any(arr)` | resolve ด้วยตัวแรกที่ fulfilled; reject เฉพาะเมื่อทุกตัว reject |
+
+## เดโมที่รันได้
+
+สนิปเป็ตสร้าง Promise สองตัวที่ resolve ทันทีด้วยค่าคงที่ chain ด้วย `.then` ใช้ `Promise.all` และเพิ่ม `.finally` สำหรับ cleanup
+
+export const promisesCode = `
+var p1 = Promise.resolve('data-A');
+var p2 = Promise.resolve('data-B');
+
+p1.then(function(data) {
+  console.log('Fetched: ' + data);
+  return Promise.all([p1, p2]);
+}).then(function(results) {
+  console.log('All done: ' + results[0] + ' and ' + results[1]);
+}).catch(function(err) {
+  console.log('Error: ' + err.message);
+}).finally(function() {
+  console.log('Finally: cleanup');
+});
+`;
+
+<NodeRunner client:visible code={promisesCode} />
+
+ผลลัพธ์จะเป็นเสมอ: `Fetched: data-A`, แล้ว `All done: data-A and data-B`, แล้ว `Finally: cleanup`
+
+<Callout title="แนบ catch เสมอ">
+unhandled promise rejection สามารถทำให้โปรเซส Node ล่ม (หรือ log คำเตือนใน Node เวอร์ชันใหม่) จง chain `.catch()` หรือใช้ try/catch กับ async/await เสมอ
+</Callout>
+
+export const promisesQuiz = [
+  {
+    q: 'สถานะใดของ Promise หมายถึงงานสำเร็จเรียบร้อย?',
+    options: [
+      'Pending',
+      'Resolved',
+      'Fulfilled',
+      'Settled',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Promise.all ทำอะไรเมื่อ Promise ตัวหนึ่งในอินพุต reject?',
+    options: [
+      'เพิกเฉยต่อการ reject และรอตัวที่เหลือ',
+      'reject ทันทีด้วย error นั้น',
+      'resolve ด้วย undefined สำหรับช่องนั้น',
+      'ลองทำ Promise ที่ reject ใหม่',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'combinator ใด resolve เมื่อ Promise อินพุตทุกตัว settle และไม่เคย reject?',
+    options: [
+      'Promise.all',
+      'Promise.race',
+      'Promise.any',
+      'Promise.allSettled',
+    ],
+    answer: 3,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/promises" questions={promisesQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/promises" />

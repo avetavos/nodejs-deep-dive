@@ -1,0 +1,125 @@
+---
+title: 'The Call Stack'
+description: 'โค้ด synchronous ทำงานบน call stack อย่างไร และทำไมการบล็อกมันจึงสำคัญ'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Call stack คืออะไร?
+
+**Call stack** เป็นโครงสร้างข้อมูลแบบ LIFO (Last In, First Out) ที่ติดตามฟังก์ชันที่กำลังทำงานอยู่ ทุกครั้งที่ฟังก์ชันถูกเรียก จะมี **เฟรม** (frame) ใหม่ถูก push ขึ้น stack เมื่อฟังก์ชัน return เฟรมของมันจะถูก pop ออก
+
+```js
+function greet(name) {
+  return 'Hello, ' + name;
+}
+
+function main() {
+  var msg = greet('Node');
+  console.log(msg);
+}
+
+main();
+// Stack ที่จุดสูงสุด: [main] → [main, greet]
+// หลัง greet return: [main]
+// หลัง main return: []
+```
+
+เอนจินทำงานได้ **ทีละเฟรมเท่านั้น** ขณะที่เฟรมหนึ่งกำลังทำงาน ไม่มีอย่างอื่นทำงานได้ — ไม่ว่าจะเป็น callback ของ I/O, callback ของ timer หรืออะไรก็ตาม
+
+## การทำงานแบบ synchronous
+
+โค้ด synchronous ทั้งหมดจะทำงานจนเสร็จก่อนที่อะไรในคิว async จะได้ทำงาน ลองดูตัวอย่างการนับถอยหลัง:
+
+```js
+function countdown(n) {
+  if (n <= 0) {
+    console.log('done');
+    return;
+  }
+  console.log(n);
+  countdown(n - 1);
+}
+
+countdown(5);
+```
+
+การเรียกซ้ำแต่ละครั้ง push เฟรมใหม่ ผลลัพธ์เป็นแบบ deterministic อย่างสมบูรณ์: `5, 4, 3, 2, 1, done`
+
+ลองรัน:
+
+export const callStackCode = `
+function countdown(n) {
+  if (n <= 0) {
+    console.log('done');
+    return;
+  }
+  console.log(n);
+  countdown(n - 1);
+}
+
+countdown(5);
+`;
+
+<NodeRunner client:visible code={callStackCode} />
+
+## ทำไมการบล็อกจึงสำคัญ
+
+ถ้าคุณรันงาน synchronous ที่ยาวนาน — การคำนวณหนัก, ลูปขนาดใหญ่, การอ่านไฟล์แบบ synchronous — call stack จะถูกครอบครองตลอดช่วงเวลานั้น ไม่มีโค้ดอื่นทำงานได้จนกว่า stack จะว่าง
+
+```js
+// โค้ดนี้บล็อกราว ~200ms — ไม่มีอะไรเกิดขึ้นได้ในช่วงนี้
+var start = Date.now();
+while (Date.now() - start < 200) {
+  // spinning
+}
+console.log('Finally unblocked');
+```
+
+ในเซิร์ฟเวอร์ นี่หมายความว่าทุก request ที่เข้ามาต้องรอระหว่างที่บล็อก จงทำให้งาน synchronous สั้นเข้าไว้
+
+<Callout title="การบล็อกทำให้ทุกอย่างค้าง">
+งาน synchronous ที่ยาวนานบน call stack ขัดขวางไม่ให้ callback ของ I/O, timer หรือ event อื่น ๆ ถูกประมวลผล จงทำให้ handler แบบ synchronous สั้นเข้าไว้
+</Callout>
+
+export const callStackQuiz = [
+  {
+    q: 'โครงสร้างข้อมูลแบบใดอธิบายวิธีที่ call stack ประมวลผลการเรียกฟังก์ชัน?',
+    options: [
+      'FIFO — first in, first out',
+      'LIFO — last in, first out',
+      'Priority queue — ลำดับความสำคัญสูงก่อน',
+      'Circular buffer',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'callback ของ setTimeout เกิดอะไรขึ้นขณะที่ลูป synchronous ที่ยาวนานกำลังทำงาน?',
+    options: [
+      'มันทำงานในเธรดแยกและทำงานตรงเวลา',
+      'มันถูกยกเลิกอัตโนมัติ',
+      'มันรอจนกว่า call stack ว่าง แล้วค่อยทำงาน — อาจล่าช้า',
+      'มันทำงานทันทีหลังลูปเริ่ม',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'เฟรมของฟังก์ชันถูกนำออกจาก call stack เมื่อใด?',
+    options: [
+      'หลังบรรทัดแรกของฟังก์ชันทำงาน',
+      'เมื่อฟังก์ชัน return (หรือ throw)',
+      'เมื่อฟังก์ชันถัดไปถูกเรียก',
+      'ตอนจบของแต่ละรอบ event loop',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/call-stack" questions={callStackQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/call-stack" />

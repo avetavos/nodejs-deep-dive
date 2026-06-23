@@ -1,0 +1,132 @@
+---
+title: 'Callbacks'
+description: 'รูปแบบ callback, ขนบ error-first และการซ้อน callback'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## รูปแบบ callback
+
+**Callback** คือฟังก์ชันที่คุณส่งให้อีกฟังก์ชันหนึ่ง เพื่อให้ถูกเรียกภายหลังเมื่องานทำเสร็จ นี่คือวิธีดั้งเดิมของ JavaScript ในการจัดการงาน async — ส่งฟังก์ชันเข้าไป แล้ว runtime จะเรียกมันกลับเมื่อผลลัพธ์พร้อม
+
+```js
+setTimeout(function() {
+  console.log('This runs after 1 second');
+}, 1000);
+```
+
+อาร์กิวเมนต์ตัวที่สองของ `setTimeout` คือ callback คุณมอบการควบคุมให้ runtime แล้วฟังก์ชันของคุณจะถูกเรียกกลับเมื่อ timer ทำงาน
+
+## ขนบ error-first
+
+API ในตัวของ Node ใช้ signature ที่สม่ำเสมอสำหรับ callback:
+
+```js
+fs.readFile('data.txt', 'utf8', function(err, data) {
+  if (err) {
+    console.error('Read failed:', err.message);
+    return;
+  }
+  console.log('File contents:', data);
+});
+```
+
+รูปแบบคือ `(err, data)` — error มาก่อนเสมอ ผลลัพธ์มาทีหลัง ถ้างานสำเร็จ `err` จะเป็น `null` ถ้าล้มเหลว `err` จะเป็นออบเจ็กต์ `Error` และ `data` จะเป็น undefined
+
+**ตรวจ `err` ก่อนใช้ `data` เสมอ** ถ้าคุณเพิกเฉยต่อ `err` ที่ไม่เป็น null แล้วพยายามใช้ `data` คุณจะเจอ error ที่งงงวย
+
+## การซ้อน callback
+
+เมื่องาน async หนึ่งขึ้นอยู่กับผลของอีกงานหนึ่ง คุณต้องซ้อน callback:
+
+```js
+step1(function(err, resultA) {
+  if (err) return handleError(err);
+  step2(resultA, function(err, resultB) {
+    if (err) return handleError(err);
+    step3(resultB, function(err, resultC) {
+      if (err) return handleError(err);
+      console.log('Final:', resultC);
+    });
+  });
+});
+```
+
+การซ้อนลึกเช่นนี้ — บางทีเรียกว่า **callback hell** หรือ **pyramid of doom** — อ่านยากและผิดพลาดง่าย Promise และ async/await (ในบทถัดไป) ช่วยแก้ปัญหานี้
+
+## เดโมที่รันได้
+
+สนิปเป็ตด้านล่างจำลองสองขั้นตอน async ด้วย `setTimeout` แต่ละขั้นใช้รูปแบบ callback แบบ error-first ลองรันเพื่อดูลำดับผลลัพธ์
+
+export const callbacksCode = `
+function step1(callback) {
+  setTimeout(function() {
+    callback(null, 'result-A');
+  }, 0);
+}
+
+function step2(input, callback) {
+  setTimeout(function() {
+    callback(null, 'result-B');
+  }, 0);
+}
+
+step1(function(err, dataA) {
+  if (err) { console.log('Error in step 1:', err); return; }
+  console.log('Step 1 done: ' + dataA);
+  step2(dataA, function(err, dataB) {
+    if (err) { console.log('Error in step 2:', err); return; }
+    console.log('Step 2 done: ' + dataB);
+  });
+});
+`;
+
+<NodeRunner client:visible code={callbacksCode} />
+
+ผลลัพธ์จะเป็น `Step 1 done: result-A` แล้วตามด้วย `Step 2 done: result-B` เสมอ — แต่ละขั้นทำงานหลังขั้นก่อนหน้าทำเสร็จเท่านั้น
+
+<Callout title="error-first คือขนบของ Node">
+API ในตัวของ Node ส่ง error เป็นอาร์กิวเมนต์ตัวแรกของ callback ตรวจ `err` ก่อนใช้ `data` เสมอ — ถ้า `err` เป็นค่า truthy ให้จัดการแล้ว return ออกตั้งแต่เนิ่น ๆ
+</Callout>
+
+export const callbacksQuiz = [
+  {
+    q: 'signature ที่ถูกต้องของ callback แบบ error-first ใน Node.js คือข้อใด?',
+    options: [
+      'function(data, err)',
+      'function(err, data)',
+      'function(result)',
+      'function(status, data, err)',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ในรูปแบบ callback แบบ error-first เมื่อสำเร็จ err มีค่าเป็นอะไร?',
+    options: [
+      'undefined',
+      'false',
+      'null',
+      '0',
+    ],
+    answer: 2,
+  },
+  {
+    q: '"callback hell" คืออะไร?',
+    options: [
+      'callback ที่ throw exception แทนที่จะส่ง error',
+      'callback ที่ซ้อนลึกจนกลายเป็นพีระมิดของการเยื้อง (indentation) ที่งอกไปทางขวา',
+      'การใช้ callback ภายใน Promise',
+      'การเรียก callback เดิมมากกว่าหนึ่งครั้ง',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/callbacks" questions={callbacksQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/callbacks" />

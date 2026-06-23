@@ -1,0 +1,139 @@
+---
+title: 'Microtasks & Macrotasks'
+description: 'microtask queue และ macrotask queue ทำงานร่วมกับ event loop อย่างไร'
+sidebar:
+  order: 6
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## สองคิว หนึ่งลูป
+
+event loop ประมวลผล callback แบบ async จากสองคิวที่แยกกันด้วยลำดับความสำคัญต่างกัน:
+
+**Microtask queue** — ประมวลผลหลังจากทุก task ก่อน macrotask ถัดไป แหล่งที่มา:
+- callback ของ Promise `.then` / `.catch` / `.finally`
+- `queueMicrotask(fn)`
+
+**Macrotask queue** (หรือเรียก task queue) — ประมวลผลทีละหนึ่ง task ต่อรอบ event loop แหล่งที่มา:
+- callback ของ `setTimeout`
+- callback ของ `setInterval`
+- callback ของ I/O (network, file system)
+
+กฎง่าย ๆ: หลังแต่ละ macrotask ทำเสร็จ เอนจินจะระบาย microtask queue **ทั้งหมด** ก่อนจะหยิบ macrotask ถัดไป
+
+## ลำดับการระบาย
+
+```
+┌─────────────────────────────┐
+│  Execute one macrotask      │
+│  (or the initial script)    │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│  Drain all microtasks       │◄──┐
+│  (including newly added)    │   │ new microtasks
+└──────────────┬──────────────┘───┘
+               │
+               ▼
+┌─────────────────────────────┐
+│  Pick next macrotask        │
+└─────────────────────────────┘
+```
+
+## เฉพาะ Node: process.nextTick และ setImmediate
+
+Node.js เพิ่ม API การจัดคิวอีกสองตัวที่ต้องใช้ Node runtime:
+
+```js
+// ใช้ได้ใน Node.js เท่านั้น — ไม่ได้ในเบราว์เซอร์
+process.nextTick(function() {
+  console.log('nextTick fires before other microtasks');
+});
+
+setImmediate(function() {
+  console.log('setImmediate fires after I/O callbacks in the current loop iteration');
+});
+```
+
+callback ของ `process.nextTick` ถูกระบายก่อน microtask queue ส่วน `setImmediate` ทำงานในเฟส check ของ event loop ของ Node เนื่องจากทั้งสองต้องใช้ Node runtime จึงใช้ไม่ได้ในตัวรันในเบราว์เซอร์ด้านล่าง — ให้รันในเครื่องหรือใน StackBlitz
+
+## เดโมจัดลำดับที่รันได้
+
+เดโมนี้พิมพ์สี่บรรทัด ลองทายลำดับก่อนรัน:
+
+1. `console.log` แบบ synchronous ทำงานทันทีบน call stack
+2. `setTimeout(..., 0)` จัดคิว **macrotask**
+3. `Promise.resolve().then(...)` จัดคิว **microtask** (Promise resolve อยู่แล้ว reaction จึงถูกจัดคิวแบบ synchronous)
+4. `queueMicrotask(...)` จัดคิวอีก **microtask** — หลังจาก reaction ของ Promise ที่จัดคิวไปข้างบนแล้ว
+
+หลังสคริปต์ synchronous ทำเสร็จ microtask ทั้งหมดจะระบายตามลำดับ แล้ว macrotask ค่อยทำงาน
+
+export const microMacroCode = `
+console.log('1 sync');
+
+setTimeout(function() {
+  console.log('4 macrotask');
+}, 0);
+
+Promise.resolve().then(function() {
+  console.log('2 microtask (Promise)');
+});
+
+queueMicrotask(function() {
+  console.log('3 microtask (queueMicrotask)');
+});
+`;
+
+<NodeRunner client:visible code={microMacroCode} />
+
+ผลลัพธ์จะเป็นลำดับนี้เสมอ:
+- `1 sync` — call stack
+- `2 microtask (Promise)` — microtask ตัวแรกที่จัดคิว
+- `3 microtask (queueMicrotask)` — microtask ตัวที่สองที่จัดคิว
+- `4 macrotask` — ทำงานหลังจาก microtask queue ว่างแล้วเท่านั้น
+
+<Callout title="microtask ระบายก่อน macrotask ถัดไป">
+หลังแต่ละ task ทำเสร็จ เอนจินจะระบาย microtask queue ทั้งหมด — รวมถึง microtask ใหม่ที่เพิ่มเข้ามาระหว่างการระบาย — ก่อนจะหยิบ macrotask ถัดไป
+</Callout>
+
+export const microMacroQuiz = [
+  {
+    q: 'จากโค้ดนี้ — อะไรพิมพ์ก่อน: callback ของ Promise .then หรือ callback ของ setTimeout?',
+    options: [
+      'callback ของ setTimeout — เพราะถูกลงทะเบียนก่อน',
+      'callback ของ Promise .then — microtask ทำงานก่อน macrotask ถัดไป',
+      'ทั้งคู่ทำงานพร้อมกัน',
+      'ขึ้นอยู่กับค่า delay ของ timer',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'queueMicrotask(fn) ทำอะไร?',
+    options: [
+      'จัดคิว fn เป็น macrotask ผ่าน timer queue',
+      'รัน fn แบบ synchronous บน call stack ทันที',
+      'จัดคิว fn เป็น microtask ให้ทำงานหลัง task ปัจจุบัน ก่อน macrotask ถัดไป',
+      'จัดคิว fn หลัง callback ของ setTimeout ที่ค้างอยู่ทั้งหมด',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'ถ้า callback ของ microtask เรียก queueMicrotask เอง microtask ใหม่นั้นทำงานเมื่อใด?',
+    options: [
+      'ในรอบ event loop ถัดไป หลัง macrotask ถัดไป',
+      'ระหว่างการระบาย microtask รอบปัจจุบัน — ก่อน macrotask ถัดไป',
+      'ทันที โดยขัดจังหวะ microtask ปัจจุบัน',
+      'มันถูกทิ้งเงียบ ๆ',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/microtasks-macrotasks" questions={microMacroQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/microtasks-macrotasks" />
