@@ -1,0 +1,188 @@
+---
+title: 'Debugging Node.js'
+description: 'Using node --inspect with Chrome DevTools, the debugger statement, breakpoints, and console methods for effective debugging.'
+sidebar:
+  order: 3
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The Node.js Inspector
+
+Node ships a built-in inspector based on the Chrome DevTools Protocol. Start it with the `--inspect` flag and connect any CDP-compatible debugger — Chrome DevTools, VS Code, or WebStorm.
+
+```bash
+# Start with inspector (process continues running, connects on demand)
+node --inspect src/app.js
+
+# Start AND pause on the very first line of your code
+node --inspect-brk src/app.js
+```
+
+After launching, open **chrome://inspect** in Chrome, click **"Open dedicated DevTools for Node"**, and you get full breakpoints, call stacks, scope inspection, heap snapshots, and CPU profiling — exactly the same panel you use for browser debugging.
+
+## Connecting with VS Code
+
+VS Code detects Node inspector automatically. Add a `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug App",
+      "program": "${workspaceFolder}/src/app.js",
+      "runtimeArgs": ["--inspect-brk"]
+    },
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "Attach to running node",
+      "port": 9229
+    }
+  ]
+}
+```
+
+Press **F5** to launch or **Ctrl+Shift+P → "Attach to Node Process"** to connect to an already-running `--inspect` server.
+
+## The `debugger` statement
+
+Insert `debugger;` anywhere in your JavaScript. When the inspector is attached, execution pauses at that exact line — like setting a breakpoint in code:
+
+```js
+function calculateTotal(items) {
+  let total = 0;
+  for (const item of items) {
+    debugger; // execution pauses here when inspector is open
+    total += item.price * item.qty;
+  }
+  return total;
+}
+```
+
+When no inspector is connected, `debugger` is silently ignored. **Remove or gate `debugger` statements before deploying to production.**
+
+## console methods beyond `console.log`
+
+The `console` object has far more methods than most developers use:
+
+```js
+// Tabular output — great for arrays of objects
+const users = [
+  { name: 'Alice', age: 30, role: 'admin' },
+  { name: 'Bob',   age: 25, role: 'user'  },
+];
+console.table(users);
+// Prints a formatted ASCII table with columns: name, age, role
+
+// Deep inspection — prints non-enumerable properties and prototype chain
+const map = new Map([['key', 'value']]);
+console.dir(map, { depth: 3, colors: true });
+
+// Timing a code block
+console.time('database-query');
+// ... run expensive operation ...
+console.timeEnd('database-query');
+// Prints: database-query: 42.183ms
+
+// Count invocations
+function hit() {
+  console.count('hit');
+}
+hit(); // hit: 1
+hit(); // hit: 2
+hit(); // hit: 3
+
+// Group related output
+console.group('User details');
+console.log('name: Alice');
+console.log('role: admin');
+console.groupEnd();
+
+// Conditional breakpoint-style assertion
+console.assert(1 === 2, 'Math is broken'); // prints assertion error
+console.assert(1 === 1, 'This never prints');
+```
+
+## Practical debugging workflow
+
+```bash
+# 1. Add --inspect-brk to pause before any code runs
+node --inspect-brk src/server.js
+
+# 2. Open chrome://inspect → click your target
+
+# 3. Set breakpoints in the Sources panel, or hit the existing debugger statement
+
+# 4. Step through: F10 (step over), F11 (step into), F8 (resume)
+
+# 5. Inspect variables in the Scope panel or hover over them
+
+# 6. Use the Console panel to run expressions in the current scope
+```
+
+## Debugging with nodemon (watch + inspect)
+
+```bash
+# Auto-restart AND keep inspector open on changes
+npx nodemon --inspect src/app.js
+
+# With ts-node for TypeScript
+npx nodemon --exec "node --inspect --loader ts-node/esm" src/app.ts
+```
+
+<Callout title="--inspect-brk pauses on the first line">
+`node --inspect` lets the process start and run normally — the inspector just listens for a connection. Use `node --inspect-brk` when you need to pause before any code executes, giving you time to open DevTools and set breakpoints before startup logic runs.
+</Callout>
+
+export const debuggingQuiz = [
+  {
+    q: 'What is the difference between `node --inspect` and `node --inspect-brk`?',
+    options: [
+      'They are identical — both pause on the first line',
+      '--inspect runs normally and waits for a connection; --inspect-brk pauses before any code runs',
+      '--inspect-brk is only available in Node 22+',
+      '--inspect runs the code; --inspect-brk disables the inspector',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What happens to a `debugger;` statement when no inspector is connected?',
+    options: [
+      'It throws a ReferenceError',
+      'It pauses the process indefinitely',
+      'It is silently ignored',
+      'It prints a warning to stderr',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which `console` method prints an array of objects as a formatted table?',
+    options: [
+      'console.dir',
+      'console.log',
+      'console.table',
+      'console.group',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which port does the Node.js inspector listen on by default?',
+    options: [
+      '3000',
+      '8080',
+      '9229',
+      '4000',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="testing-tooling/debugging" questions={debuggingQuiz} />
+
+<ProgressTracker client:visible id="testing-tooling/debugging" />

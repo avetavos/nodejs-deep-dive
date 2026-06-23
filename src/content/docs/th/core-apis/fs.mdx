@@ -1,0 +1,163 @@
+---
+title: File System
+description: 'การอ่าน เขียน และนำทางในระบบไฟล์ด้วย node:fs, node:fs/promises และความแตกต่างของ sync vs async APIs'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## fs module สามรูปแบบ
+
+Node มาพร้อม filesystem operations เดียวกันใน API สามแบบที่แตกต่างกัน:
+
+| รูปแบบ | Import | ใช้เมื่อไหร่ |
+|---|---|---|
+| Callback (async) | `import fs from 'node:fs'` | code เก่า, Node streams |
+| Synchronous | `import fs from 'node:fs'` | CLI scripts, config ตอน startup |
+| Promise (async) | `import fs from 'node:fs/promises'` | server code ทั้งหมดที่เขียนใหม่ |
+
+<Callout title="ใช้ fs/promises ใน servers">
+`fs.readFileSync` และ function เหล่านั้น block event loop ทั้งหมด — ไม่มี request อื่นใดที่จะถูกจัดการได้ขณะที่ OS กำลังอ่านไฟล์ ใน server process ให้ใช้ `node:fs/promises` API (หรือ callback-based streams) เสมอ เพื่อให้ event loop ว่างพอรับ request พร้อมกัน sync APIs ยอมรับได้ใน CLI scripts หรือตอน startup ของ process (ก่อนที่ server จะเริ่มรับ requests)
+</Callout>
+
+## การอ่านไฟล์
+
+### แบบ Callback
+
+```js
+import fs from 'node:fs';
+
+fs.readFile('./hello.txt', 'utf8', function(err, data) {
+  if (err) throw err;
+  console.log(data);
+});
+```
+
+### แบบ Promise (แนะนำ)
+
+export const fsReadCode = `
+import { writeFile, readFile, readdir, rm } from 'node:fs/promises';
+
+async function demo() {
+  // Write a file
+  await writeFile('/tmp/demo.txt', 'Hello from Node.js!', 'utf8');
+  console.log('Written: /tmp/demo.txt');
+
+  // Read it back
+  var content = await readFile('/tmp/demo.txt', 'utf8');
+  console.log('Read back:', content);
+
+  // List /tmp directory
+  var entries = await readdir('/tmp');
+  console.log('Files in /tmp (first 5):', entries.slice(0, 5));
+
+  // Clean up
+  await rm('/tmp/demo.txt');
+  console.log('Deleted /tmp/demo.txt');
+}
+
+demo().catch(console.error);
+`;
+
+<NodeRunner client:visible code={fsReadCode} node />
+
+## การเขียนไฟล์
+
+`writeFile` สร้างไฟล์ถ้ายังไม่มี และ **แทนที่** เนื้อหาถ้ามีอยู่แล้ว ใช้ `appendFile` เพื่อเพิ่มต่อจากไฟล์ที่มีอยู่
+
+export const fsWriteCode = `
+import { writeFile, appendFile, readFile, rm } from 'node:fs/promises';
+
+async function demo() {
+  var path = '/tmp/log.txt';
+
+  await writeFile(path, 'Line 1\\n', 'utf8');
+  await appendFile(path, 'Line 2\\n', 'utf8');
+  await appendFile(path, 'Line 3\\n', 'utf8');
+
+  var result = await readFile(path, 'utf8');
+  console.log('File contents:');
+  console.log(result);
+
+  await rm(path);
+}
+
+demo().catch(console.error);
+`;
+
+<NodeRunner client:visible code={fsWriteCode} node />
+
+## การตรวจสอบการมีอยู่และ stats
+
+export const fsStatCode = `
+import { stat, writeFile, rm } from 'node:fs/promises';
+
+async function demo() {
+  var path = '/tmp/stat-test.txt';
+  await writeFile(path, 'stat demo', 'utf8');
+
+  var info = await stat(path);
+  console.log('size (bytes):', info.size);
+  console.log('isFile:', info.isFile());
+  console.log('isDirectory:', info.isDirectory());
+  console.log('modified:', info.mtime.toISOString());
+
+  await rm(path);
+}
+
+demo().catch(console.error);
+`;
+
+<NodeRunner client:visible code={fsStatCode} node />
+
+## Synchronous reads — เฉพาะตอน startup
+
+```js
+import { readFileSync } from 'node:fs';
+
+// Acceptable at startup — process has not yet started accepting requests
+const config = JSON.parse(readFileSync('./config.json', 'utf8'));
+```
+
+อย่าเรียก `readFileSync` ใน request handler, route callback หรือ function ใดที่ถูกเรียกหลังจาก server เริ่มทำงาน
+
+export const fsQuiz = [
+  {
+    q: 'ทำไมควรหลีกเลี่ยง fs.readFileSync ใน server request handler?',
+    options: [
+      'มันต้องการ callback และไม่สามารถใช้กับ async/await ได้',
+      'มัน block event loop ทำให้ requests อื่นทั้งหมดไม่สามารถจัดการได้',
+      'มัน deprecated ใน Node 20+',
+      'มันทำงานได้เฉพาะบน Linux เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'fs.writeFile ทำอะไรถ้าไฟล์ปลายทางมีอยู่แล้ว?',
+    options: [
+      'มัน throw error — ต้องลบไฟล์ก่อน',
+      'มัน append ต่อจากเนื้อหาที่มีอยู่',
+      'มัน replace เนื้อหาไฟล์ทั้งหมด',
+      'มันสร้าง backup และเขียนไปยังไฟล์ใหม่',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'import ใดที่ให้ promise-based fs API?',
+    options: [
+      'import fs from "node:fs"',
+      'import fs from "node:fs/promises"',
+      'import { promises } from "fs" — นี่คือรูปแบบเดียวที่ถูกต้อง',
+      'import fs from "node:fs/async"',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="core-apis/fs" questions={fsQuiz} />
+
+<ProgressTracker client:visible id="core-apis/fs" />

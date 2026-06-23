@@ -1,0 +1,156 @@
+---
+title: 'package.json Deep Dive'
+description: "Understanding package.json fields, semver ranges, and npm init."
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The project manifest
+
+`package.json` is the manifest for every Node.js project. It tells Node and npm who owns the package, what version it is, how to run it, which files are public API, and which packages it depends on. Every `npm install`, `npm run`, and `npm publish` command reads from this file.
+
+## Key fields
+
+| Field | Purpose |
+|---|---|
+| `name` | The package identifier on the npm registry (lowercase, URL-safe) |
+| `version` | The current release, following Semantic Versioning (`MAJOR.MINOR.PATCH`) |
+| `type` | Module system default: `"module"` for ESM, `"commonjs"` (or absent) for CJS |
+| `main` | Legacy entry point for CJS consumers (`require('your-pkg')`) |
+| `exports` | Modern entry point map — controls what consumers can import and from which subpaths |
+| `scripts` | Named shell commands run with `npm run <name>` (plus lifecycle hooks like `start`, `test`) |
+
+### Annotated example
+
+```json
+{
+  "name": "my-library",
+  "version": "1.2.0",
+  "description": "A small utility library",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./utils": "./dist/utils.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test",
+    "start": "node dist/index.js",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "typescript": "~5.4.0"
+  }
+}
+```
+
+The `exports` field takes precedence over `main` in modern Node.js. It lets you expose multiple subpaths and serve different files to ESM and CJS consumers from the same package.
+
+## Semver ranges
+
+npm uses [Semantic Versioning](https://semver.org) for dependency ranges. The range syntax in `package.json` controls which versions `npm install` considers compatible.
+
+| Range | Meaning | Example |
+|---|---|---|
+| `^1.2.3` | Compatible — allows `MINOR` and `PATCH` bumps, locks `MAJOR` | `>=1.2.3 <2.0.0` |
+| `~1.2.3` | Patch-only — allows only `PATCH` bumps | `>=1.2.3 <1.3.0` |
+| `1.2.3` | Exact — only this version | `1.2.3` |
+| `*` | Any version — no constraint | `>=0.0.0` |
+
+### Dependencies block examples
+
+```json
+{
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "~16.3.1",
+    "uuid": "9.0.0",
+    "some-experimental-pkg": "*"
+  }
+}
+```
+
+In practice, `^` is the most common choice for dependencies: it keeps you on the latest compatible release while protecting against breaking changes introduced by a new major version.
+
+## Initialising a project
+
+`npm init` walks you through an interactive prompt to generate a `package.json`. `npm init -y` skips all prompts and accepts the defaults — useful when you want a minimal file fast.
+
+```bash
+# Interactive wizard
+npm init
+
+# Accept all defaults immediately
+npm init -y
+```
+
+After running `npm init -y` you get a minimal `package.json` in the current directory:
+
+```json
+{
+  "name": "my-project",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
+```
+
+Edit the file directly or use `npm pkg set name="my-library" type="module"` to update individual fields from the terminal.
+
+<Callout title='Set "type": "module" for ESM'>
+Adding `"type": "module"` to `package.json` switches the entire package to ESM: every `.js` file in the package is treated as an ES module. You can then use top-level `import`/`export` statements without renaming files to `.mjs`. If you need a single CJS file inside an ESM package, give it the `.cjs` extension and Node will treat it as CommonJS regardless of the `"type"` field.
+</Callout>
+
+export const packageJsonQuiz = [
+  {
+    q: 'Which package.json field is recommended over "main" in modern Node.js for controlling what a package exposes?',
+    options: [
+      '"module"',
+      '"browser"',
+      '"exports"',
+      '"entry"',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'You want to allow patch-level updates to a dependency but prevent minor or major bumps. Which semver range prefix should you use?',
+    options: [
+      '^',
+      '~',
+      '*',
+      '=',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does "npm init -y" do?',
+    options: [
+      'Installs all dependencies listed in package.json',
+      'Runs the interactive package.json wizard',
+      'Creates a package.json with default values without prompting',
+      'Publishes the package to the npm registry',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="modules-npm/package-json" questions={packageJsonQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/package-json" />

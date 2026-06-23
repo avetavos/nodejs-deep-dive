@@ -1,0 +1,137 @@
+---
+title: 'Writable Streams'
+description: 'Writing data with write() and end(), and flow control with the drain event.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is a Writable stream?
+
+A `Writable` is a stream to which data can be written. Node's built-in examples include `fs.createWriteStream` (writing a file), `process.stdout` (terminal output), and HTTP response objects. You can also create custom writables by extending `Writable` and implementing the `_write` method.
+
+## write() and end()
+
+The two primary methods on a Writable are:
+
+- **`writable.write(chunk[, encoding][, callback])`** — writes a chunk of data. Returns `true` if the internal buffer is below the high-water mark, `false` if the destination cannot keep up (backpressure signal).
+- **`writable.end([chunk][, callback])`** — signals that no more data will be written. Optionally writes one final chunk. Triggers the `finish` event once all data has been flushed.
+
+```js
+const fs = require('node:fs');
+
+const dest = fs.createWriteStream('./output.txt');
+
+dest.write('first line\n');
+dest.write('second line\n');
+dest.end('last line\n', function() {
+  console.log('all data flushed');
+});
+```
+
+## The `finish` event
+
+After `end()` is called and all pending data has been flushed to the underlying system, the stream emits `finish`. This is the correct moment to know writing is truly complete:
+
+```js
+dest.on('finish', function() {
+  console.log('write complete');
+});
+```
+
+## The `drain` event and flow control
+
+`write()` returns a boolean. When it returns `false`, the internal buffer is full — you must **stop writing** and wait for the `drain` event before writing more. Ignoring this causes unbounded memory growth as buffered chunks accumulate.
+
+```js
+function writeWithDrain(writable, chunks) {
+  var i = 0;
+
+  function next() {
+    while (i < chunks.length) {
+      var ok = writable.write(chunks[i]);
+      i++;
+      if (!ok) {
+        // buffer full — wait for drain before continuing
+        writable.once('drain', next);
+        return;
+      }
+    }
+    writable.end();
+  }
+
+  next();
+}
+```
+
+This is the manual pattern that `pipe` and `pipeline` handle for you automatically. Understanding it explains why those higher-level APIs exist.
+
+## Runnable demo
+
+The demo creates a custom Writable that logs each chunk to the console, simulating a slow sink. It then writes three chunks and closes the stream.
+
+export const writableCode = `
+const { Writable } = require('node:stream');
+
+const sink = new Writable({
+  write(chunk, encoding, callback) {
+    console.log('sink received: ' + chunk.toString());
+    callback(); // signal ready for next chunk
+  }
+});
+
+sink.on('finish', function() {
+  console.log('stream finished');
+});
+
+sink.write('alpha');
+sink.write('beta');
+sink.end('gamma');
+`;
+
+<NodeRunner client:visible code={writableCode} node />
+
+<Callout title="Respect the return value of write() for flow control">
+When writable.write() returns false, the destination buffer is full. Stop writing immediately and wait for the drain event before sending more data. Ignoring this signal causes the Node process to buffer unlimited data in memory, eventually causing an out-of-memory crash.
+</Callout>
+
+export const writableQuiz = [
+  {
+    q: 'What does writable.write() return when the internal buffer is full?',
+    options: [
+      'null',
+      'true',
+      'false',
+      'a Promise that resolves when drained',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which event fires after writable.end() is called and all data has been flushed?',
+    options: [
+      'end',
+      'close',
+      'drain',
+      'finish',
+    ],
+    answer: 3,
+  },
+  {
+    q: 'What is the correct action when writable.write() returns false?',
+    options: [
+      'Call writable.end() immediately',
+      'Continue writing — false is just a warning',
+      'Stop writing and wait for the drain event',
+      'Destroy the stream and create a new one',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="streams/writable" questions={writableQuiz} />
+
+<ProgressTracker client:visible id="streams/writable" />

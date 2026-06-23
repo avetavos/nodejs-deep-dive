@@ -1,0 +1,115 @@
+---
+title: 'การทดสอบและเครื่องมือ'
+description: 'ภาพรวมของการทดสอบ การดีบัก การวัดประสิทธิภาพ และ toolchain สมัยใหม่ใน Node.js และสิ่งที่โมดูลนี้ครอบคลุม'
+sidebar:
+  order: 1
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทำไม tooling ถึงสำคัญ
+
+การเขียนโค้ดเป็นเพียงครึ่งหนึ่งของงาน การรู้วิธี**ทดสอบ** **ดีบัก** **วัดผล** และ**ตั้งค่า**สภาพแวดล้อม Node.js จะเปลี่ยนสคริปต์ที่ทำงานได้ให้กลายเป็นแอปพลิเคชันที่ดูแลรักษาง่ายและพร้อม production
+
+Node 18+ มี test runner ในตัว, inspector protocol ที่ทรงพลัง, และ `perf_hooks` สำหรับจับเวลา ซึ่งหมายความว่าคุณทำได้มากโดยไม่ต้องติดตั้งอะไรเพิ่มเติม
+
+## สิ่งที่โมดูลนี้ครอบคลุม
+
+| บทเรียน | หัวข้อ |
+|---------|--------|
+| Built-in Test Runner | `node:test`, `node:assert`, `test()`, `describe`/`it`, `node --test` |
+| การดีบัก | `node --inspect`, Chrome DevTools, breakpoints, เมธอดต่าง ๆ ของ `console` |
+| ประสิทธิภาพ | `perf_hooks`, `performance.now()`, `PerformanceObserver`, การหลีกเลี่ยงการบล็อก |
+| Ecosystem และ Toolchain | TypeScript runners, ESLint/Prettier/Biome, nodemon, env files |
+
+## ภาพรวม toolchain
+
+```
+┌─────────────────────────────────────────────────┐
+│  Your Node.js Project                           │
+│                                                 │
+│  Source code (.ts / .js / .mjs)                 │
+│       │                                         │
+│       ▼                                         │
+│  Linter / Formatter  ──►  ESLint, Prettier,     │
+│                            Biome                │
+│       │                                         │
+│       ▼                                         │
+│  TypeScript runner   ──►  tsx, ts-node,         │
+│                            --experimental-      │
+│                            strip-types          │
+│       │                                         │
+│       ▼                                         │
+│  Test runner         ──►  node:test (built-in)  │
+│                            or Vitest / Jest      │
+│       │                                         │
+│       ▼                                         │
+│  Debugger            ──►  node --inspect +      │
+│                            Chrome DevTools       │
+│       │                                         │
+│       ▼                                         │
+│  Performance         ──►  perf_hooks,           │
+│                            PerformanceObserver   │
+└─────────────────────────────────────────────────┘
+```
+
+## เลือกใช้อะไรดี
+
+Built-in ของ Node ครอบคลุมความต้องการพื้นฐานได้เกือบทั้งหมด นี่คือแนวทางการตัดสินใจเบื้องต้น:
+
+```bash
+# ไม่ต้องติดตั้ง dependency — ใช้ built-in runner
+node --test src/**/*.test.js
+
+# TypeScript โดยไม่ต้อง build (Node 20.6+)
+node --experimental-strip-types src/app.ts
+
+# HMR + watch mode ที่เร็วกว่า
+npx tsx watch src/app.ts
+
+# Lint + format ในเครื่องมือเดียว (zero config)
+npx biome check --apply src/
+```
+
+<Callout title="เริ่มจาก built-in ก่อน แล้วค่อยขยาย">
+เริ่มต้นด้วย `node:test`, `node --inspect`, และ `perf_hooks` จากนั้นค่อยเพิ่มเครื่องมือจาก third-party เมื่อคุณพบข้อจำกัดจริง ๆ ไม่ใช่ติดตั้งไว้ก่อนโดยไม่จำเป็น
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'Node.js เวอร์ชันไหนที่แนะนำ built-in `node:test` runner เป็นครั้งแรก?',
+    options: [
+      'Node 14',
+      'Node 16',
+      'Node 18',
+      'Node 22',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'โมดูล built-in ใดที่ใช้วัดเวลาการทำงานใน Node.js?',
+    options: [
+      'node:timers',
+      'node:perf_hooks',
+      'node:process',
+      'node:v8',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'flag ใดที่ทำให้ Node 20.6+ รันไฟล์ TypeScript ได้โดยตรงโดยไม่ต้อง build?',
+    options: [
+      '--ts-mode',
+      '--allow-typescript',
+      '--experimental-strip-types',
+      '--run-ts',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="testing-tooling/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="testing-tooling/index" />

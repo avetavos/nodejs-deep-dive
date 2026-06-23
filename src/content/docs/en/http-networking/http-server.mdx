@@ -1,0 +1,132 @@
+---
+title: 'Creating an HTTP Server'
+description: 'Use http.createServer to handle requests, set status codes and headers, and send responses.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## http.createServer
+
+`http.createServer(callback)` returns a `Server` instance. The callback — called the **request listener** — is invoked once per incoming HTTP request. It receives two arguments:
+
+- `req` — an `IncomingMessage` object describing the request (method, URL, headers, body stream).
+- `res` — a `ServerResponse` object used to write the response.
+
+Call `server.listen(port, callback)` to start accepting connections. The callback fires once the server is ready.
+
+## Status codes and headers
+
+Every HTTP response has a **status code** and a set of **headers**. Use `res.writeHead(statusCode, headersObject)` to set both at once, before writing any body data.
+
+Common status codes:
+
+| Code | Meaning |
+|------|---------|
+| 200 | OK |
+| 201 | Created |
+| 400 | Bad Request |
+| 404 | Not Found |
+| 500 | Internal Server Error |
+
+## res.end — sending the response body
+
+`res.end(data)` writes the final chunk of the response body and signals to Node.js that the response is complete. Every request handler **must** call `res.end()` (or `res.destroy()`) — if you forget, the client will wait forever and the connection will time out.
+
+You can also use `res.write(data)` to send data in chunks before calling `res.end()`.
+
+## A complete server with status codes and headers
+
+export const httpServerCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  // Set status code 200 and Content-Type header
+  res.writeHead(200, {
+    'Content-Type': 'text/html',
+    'X-Powered-By': 'Node.js'
+  });
+
+  // Send the response body and close the connection
+  res.end('<h1>Hello from Node.js!</h1><p>Status: 200 OK</p>');
+});
+
+server.listen(3000, function() {
+  console.log('Server running at http://localhost:3000');
+});
+`;
+
+<NodeRunner client:visible code={httpServerCode} node />
+
+Open in StackBlitz, then visit `http://localhost:3000` in the preview tab to see the rendered HTML response with correct headers.
+
+## Responding with different status codes
+
+export const statusCodesCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  if (req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('200 OK - Home page');
+  } else if (req.url === '/created') {
+    res.writeHead(201, { 'Content-Type': 'text/plain' });
+    res.end('201 Created - Resource was created');
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found - No page at ' + req.url);
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Server running at http://localhost:3000');
+  console.log('Try: /, /created, /anything-else');
+});
+`;
+
+<NodeRunner client:visible code={statusCodesCode} node />
+
+<Callout title="Always set Content-Type and end every response">
+Two rules that will save you from mysterious bugs: (1) Always set the `Content-Type` header so the client knows how to interpret the body — `text/plain`, `text/html`, or `application/json`. (2) Always call `res.end()`. Forgetting it leaves the connection hanging and the client waiting. Node.js will not close the connection for you.
+</Callout>
+
+export const httpServerQuiz = [
+  {
+    q: 'What is the purpose of res.end() in a Node.js HTTP server?',
+    options: [
+      'It starts the server and begins listening for connections',
+      'It sends the final response body and signals that the response is complete',
+      'It closes the server permanently',
+      'It sets the HTTP status code',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which method sets both the status code and response headers at once?',
+    options: [
+      'res.setHeader()',
+      'res.status()',
+      'res.writeHead()',
+      'res.send()',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What happens if you forget to call res.end() in a request handler?',
+    options: [
+      'Node.js automatically closes the connection after 30 seconds',
+      'The server crashes immediately',
+      'The client waits indefinitely and the connection eventually times out',
+      'The response is sent with an empty body automatically',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="http-networking/http-server" questions={httpServerQuiz} />
+
+<ProgressTracker client:visible id="http-networking/http-server" />

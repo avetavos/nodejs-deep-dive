@@ -1,0 +1,105 @@
+---
+title: 'Streams & I/O'
+description: 'ทำความเข้าใจว่า Stream คืออะไร ทั้งสี่ประเภท และภาพรวมของโมดูลนี้'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ปัญหาของการโหลดข้อมูลทั้งหมดในครั้งเดียว
+
+ลองนึกภาพการอ่านไฟล์ Log ขนาด 4 GB ถ้าคุณโหลดข้อมูลทั้งหมดเข้า Memory ก่อน Node จะต้องจองพื้นที่ 4 GB ก่อนที่จะอ่านบรรทัดแรกได้ด้วยซ้ำ หากเครื่องมี RAM แค่ 2 GB กระบวนการจะพังก่อนที่จะเริ่มต้น
+
+Stream แก้ปัญหานี้ด้วยการประมวลผลข้อมูล **ทีละ chunk** — คุณเริ่มอ่าน chunk แรกได้เลยในขณะที่ chunk ที่เหลือยังมาไม่ถึง ทำให้ Memory ใช้คงที่ไม่ว่าแหล่งข้อมูลจะใหญ่แค่ไหน
+
+แนวคิดเดียวกันนี้ใช้กับการเขียนด้วย แทนที่จะ Buffer Response ทั้งหมดใน Memory แล้วส่งในครั้งเดียว Stream จะส่ง chunk แต่ละชิ้นไปยังปลายทางทันทีที่ข้อมูลมาถึง
+
+## สี่ประเภทของ Stream
+
+Node.js กำหนดประเภท Stream นามธรรมสี่ชนิดใน module `node:stream`:
+
+| ประเภท | ทิศทาง | ตัวอย่าง |
+|--------|---------|---------|
+| `Readable` | ข้อมูลไหล **ออก** | `fs.createReadStream`, `process.stdin` |
+| `Writable` | ข้อมูลไหล **เข้า** | `fs.createWriteStream`, `process.stdout` |
+| `Duplex` | สองทิศทาง | TCP socket (`net.Socket`) |
+| `Transform` | สองทิศทางพร้อมแปลงข้อมูล | `zlib.createGzip` (บีบอัดระหว่างทาง) |
+
+ทุก Stream ยังสืบทอดจาก `EventEmitter` ด้วย คลาสพื้นฐานของ Stream emit event มาตรฐาน (`data`, `end`, `error`, `drain`, `finish`) ที่คุณแนบ handler ได้
+
+## สิ่งที่โมดูลนี้จะสอน
+
+| บทเรียน | หัวข้อ |
+|---------|--------|
+| Readable Streams | events `data`/`end`/`error`, `Readable.from`, async iteration |
+| Writable Streams | `write()`, `end()`, และ event `drain` |
+| Pipe & Pipeline | เชื่อม Stream ด้วย `.pipe()` และ `stream.pipeline()` |
+| Backpressure | คืออะไร สำคัญอย่างไร และ Pipeline จัดการอย่างไร |
+
+## ลองใช้ Stream ครั้งแรก
+
+Demo ด้านล่างใช้ `Readable.from` สร้าง Readable Stream จาก Array ของ String แล้วอ่านทีละ chunk ด้วย `for await` สังเกตว่าไม่มีการเก็บ Array ทั้งหมดไว้ใน Buffer — แต่ละรายการถูก yield เมื่อต้องการเท่านั้น
+
+export const streamsIndexCode = `
+const { Readable } = require('node:stream');
+
+async function main() {
+  const source = Readable.from(['hello', ' ', 'streaming', ' ', 'world']);
+
+  let result = '';
+  for await (const chunk of source) {
+    result += chunk;
+    console.log('chunk: ' + JSON.stringify(chunk));
+  }
+  console.log('assembled: ' + result);
+}
+
+main();
+`;
+
+<NodeRunner client:visible code={streamsIndexCode} node />
+
+<Callout title="Stream ประมวลผลข้อมูลทีละ chunk">
+แทนที่จะโหลดไฟล์หรือ Response ทั้งหมดเข้า Memory Stream ช่วยให้คุณเริ่มประมวลผล chunk แรกได้ทันทีในขณะที่ส่วนที่เหลือยังมาไม่ถึง ทำให้การใช้ Memory คงที่ไม่ว่าข้อมูลจะมีขนาดเท่าไร
+</Callout>
+
+export const streamsIndexQuiz = [
+  {
+    q: 'ทำไม Stream จึงดีกว่าการโหลดไฟล์ทั้งหมดเข้า Memory?',
+    options: [
+      'Stream เร็วกว่าเสมอเนื่องจาก CPU Cache',
+      'Stream ทำให้การใช้ Memory คงที่โดยไม่ขึ้นกับขนาดไฟล์',
+      'Stream ขจัดความจำเป็นในการจัดการ Error',
+      'Stream ทำงานบน Thread แยกต่างหาก',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Stream ชนิดใดใน Node.js ที่แปลงข้อมูลระหว่างทาง?',
+    options: [
+      'Readable',
+      'Writable',
+      'Duplex',
+      'Transform',
+    ],
+    answer: 3,
+  },
+  {
+    q: 'คลาสพื้นฐานที่ Stream ทั้งสี่ประเภทสืบทอดมาคืออะไร?',
+    options: [
+      'Buffer',
+      'EventEmitter',
+      'Promise',
+      'Worker',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="streams/index" questions={streamsIndexQuiz} />
+
+<ProgressTracker client:visible id="streams/index" />

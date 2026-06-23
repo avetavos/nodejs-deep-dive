@@ -1,0 +1,181 @@
+---
+title: 'การเผยแพร่ Package'
+description: 'วิธีสร้าง, กำหนดเวอร์ชัน, และเผยแพร่ npm package — files, bin, exports, npm version, npm publish, และ scoped packages'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+การเผยแพร่ npm package ต้องการให้คุณตัดสินใจเรื่อง metadata ที่ถูกต้อง เลือกสิ่งที่จะ expose และควบคุม lifecycle การ versioning ให้ดี บทเรียนนี้ครอบคลุมทุกอย่างตั้งแต่ `package.json` ที่พร้อม publish ไปจนถึงการ push package ขึ้น registry
+
+## package.json ที่พร้อม publish
+
+package ที่ดีควรมีฟิลด์สำคัญเหล่านี้:
+
+```json
+{
+  "name": "@myorg/my-lib",
+  "version": "1.0.0",
+  "description": "A concise description for npm search",
+  "license": "MIT",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+```
+
+## ฟิลด์ files
+
+`"files"` ระบุว่าไฟล์และโฟลเดอร์ใดจะถูกรวมไว้ใน published package ใช้เป็น allowlist เพื่อให้แน่ใจว่าไม่ส่ง source file, test, หรือ config ที่ไม่จำเป็นไปให้ผู้ใช้
+
+```json
+{
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ]
+}
+```
+
+ไฟล์บางอย่างถูก exclude โดยอัตโนมัติ เช่น `node_modules`, `.git`, และไฟล์ที่ระบุใน `.npmignore` หรือ `.gitignore`
+
+## ฟิลด์ bin
+
+หาก package ของคุณมี CLI tool ใช้ฟิลด์ `"bin"` เพื่อ map ชื่อคำสั่งไปยังไฟล์ที่รันได้:
+
+```json
+{
+  "bin": {
+    "my-cli": "./dist/cli.js"
+  }
+}
+```
+
+เมื่อ install globally หรือใช้ใน `npx` คำสั่ง `my-cli` จะพร้อมใช้งาน
+
+## การกำหนดเวอร์ชันด้วย Semantic Versioning
+
+npm ใช้ **Semantic Versioning (semver)**: `MAJOR.MINOR.PATCH`
+
+- **PATCH** — bug fix ที่ backwards compatible
+- **MINOR** — feature ใหม่ที่ backwards compatible
+- **MAJOR** — breaking changes
+
+ใช้คำสั่ง `npm version` เพื่อ bump version, อัปเดต `package.json`, และสร้าง git tag โดยอัตโนมัติ:
+
+```bash
+# bump patch version: 1.0.0 → 1.0.1
+npm version patch
+
+# bump minor version: 1.0.0 → 1.1.0
+npm version minor
+
+# bump major version: 1.0.0 → 2.0.0
+npm version major
+```
+
+## ทดสอบก่อน publish ด้วย npm pack
+
+ก่อน publish ให้สร้าง tarball local เพื่อตรวจสอบว่าไฟล์ที่จะถูกส่งออกนั้นถูกต้อง:
+
+```bash
+npm pack
+```
+
+คำสั่งนี้สร้างไฟล์ `.tgz` ในโฟลเดอร์ปัจจุบัน คุณสามารถ inspect เนื้อหาหรือติดตั้งใน project อื่นเพื่อทดสอบก่อน publish จริง:
+
+```bash
+# install local tarball in another project
+npm install ../my-lib/myorg-my-lib-1.0.0.tgz
+```
+
+## การ publish
+
+Login และ publish:
+
+```bash
+# login to npm registry
+npm login
+
+# publish public scoped package
+npm publish --access public
+
+# publish with a dist-tag (e.g. beta)
+npm publish --tag beta
+```
+
+สำหรับ package ที่มีชื่อ scope เช่น `@myorg/my-lib` ต้องระบุ `--access public` เพื่อ publish แบบ public มิฉะนั้น npm จะถือว่าเป็น private (ต้องเสียค่าใช้จ่าย)
+
+## Scoped packages
+
+Scoped packages มีรูปแบบ `@scope/name` และช่วยจัดกลุ่ม package ขององค์กรหรือโปรเจกต์:
+
+```bash
+# create a scoped package
+npm init --scope=@myorg
+
+# publish to npm public registry
+npm publish --access public
+
+# install a scoped package
+npm install @myorg/my-lib
+```
+
+<Callout title="ใช้ npm pack เพื่อตรวจสอบก่อน publish เสมอ">
+`npm pack` สร้าง tarball local ที่แสดงตัวอย่างสิ่งที่จะถูก publish จริงๆ ตรวจสอบว่าฟิลด์ `"files"` ครอบคลุมทุกอย่างที่ต้องการและไม่มีไฟล์ sensitive หรือ build artifact ขนาดใหญ่ที่ไม่ควร publish รวมอยู่ด้วย นี่เป็นขั้นตอนที่ควรทำก่อน `npm publish` ทุกครั้ง
+</Callout>
+
+export const publishingQuiz = [
+  {
+    q: 'ฟิลด์ "files" ใน package.json ควบคุมอะไร?',
+    options: [
+      'entry point ที่ Node ใช้เมื่อ import package',
+      'รายการ path ที่ถูกรวมไว้ใน published tarball',
+      'script ที่ใช้งานผ่าน npm run',
+      'peer dependencies ที่ผู้ใช้ต้องติดตั้ง',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณรัน npm version minor กับ package เวอร์ชัน 2.3.1 เวอร์ชันใหม่คือเท่าใด?',
+    options: [
+      '2.3.2',
+      '2.4.0',
+      '3.0.0',
+      '2.3.1-minor',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม scoped packages ถึงต้องใช้ npm publish --access public เพื่อให้สาธารณชนติดตั้งได้?',
+    options: [
+      'Scoped packages เป็น paid เสมอและต้องการ billing flag',
+      'Scoped packages ค่าเริ่มต้นเป็น restricted (private) บน npm registry',
+      'Flag --access จำเป็นสำหรับทุก package ตั้งแต่ npm v7',
+      'Unscoped packages ไม่สามารถ publish ได้โดยไม่มี flag นี้',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="modules-npm/publishing" questions={publishingQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/publishing" />

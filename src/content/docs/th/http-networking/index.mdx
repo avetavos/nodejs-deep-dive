@@ -1,0 +1,88 @@
+---
+title: 'HTTP & Networking'
+description: 'สร้าง HTTP server และทำ outbound request ด้วย built-in module ของ Node.js — ไม่ต้องพึ่ง framework'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Node.js ในฐานะแพลตฟอร์ม Networking
+
+จุดเด่นอย่างหนึ่งของ Node.js คือการรองรับ networking ระดับ first-class ซึ่งฝังอยู่ในตัว runtime เลย ก่อนที่ framework อย่าง Express หรือ Fastify จะถือกำเนิด นักพัฒนาเขียน HTTP server โดยใช้เพียง built-in module `node:http` เพียงอย่างเดียว และ module นั้นยังคงเป็นเครื่องยนต์ใต้ฝากระโปรงของ framework ทุกตัวในปัจจุบัน
+
+โมดูลนี้จะสอนให้คุณทำงานกับ HTTP ในระดับที่สำคัญจริง ๆ ได้แก่ request/response cycle, routing, headers, status codes และการทำ outbound fetch เมื่อจบแล้วคุณจะเข้าใจว่า framework แต่ละตัวทำงานอะไรอยู่ใต้ฝากระโปรง
+
+## สิ่งที่จะเรียนในโมดูลนี้
+
+| บทเรียน | หัวข้อ |
+|---------|--------|
+| HTTP Server | `http.createServer`, status codes, headers, `res.end` |
+| Routing | Manual routing ด้วย `req.method` และ `req.url` |
+| Outbound Requests | Global `fetch`, JSON, การจัดการข้อผิดพลาด |
+| JSON API | Parse body, route, ตอบกลับด้วย JSON |
+
+## เซิร์ฟเวอร์ขั้นต่ำ — ทำได้เดี๋ยวนี้
+
+ไม่ต้อง `npm install` ไม่ต้อง framework ไม่ต้องไฟล์ config นี่คือ HTTP server ของ Node.js ที่สมบูรณ์:
+
+export const minimalServerCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Hello from Node.js!\\n');
+});
+
+server.listen(3000, function() {
+  console.log('Server listening on http://localhost:3000');
+});
+`;
+
+<NodeRunner client:visible code={minimalServerCode} node />
+
+สามบรรทัดของ logic — แค่นั้นเอง ส่วนที่เหลือในโมดูลนี้จะอธิบายแต่ละส่วนอย่างละเอียด
+
+<Callout title="module http มาพร้อมกับ Node.js">
+คุณไม่จำเป็นต้องติดตั้ง `node:http` เพราะเป็นส่วนหนึ่งของ Node.js standard library นำเข้าด้วย `require('node:http')` (CommonJS) หรือ `import http from 'node:http'` (ESM) โดย prefix `node:` คือ convention สมัยใหม่ที่บอกชัดเจนว่าคุณกำลัง import built-in ไม่ใช่ npm package
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'ต้องใช้ module ใดในการสร้าง HTTP server ใน Node.js โดยไม่ต้องใช้ npm package?',
+    options: [
+      'express',
+      'node:http',
+      'node:net',
+      'node:fetch',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'prefix `node:` ใน `require("node:http")` หมายความว่าอะไร?',
+    options: [
+      'third-party package จาก npm',
+      'module เก่าที่ถูก deprecated แล้ว',
+      'built-in module ของ Node.js standard library',
+      'ES module ที่ต้องใช้ flag เพื่อเปิดใช้',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'framework ใดบ้างที่ใช้ `node:http` เป็น engine ภายใน?',
+    options: [
+      'Express เท่านั้น',
+      'Fastify เท่านั้น',
+      'Express, Fastify และ Node.js HTTP framework ส่วนใหญ่',
+      'ไม่มี — ทุก framework ใช้ C++ binding โดยตรง',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="http-networking/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="http-networking/index" />

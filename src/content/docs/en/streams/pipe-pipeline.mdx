@@ -1,0 +1,162 @@
+---
+title: 'Pipe & Pipeline'
+description: 'Connecting streams with .pipe() and using stream.pipeline() for safe error handling.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## readable.pipe(writable)
+
+`.pipe()` connects a Readable directly to a Writable, automatically managing the flow of data between them. It handles backpressure: when the writable signals its buffer is full (by returning `false` from `write()`), pipe pauses the readable and resumes it on `drain`.
+
+```js
+const fs = require('node:fs');
+
+const readable = fs.createReadStream('./input.txt');
+const writable = fs.createWriteStream('./output.txt');
+
+readable.pipe(writable);
+```
+
+You can chain `.pipe()` through Transform streams to build processing pipelines:
+
+```js
+const zlib = require('node:zlib');
+
+fs.createReadStream('./file.txt')
+  .pipe(zlib.createGzip())
+  .pipe(fs.createWriteStream('./file.txt.gz'));
+```
+
+## The problem with .pipe()
+
+`.pipe()` has a well-known flaw: **it does not propagate errors**. If any stream in the chain emits an `error` event, the other streams are not automatically destroyed or closed. You end up with open file handles and memory leaks.
+
+```js
+// Dangerous: error on readable does NOT close writable
+readable.pipe(writable);
+
+readable.on('error', function(err) {
+  console.error('read error — but writable is still open!', err.message);
+  writable.destroy();   // you must clean up manually
+});
+```
+
+## stream.pipeline() — the safe alternative
+
+`stream.pipeline(...streams, callback)` was added in Node 10 precisely to fix this. It:
+
+1. Wires up all the streams end-to-end.
+2. Propagates errors from any stream to the callback.
+3. Automatically destroys all streams in the chain on error.
+
+```js
+const { pipeline } = require('node:stream');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+pipeline(
+  fs.createReadStream('./input.txt'),
+  zlib.createGzip(),
+  fs.createWriteStream('./input.txt.gz'),
+  function(err) {
+    if (err) {
+      console.error('pipeline failed:', err.message);
+    } else {
+      console.log('pipeline complete');
+    }
+  }
+);
+```
+
+Node 15+ also ships `stream/promises` which gives you an `await`-friendly version:
+
+```js
+const { pipeline } = require('node:stream/promises');
+
+await pipeline(
+  fs.createReadStream('./input.txt'),
+  zlib.createGzip(),
+  fs.createWriteStream('./input.txt.gz')
+);
+```
+
+## Runnable demo
+
+The demo below builds a short in-memory pipeline: a Readable source produces three strings, a Transform uppercases each chunk, and a Writable collects the results.
+
+export const pipelineCode = `
+const { Readable, Transform, Writable, pipeline } = require('node:stream');
+
+const source = Readable.from(['hello', ' world', ' streams']);
+
+const upper = new Transform({
+  transform(chunk, encoding, callback) {
+    callback(null, chunk.toString().toUpperCase());
+  }
+});
+
+const collected = [];
+const sink = new Writable({
+  write(chunk, encoding, callback) {
+    collected.push(chunk.toString());
+    callback();
+  }
+});
+
+pipeline(source, upper, sink, function(err) {
+  if (err) {
+    console.error('pipeline error:', err.message);
+  } else {
+    console.log('result: ' + collected.join(''));
+  }
+});
+`;
+
+<NodeRunner client:visible code={pipelineCode} node />
+
+<Callout title="Prefer pipeline() over .pipe() for proper error and cleanup handling">
+stream.pipeline() automatically propagates errors and destroys all streams in the chain. Using .pipe() leaves you responsible for manually attaching error listeners and destroying each stream — easy to get wrong, leading to file handle leaks and memory growth.
+</Callout>
+
+export const pipelineQuiz = [
+  {
+    q: 'What is the main problem with using readable.pipe(writable) alone?',
+    options: [
+      'It does not handle backpressure',
+      'It only works with file streams',
+      'Errors are not automatically propagated to other streams in the chain',
+      'It runs synchronously and blocks the event loop',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What happens when any stream in a stream.pipeline() chain emits an error?',
+    options: [
+      'Only that stream closes; others continue',
+      'The error is silently ignored',
+      'All streams in the chain are automatically destroyed and the callback receives the error',
+      'The pipeline retries the failed operation',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which stream type can sit in the middle of a pipeline to transform data in-flight?',
+    options: [
+      'Readable',
+      'Writable',
+      'Transform',
+      'Duplex',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="streams/pipe-pipeline" questions={pipelineQuiz} />
+
+<ProgressTracker client:visible id="streams/pipe-pipeline" />

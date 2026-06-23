@@ -1,0 +1,143 @@
+---
+title: 'Managing Dependencies'
+description: 'Understanding dependencies, devDependencies, peerDependencies, lockfiles, and the difference between npm install and npm ci.'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+npm separates concerns by dependency type. Rather than dumping every package into a single bucket, `package.json` distinguishes between packages your application needs at runtime, tools you only need during development, and packages that the consumer of your library must supply themselves. Getting these categories right keeps production installs lean and avoids dependency conflicts downstream.
+
+## `dependencies` — runtime packages
+
+`dependencies` lists packages that must be present for your application to run. When someone installs your package, npm installs these alongside it.
+
+```bash
+npm install express
+```
+
+This adds `express` to the `"dependencies"` section of `package.json`:
+
+```json
+{
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
+```
+
+## `devDependencies` — development-only tools
+
+`devDependencies` contains packages used only while building, testing, or linting — they are never needed in production. npm skips them when `NODE_ENV=production` or when `--omit=dev` is passed.
+
+```bash
+npm install --save-dev eslint vitest typescript
+```
+
+```json
+{
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}
+```
+
+## `peerDependencies` — consumer-provided packages
+
+`peerDependencies` declares packages that the consuming project must install. This is the correct pattern for plugins, framework integrations, and shared libraries that should not be bundled separately in every package that uses them.
+
+```json
+{
+  "name": "eslint-plugin-my-rules",
+  "version": "1.0.0",
+  "peerDependencies": {
+    "eslint": ">=8.0.0"
+  }
+}
+```
+
+If a consumer installs `eslint-plugin-my-rules` without `eslint` present, npm prints a peer dependency warning. The plugin itself never includes its own copy of `eslint` — it uses the one in the consumer's project.
+
+## Lockfiles
+
+`package-lock.json` records the **exact resolved version and integrity hash** of every package (and its transitive dependencies) that was installed. This guarantees that every developer and every CI run gets identical trees.
+
+A minimal lockfile entry looks like:
+
+```json
+{
+  "node_modules/ms": {
+    "version": "2.1.3",
+    "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+    "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTg=="
+  }
+}
+```
+
+Always commit `package-lock.json` to version control. Without it, `npm install` may resolve to newer patch or minor versions, silently breaking reproducible builds.
+
+## `npm install` vs `npm ci`
+
+These two commands serve different purposes:
+
+```bash
+# npm install — resolves and potentially updates the lockfile
+npm install
+
+# npm ci — installs exactly what is in the lockfile; fails if package.json
+# and package-lock.json are out of sync; always starts with a clean slate
+npm ci
+```
+
+| | `npm install` | `npm ci` |
+|---|---|---|
+| **Lockfile** | May update | Must match — fails if out of sync |
+| **node_modules** | Incremental | Deleted and rebuilt from scratch |
+| **Use case** | Local development | CI/CD pipelines, Docker builds |
+| **Speed** | Slower (resolves) | Faster (reads lockfile directly) |
+
+<Callout title="Commit your lockfile; use npm ci in CI">
+`package-lock.json` is the source of truth for reproducible installs. Committing it ensures every environment — developer laptops, staging, production — installs the exact same tree. In CI pipelines use `npm ci` instead of `npm install`: it validates that the lockfile matches `package.json` and fails loudly if they diverge, catching accidental drift before it reaches production.
+</Callout>
+
+export const dependenciesQuiz = [
+  {
+    q: 'Which section of package.json should a test framework like Vitest be listed under?',
+    options: [
+      'dependencies',
+      'devDependencies',
+      'peerDependencies',
+      'optionalDependencies',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the main purpose of peerDependencies?',
+    options: [
+      'To list packages installed automatically with npm install',
+      'To declare packages that the consuming project must provide',
+      'To pin exact versions of transitive dependencies',
+      'To list packages used only in test environments',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What happens when you run `npm ci` and package.json is out of sync with package-lock.json?',
+    options: [
+      'npm ci updates the lockfile to match package.json',
+      'npm ci ignores the discrepancy and installs anyway',
+      'npm ci fails with an error',
+      'npm ci prompts you to choose which file to trust',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="modules-npm/dependencies" questions={dependenciesQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/dependencies" />

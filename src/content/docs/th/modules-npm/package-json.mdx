@@ -1,0 +1,131 @@
+---
+title: 'เจาะลึก package.json'
+description: 'ทำความเข้าใจกับฟิลด์ใน package.json, semver ranges, และ npm init'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## package.json คืออะไร?
+
+`package.json` คือไฟล์ manifest ที่อยู่ที่ root ของทุกโปรเจกต์ Node.js มันเก็บข้อมูลสำคัญเกี่ยวกับโปรเจกต์ของคุณ: ชื่อ, เวอร์ชัน, dependencies, scripts, และอีกมากมาย npm ใช้ไฟล์นี้เพื่อติดตั้ง dependencies, รัน scripts, และเผยแพร่แพ็คเกจไปยัง registry
+
+## ฟิลด์สำคัญ
+
+```json
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "description": "A sample Node.js application",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+```
+
+- **`name`** — ชื่อแพ็คเกจ ต้องเป็น lowercase และไม่มีช่องว่าง
+- **`version`** — เวอร์ชันปัจจุบันในรูปแบบ semver (`major.minor.patch`)
+- **`main`** — entry point สำหรับ CommonJS (`require('my-app')` จะโหลดไฟล์นี้)
+- **`type`** — กำหนดว่า `.js` files เป็น CJS หรือ ESM โดยค่าเริ่มต้น
+- **`scripts`** — คำสั่งที่รันด้วย `npm run <name>`
+- **`dependencies`** — แพ็คเกจที่จำเป็นสำหรับ production
+- **`devDependencies`** — แพ็คเกจที่ใช้เฉพาะในการพัฒนา (เช่น test runners, bundlers)
+- **`engines`** — ระบุเวอร์ชัน Node.js ที่รองรับ
+
+## Semver ranges
+
+npm ใช้ **Semantic Versioning (semver)** สำหรับ version constraints ไวยากรณ์ range ที่พบบ่อยมีดังนี้:
+
+| Range | ความหมาย | ตัวอย่าง |
+|-------|----------|---------|
+| `^4.18.2` | minor และ patch ล่าสุดที่ compatible กับ major version นี้ | `>=4.18.2 <5.0.0` |
+| `~4.18.2` | patch ล่าสุดที่ compatible กับ minor version นี้ | `>=4.18.2 <4.19.0` |
+| `4.18.2` | เวอร์ชันนี้เท่านั้น (pinned) | `4.18.2` เท่านั้น |
+| `>=4.0.0` | เวอร์ชัน 4.0.0 ขึ้นไป | ไม่มีขีดบน |
+| `*` | เวอร์ชันใดก็ได้ | ไม่แนะนำใน production |
+
+`^` (caret) คือ range ที่ใช้บ่อยที่สุด — มันเลือก patch และ minor releases ที่ใหม่กว่าโดยอัตโนมัติในขณะที่ lock major version เพื่อหลีกเลี่ยง breaking changes
+
+## การสร้าง package.json ด้วย npm init
+
+```bash
+# Interactive wizard — ถามคุณทีละขั้น
+npm init
+
+# สร้างด้วยค่า default ทันที (ไม่ถาม)
+npm init -y
+```
+
+`npm init -y` สร้าง `package.json` ที่ถูกต้องด้วยค่า default ทันที มีประโยชน์สำหรับโปรเจกต์ใหม่ที่คุณต้องการติดตั้งแพ็คเกจอย่างรวดเร็ว
+
+## การติดตั้ง dependencies
+
+```bash
+# เพิ่ม production dependency
+npm install express
+
+# เพิ่ม dev dependency
+npm install --save-dev typescript
+
+# ติดตั้ง dependencies ทั้งหมดจาก package.json ที่มีอยู่แล้ว
+npm install
+```
+
+เมื่อคุณรัน `npm install <package>` npm จะอัปเดต `package.json` และ `package-lock.json` โดยอัตโนมัติ `package-lock.json` เก็บเวอร์ชันที่แน่นอนของทุก dependency เพื่อให้ builds สามารถ reproduce ได้
+
+<Callout title='ฟิลด์ "type": "module"'>
+การเพิ่ม `"type": "module"` ใน `package.json` ทำให้ไฟล์ `.js` ทั้งหมดในโปรเจกต์ถูกถือว่าเป็น ES modules ซึ่งหมายความว่าคุณสามารถใช้ `import`/`export` ใน `.js` files ได้โดยตรง หากคุณต้องการไฟล์ CommonJS บางไฟล์ท่ามกลาง ESM package ให้ใช้นามสกุล `.cjs` สำหรับไฟล์เหล่านั้น
+</Callout>
+
+export const packageJsonQuiz = [
+  {
+    q: 'ฟิลด์ใดใน package.json ที่แนะนำให้ใช้แทน "main" ใน Node.js เวอร์ชันใหม่ สำหรับการควบคุมสิ่งที่ package เปิดเผย?',
+    options: [
+      '"module"',
+      '"browser"',
+      '"exports"',
+      '"entry"',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'คุณต้องการอนุญาตเฉพาะการอัปเดต patch-level ของ dependency โดยไม่ให้มี minor หรือ major bump ควรใช้ semver range prefix ใด?',
+    options: [
+      '^',
+      '~',
+      '*',
+      '=',
+    ],
+    answer: 1,
+  },
+  {
+    q: '"npm init -y" ทำอะไร?',
+    options: [
+      'ติดตั้ง dependency ทั้งหมดที่ระบุใน package.json',
+      'รัน interactive wizard สำหรับสร้าง package.json',
+      'สร้าง package.json ด้วยค่า default โดยไม่ถาม',
+      'เผยแพร่ package ไปยัง npm registry',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="modules-npm/package-json" questions={packageJsonQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/package-json" />

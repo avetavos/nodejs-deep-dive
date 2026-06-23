@@ -1,0 +1,170 @@
+---
+title: 'Modules: ESM และ CommonJS'
+description: 'ESM import/export vs CommonJS require/module.exports, named vs default exports และเมื่อไหรควรใช้ระบบ module แต่ละแบบใน Node.js'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## สองระบบ Module
+
+Node.js รองรับสองระบบ module ที่ไม่สามารถผสมกันได้อย่างอิสระ:
+
+| ฟีเจอร์ | ESM | CommonJS |
+|---------|-----|----------|
+| Syntax | `import` / `export` | `require()` / `module.exports` |
+| นามสกุลไฟล์ | `.mjs` หรือ `.js` พร้อม `"type":"module"` | `.cjs` หรือ `.js` ไม่มี `"type":"module"` |
+| การโหลด | Static วิเคราะห์เมื่อ parse | Dynamic รันเมื่อ runtime |
+| Top-level `await` | รองรับ | ไม่รองรับ |
+| Default ใน Node 20+ | ใช่ (opt-in) | Legacy default |
+
+## CommonJS (CJS)
+
+CommonJS คือระบบ module ดั้งเดิมของ Node.js ยังคงใช้กันอย่างแพร่หลายใน packages และ tooling เก่า
+
+```js
+// math.js (CommonJS)
+function add(a, b) { return a + b; }
+function multiply(a, b) { return a * b; }
+
+module.exports = { add, multiply };      // named exports ผ่าน object
+// หรือ: module.exports = add;           // single default export
+
+// main.js (CommonJS)
+const { add, multiply } = require('./math');
+console.log(add(2, 3));       // 5
+console.log(multiply(4, 5));  // 20
+```
+
+`require()` เป็น synchronous และโหลดไฟล์ทันทีเมื่อบรรทัดนั้นถูก execute ซึ่งหมายความว่าสามารถ `require()` ภายใน `if` block หรือฟังก์ชันได้
+
+## ECMAScript Modules (ESM)
+
+ESM คือมาตรฐาน JavaScript module อย่างเป็นทางการ ตอนนี้เป็นระบบที่แนะนำสำหรับ Node.js projects ใหม่
+
+```js
+// math.mjs (ESM — named exports)
+export function add(a, b) { return a + b; }
+export function multiply(a, b) { return a * b; }
+
+// utils.mjs (ESM — default export)
+export default function formatNumber(n) {
+  return n.toFixed(2);
+}
+
+// main.mjs (ESM — named import)
+import { add, multiply } from './math.mjs';
+import formatNumber from './utils.mjs';
+
+console.log(add(2, 3));            // 5
+console.log(formatNumber(3.14159)); // '3.14'
+```
+
+`import` statements เป็น **static** — ต้องปรากฏที่ด้านบนของไฟล์และถูก resolve ก่อนโค้ดใดๆ รัน ทำให้ bundlers สามารถทำ tree-shaking (การกำจัด dead-code) ได้
+
+## การเปิดใช้งาน ESM ใน Node.js
+
+สองวิธีในการบอก Node.js ว่าไฟล์ใช้ ESM:
+
+1. **`"type": "module"` ใน `package.json`** — ไฟล์ `.js` ทั้งหมดใน package นั้นถือเป็น ESM ใช้ `.cjs` สำหรับไฟล์ใดๆ ที่ต้องคงเป็น CommonJS
+2. **นามสกุล `.mjs`** — ถือเป็น ESM เสมอไม่ว่า `package.json` จะเป็นอะไร
+
+```json
+{
+  "name": "my-app",
+  "type": "module"
+}
+```
+
+## Named vs Default Exports
+
+```js
+// Named: export หลาย bindings import ด้วยชื่อที่แน่นอน (หรือเปลี่ยนชื่อ)
+export const PI = 3.14159;
+export function area(r) { return PI * r * r; }
+
+import { PI, area } from './circle.mjs';
+import { area as circleArea } from './circle.mjs'; // เปลี่ยนชื่อ
+
+// Default: main export หนึ่งตัวต่อไฟล์ import ด้วยชื่อใดก็ได้
+export default class Logger { /* ... */ }
+
+import Logger from './logger.mjs';
+import MyLogger from './logger.mjs'; // เหมือนกัน แค่ชื่อ local ต่างกัน
+```
+
+## Demo ESM ที่รันได้
+
+snippet นี้รันบน Node.js runtime (module resolution ต้องการ Node) แสดงการทำงานของ ES module ที่มี named exports end-to-end โดยใช้ inline dynamic `import()`
+
+```js
+// ESM inline ผ่าน data: URL — ต้องการ Node runtime
+const src = `
+  export function add(a, b) { return a + b; }
+  export const VERSION = '1.0.0';
+`;
+const mod = await import('data:text/javascript,' + encodeURIComponent(src));
+console.log('add(3, 4):', mod.add(3, 4));
+console.log('VERSION:', mod.VERSION);
+```
+
+export const modulesCode = `
+// Dynamic import ของ inline ESM module ผ่าน data: URL
+const src = [
+  'export function add(a, b) { return a + b; }',
+  'export const VERSION = "1.0.0";',
+].join('\\n');
+
+import('data:text/javascript,' + encodeURIComponent(src)).then(function(mod) {
+  console.log('add(3, 4):', mod.add(3, 4));
+  console.log('VERSION:', mod.VERSION);
+  console.log('module keys:', Object.keys(mod).filter(function(k) { return k !== 'default'; }).join(', '));
+});
+`;
+
+<NodeRunner client:visible code={modulesCode} node />
+
+<Callout title="ESM is the modern default — use it for new projects">
+Node.js projects ใหม่ควรใช้ ESM เพิ่ม `"type": "module"` ใน `package.json` และใช้ `.js` สำหรับไฟล์ ESM และ `.cjs` สำหรับไฟล์ CommonJS เดิม ESM รองรับ top-level `await`, static analysis และ native tree-shaking หลีกเลี่ยงการผสมสองระบบในโปรเจกต์เดียวกันเท่าที่จะทำได้
+</Callout>
+
+export const modulesQuiz = [
+  {
+    q: 'การเพิ่ม `"type": "module"` ใน `package.json` ทำอะไร?',
+    options: [
+      'เปิดใช้งาน TypeScript compilation',
+      'ทำให้ไฟล์ `.js` ทั้งหมดใน package นั้นถือเป็น ESM (ECMAScript Modules)',
+      'ปิดใช้งาน `require()` ทั่วโลกในทุก packages ที่ติดตั้ง',
+      'บอก Node ให้ใช้นามสกุล `.mjs` อัตโนมัติ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ข้อใดเกี่ยวกับ `import` เป็นความจริงเมื่อเทียบกับ `require()`?',
+    options: [
+      '`import` เป็น synchronous; `require()` เป็น asynchronous',
+      '`import` สามารถปรากฏที่ใดก็ได้ภายใน function body',
+      '`import` เป็น static และถูก resolve ก่อนโค้ดใดๆ รัน ทำให้ tree-shaking เป็นไปได้',
+      '`import` ทำงานได้เฉพาะภายใน async functions',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'จะ export ค่าหลักหนึ่งตัวจากไฟล์ ESM ได้อย่างไร?',
+    options: [
+      '`module.exports = value`',
+      '`export main = value`',
+      '`export default value`',
+      '`exports.default = value`',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="js-essentials/modules" questions={modulesQuiz} />
+
+<ProgressTracker client:visible id="js-essentials/modules" />

@@ -1,0 +1,170 @@
+---
+title: 'Scope และ Closures'
+description: 'var/let/const, function vs block scope, hoisting, lexical scope และ closures ใน JavaScript'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## var, let และ const
+
+JavaScript มี keyword การประกาศสามแบบ แต่ละแบบมีกฎ scoping ที่แตกต่างกัน:
+
+| Keyword | Scope | Hoisted | Reassignable | Re-declarable |
+|---------|-------|---------|--------------|---------------|
+| `var` | Function | ใช่ (เป็น `undefined`) | ใช่ | ใช่ |
+| `let` | Block | ใช่ (TDZ) | ใช่ | ไม่ |
+| `const` | Block | ใช่ (TDZ) | ไม่ | ไม่ |
+
+**Block scope** หมายความว่าตัวแปรมีอยู่เฉพาะระหว่างเครื่องหมาย `{}` ที่ใกล้ที่สุด **Function scope** หมายความว่าตัวแปรมีอยู่ตลอด function body ไม่ว่า block ด้านในจะเป็นอย่างไร
+
+```js
+function example() {
+  if (true) {
+    var x = 1;   // function-scoped — รั่วออกนอก if
+    let y = 2;   // block-scoped — อยู่แค่ใน if
+    const z = 3; // block-scoped
+  }
+  console.log(x); // 1  — มองเห็นที่นี่
+  console.log(y); // ReferenceError: y is not defined
+}
+```
+
+## Hoisting
+
+การประกาศตัวแปรถูก **hoist** — เลื่อนไปที่ด้านบนของ scope โดย engine ก่อนการ execution
+
+การ hoist ของ `var` จะ initialise ตัวแปรเป็น `undefined` ทันที ส่วน `let`/`const` ถูก hoist แต่อยู่ใน **Temporal Dead Zone (TDZ)** — การเข้าถึงก่อนบรรทัดที่ประกาศจะ throw `ReferenceError`
+
+```js
+console.log(a); // undefined — var ถูก hoist และ initialised
+var a = 5;
+
+console.log(b); // ReferenceError — let อยู่ใน TDZ
+let b = 10;
+```
+
+Function **declarations** ก็ถูก hoist อย่างสมบูรณ์ — สามารถเรียกก่อนบรรทัดที่เขียนได้ แต่ Function **expressions** (ที่กำหนดให้กับตัวแปร) ไม่ถูก hoist
+
+## Lexical scope
+
+Scope ใน JavaScript เป็น **lexical** (หรือ static): scope ของฟังก์ชันถูกกำหนดโดยที่มันถูกเขียนใน source code ไม่ใช่ที่ที่มันถูกเรียก ฟังก์ชันด้านในสามารถอ่านตัวแปรจาก scope รอบนอกได้เสมอ
+
+```js
+const prefix = 'LOG';
+
+function outer() {
+  const level = 'INFO';
+
+  function inner(msg) {
+    // inner อ่านได้ทั้ง prefix (module scope) และ level (outer scope)
+    console.log('[' + prefix + ':' + level + '] ' + msg);
+  }
+
+  inner('started');
+}
+
+outer(); // [LOG:INFO] started
+```
+
+## Closures
+
+**Closure** คือฟังก์ชันที่เก็บการเข้าถึงตัวแปรของ scope รอบนอกไว้แม้ว่าฟังก์ชันนั้นจะ return ไปแล้ว ฟังก์ชันด้านในไม่ได้คัดลอกค่า — มันถือ reference ที่มีชีวิตอยู่ไปยังตัวแปรนั้นๆ
+
+use case คลาสสิกคือ **counter factory**:
+
+```js
+function makeCounter(start) {
+  let count = start;
+
+  return {
+    increment: function() { count += 1; },
+    decrement: function() { count -= 1; },
+    value:     function() { return count; },
+  };
+}
+
+const counter = makeCounter(0);
+counter.increment();
+counter.increment();
+counter.increment();
+counter.decrement();
+console.log(counter.value()); // 2
+```
+
+`count` อาศัยอยู่ใน scope ของ `makeCounter` ทุกฟังก์ชันที่ return จาก `makeCounter` ถือ reference ไปยัง `count` ตัวเดียวกัน
+
+## Demo Closure ที่รันได้
+
+export const closureCode = `
+function makeCounter(start) {
+  let count = start;
+
+  return {
+    increment: function() { count += 1; },
+    decrement: function() { count -= 1; },
+    value:     function() { return count; },
+  };
+}
+
+const c1 = makeCounter(0);
+const c2 = makeCounter(100);
+
+c1.increment();
+c1.increment();
+c1.increment();
+c2.decrement();
+
+console.log('c1:', c1.value()); // 3
+console.log('c2:', c2.value()); // 99
+console.log('counters are independent:', c1.value() !== c2.value());
+`;
+
+<NodeRunner client:visible code={closureCode} />
+
+สังเกตว่า `c1` และ `c2` เป็นอิสระจากกันอย่างสมบูรณ์ — การเรียก `makeCounter` แต่ละครั้งสร้างตัวแปร `count` ใหม่ใน scope ใหม่ และแต่ละ object ที่ return กลับมาจะ close over ตัวแปรของตัวเอง
+
+<Callout title="Closures capture variables, not values">
+ฟังก์ชันด้านในถือ reference ที่มีชีวิตอยู่ไปยังตัวแปรภายนอก หากตัวแปรนั้นเปลี่ยนแปลงหลังจากสร้าง closure แล้ว closure จะเห็นค่าใหม่ นี่คือสาเหตุที่ bug loop ของ `var` แบบคลาสสิกให้ผลลัพธ์ที่ไม่คาดคิด — callback ทุกตัว close over ตัวแปร `i` เดียวกัน ซึ่งเพิ่มไปยังค่าสุดท้ายแล้วเมื่อ callback ใดๆ รัน ใช้ `let` ใน loops เพื่อสร้าง binding ใหม่ต่อ iteration
+</Callout>
+
+export const scopeQuiz = [
+  {
+    q: 'ความแตกต่างหลักระหว่าง `let` และ `var` ในเรื่อง scope คืออะไร?',
+    options: [
+      '`let` เป็น function-scoped; `var` เป็น block-scoped',
+      '`let` เป็น block-scoped; `var` เป็น function-scoped',
+      'ทั้งคู่เป็น block-scoped แต่ `var` อนุญาตการ reassignment',
+      'ไม่มีความแตกต่าง — ทำงานเหมือนกันทุกประการภายในฟังก์ชัน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Closure คืออะไร?',
+    options: [
+      'วิธีทำให้ตัวแปร private โดยห่อด้วย IIFE',
+      'ฟังก์ชันที่ capture และเก็บการเข้าถึงตัวแปรจาก scope รอบนอก',
+      'method ที่ปิด file descriptor หลังการใช้งาน',
+      'pattern สำหรับป้องกัน memory leaks ใน loops',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เกิดอะไรขึ้นเมื่อเข้าถึงตัวแปร `let` ก่อนบรรทัดที่ประกาศ?',
+    options: [
+      'ได้ `undefined` — เหมือนกับ `var`',
+      'ได้ `null`',
+      'throw ReferenceError — `let` อยู่ใน Temporal Dead Zone',
+      'engine hoist และ initialise เป็น `0`',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="js-essentials/scope-closures" questions={scopeQuiz} />
+
+<ProgressTracker client:visible id="js-essentials/scope-closures" />

@@ -1,0 +1,143 @@
+---
+title: Buffer
+description: 'Working with binary data in Node.js using Buffer: Buffer.from, encodings, byte length, and slicing.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why Buffer exists
+
+JavaScript strings are stored internally as **UTF-16** — two bytes per code point in the Basic Multilingual Plane. That is fine for text, but networking and filesystem work deals in raw bytes: a TCP packet, a JPEG image, or a binary protocol frame has no inherent encoding.
+
+`Buffer` is Node's answer: a fixed-length sequence of bytes exposed as a Uint8Array subclass. It predates typed arrays and is still the standard type you will see throughout Node's streams, HTTP, crypto, and fs APIs.
+
+<Callout title="Strings are UTF-16 in JS; Buffer handles raw bytes">
+A JavaScript `string` with 4 characters might occupy 4, 8, or even more bytes depending on the encoding. `Buffer` separates the concept of "how many characters" from "how many bytes on the wire." Always use `Buffer.byteLength(str, encoding)` — not `str.length` — when you need the byte size of a string.
+</Callout>
+
+## Creating a Buffer
+
+The preferred way is `Buffer.from()`. The deprecated `new Buffer()` constructor was removed; never use it.
+
+export const bufferFromCode = `
+// From a string (UTF-8 by default)
+var buf1 = Buffer.from('Hello');
+console.log('buf1:', buf1);           // <Buffer 48 65 6c 6c 6f>
+console.log('buf1 length:', buf1.length); // 5 bytes
+
+// From a hex string
+var buf2 = Buffer.from('deadbeef', 'hex');
+console.log('buf2:', buf2);           // <Buffer de ad be ef>
+console.log('buf2 length:', buf2.length); // 4 bytes
+
+// Allocate a zeroed buffer of N bytes
+var buf3 = Buffer.alloc(4);
+console.log('buf3 (zeroed):', buf3);  // <Buffer 00 00 00 00>
+`;
+
+<NodeRunner client:visible code={bufferFromCode} node />
+
+## Encodings: utf8, hex, base64
+
+`toString(encoding)` converts a Buffer back to a string in the requested encoding.
+
+export const encodingsCode = `
+var original = 'Node.js';
+var buf = Buffer.from(original, 'utf8');
+
+console.log('utf8  :', buf.toString('utf8'));
+console.log('hex   :', buf.toString('hex'));
+console.log('base64:', buf.toString('base64'));
+
+// Round-trip: base64 -> Buffer -> string
+var b64 = buf.toString('base64');
+var decoded = Buffer.from(b64, 'base64').toString('utf8');
+console.log('decoded:', decoded);
+`;
+
+<NodeRunner client:visible code={encodingsCode} node />
+
+## Byte length vs string length
+
+export const byteLengthCode = `
+// ASCII: 1 char = 1 byte
+var ascii = 'hello';
+console.log('ascii chars:', ascii.length);
+console.log('ascii bytes:', Buffer.byteLength(ascii, 'utf8'));
+
+// Thai: multi-byte in UTF-8
+var thai = 'สวัสดี';
+console.log('thai chars:', thai.length);
+console.log('thai bytes (utf8):', Buffer.byteLength(thai, 'utf8'));
+
+// Emoji: surrogate pair in JS = 2 .length units
+var emoji = 'Node 🚀';
+console.log('emoji .length:', emoji.length);
+console.log('emoji bytes (utf8):', Buffer.byteLength(emoji, 'utf8'));
+`;
+
+<NodeRunner client:visible code={byteLengthCode} node />
+
+## Slicing and copying
+
+`buf.slice(start, end)` (or `buf.subarray`) returns a view into the same memory — modifying the slice modifies the original. Use `Buffer.from(slice)` to get an independent copy.
+
+export const sliceCode = `
+var buf = Buffer.from('Hello, World!');
+var slice = buf.slice(0, 5);
+console.log('slice:', slice.toString()); // Hello
+
+// slice shares memory — mutating it mutates buf
+slice[0] = 0x4A; // 'J'
+console.log('buf after mutation:', buf.toString()); // Jello, World!
+
+// Independent copy
+var copy = Buffer.from(buf.slice(7, 12));
+copy[0] = 0x57; // 'W'
+console.log('copy:', copy.toString());   // World with W
+console.log('buf unchanged:', buf.toString());
+`;
+
+<NodeRunner client:visible code={sliceCode} node />
+
+export const bufferQuiz = [
+  {
+    q: 'Why is Buffer.byteLength(str) often different from str.length?',
+    options: [
+      'Buffer counts null terminators; strings do not',
+      'str.length counts UTF-16 code units; Buffer.byteLength counts bytes in the chosen encoding',
+      'They are always equal for ASCII',
+      'Buffer.byteLength counts bits, not bytes',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does Buffer.from("deadbeef", "hex") produce?',
+    options: [
+      'A Buffer containing the ASCII characters d, e, a, d, b, e, e, f',
+      'A Buffer of 4 bytes decoded from the hex string',
+      'An error — hex is not a valid encoding for Buffer.from',
+      'A Buffer of 8 bytes, one per hex character',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What happens when you mutate a slice returned by buf.slice()?',
+    options: [
+      'The slice is an independent copy — the original is unaffected',
+      'Both the slice and the original buffer are modified',
+      'An error is thrown — Buffer slices are read-only',
+      'Only the original is modified',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="core-apis/buffer" questions={bufferQuiz} />
+
+<ProgressTracker client:visible id="core-apis/buffer" />

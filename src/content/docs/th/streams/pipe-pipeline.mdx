@@ -1,0 +1,162 @@
+---
+title: 'Pipe & Pipeline'
+description: 'การเชื่อม Stream ด้วย .pipe() และการใช้ stream.pipeline() เพื่อจัดการ error อย่างปลอดภัย'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## readable.pipe(writable)
+
+`.pipe()` เชื่อม Readable เข้ากับ Writable โดยตรงและจัดการการไหลของข้อมูลระหว่างกันโดยอัตโนมัติ รองรับ backpressure: เมื่อ writable บอกว่า buffer เต็ม (โดยคืนค่า `false` จาก `write()`) pipe จะ pause readable และ resume เมื่อ `drain`
+
+```js
+const fs = require('node:fs');
+
+const readable = fs.createReadStream('./input.txt');
+const writable = fs.createWriteStream('./output.txt');
+
+readable.pipe(writable);
+```
+
+คุณสามารถ chain `.pipe()` ผ่าน Transform Stream เพื่อสร้าง processing pipeline:
+
+```js
+const zlib = require('node:zlib');
+
+fs.createReadStream('./file.txt')
+  .pipe(zlib.createGzip())
+  .pipe(fs.createWriteStream('./file.txt.gz'));
+```
+
+## ปัญหาของ .pipe()
+
+`.pipe()` มีข้อบกพร่องที่ทราบกันดี: **ไม่ส่งต่อ error** ถ้า Stream ใดใน chain emit event `error` Stream อื่นจะไม่ถูกทำลายหรือปิดโดยอัตโนมัติ ส่งผลให้มี file handle ที่ยังเปิดอยู่และ memory leak
+
+```js
+// อันตราย: error บน readable ไม่ปิด writable
+readable.pipe(writable);
+
+readable.on('error', function(err) {
+  console.error('read error — but writable is still open!', err.message);
+  writable.destroy();   // ต้อง clean up เอง
+});
+```
+
+## stream.pipeline() — ทางเลือกที่ปลอดภัย
+
+`stream.pipeline(...streams, callback)` ถูกเพิ่มใน Node 10 เพื่อแก้ปัญหานี้โดยเฉพาะ:
+
+1. เชื่อม Stream ทั้งหมดแบบ end-to-end
+2. ส่งต่อ error จาก Stream ใดก็ได้ไปยัง callback
+3. ทำลาย Stream ทุกตัวใน chain โดยอัตโนมัติเมื่อเกิด error
+
+```js
+const { pipeline } = require('node:stream');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+pipeline(
+  fs.createReadStream('./input.txt'),
+  zlib.createGzip(),
+  fs.createWriteStream('./input.txt.gz'),
+  function(err) {
+    if (err) {
+      console.error('pipeline failed:', err.message);
+    } else {
+      console.log('pipeline complete');
+    }
+  }
+);
+```
+
+Node 15+ ยังมี `stream/promises` ที่ให้ใช้กับ `await` ได้:
+
+```js
+const { pipeline } = require('node:stream/promises');
+
+await pipeline(
+  fs.createReadStream('./input.txt'),
+  zlib.createGzip(),
+  fs.createWriteStream('./input.txt.gz')
+);
+```
+
+## Demo ที่รันได้
+
+Demo ด้านล่างสร้าง in-memory pipeline สั้นๆ: Readable source ส่งสาม string, Transform แปลงแต่ละ chunk เป็นตัวพิมพ์ใหญ่, และ Writable รวบรวมผลลัพธ์
+
+export const pipelineCode = `
+const { Readable, Transform, Writable, pipeline } = require('node:stream');
+
+const source = Readable.from(['hello', ' world', ' streams']);
+
+const upper = new Transform({
+  transform(chunk, encoding, callback) {
+    callback(null, chunk.toString().toUpperCase());
+  }
+});
+
+const collected = [];
+const sink = new Writable({
+  write(chunk, encoding, callback) {
+    collected.push(chunk.toString());
+    callback();
+  }
+});
+
+pipeline(source, upper, sink, function(err) {
+  if (err) {
+    console.error('pipeline error:', err.message);
+  } else {
+    console.log('result: ' + collected.join(''));
+  }
+});
+`;
+
+<NodeRunner client:visible code={pipelineCode} node />
+
+<Callout title="ใช้ pipeline() แทน .pipe() เพื่อจัดการ error และ cleanup อย่างถูกต้อง">
+stream.pipeline() ส่งต่อ error โดยอัตโนมัติและทำลาย Stream ทุกตัวใน chain การใช้ .pipe() ทำให้คุณต้องแนบ error listener และทำลาย Stream แต่ละตัวเอง — ทำผิดได้ง่าย นำไปสู่ file handle leak และ Memory เติบโต
+</Callout>
+
+export const pipelineQuiz = [
+  {
+    q: 'ปัญหาหลักของการใช้ readable.pipe(writable) เพียงอย่างเดียวคืออะไร?',
+    options: [
+      'ไม่รองรับ backpressure',
+      'ใช้ได้เฉพาะกับ file stream',
+      'Error ไม่ถูกส่งต่อไปยัง Stream อื่นใน chain โดยอัตโนมัติ',
+      'ทำงาน synchronous และ block event loop',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'เกิดอะไรขึ้นเมื่อ Stream ใดใน stream.pipeline() chain emit error?',
+    options: [
+      'เฉพาะ Stream นั้นปิด Stream อื่นยังทำงานต่อ',
+      'Error ถูกเพิกเฉย',
+      'Stream ทุกตัวใน chain ถูกทำลายโดยอัตโนมัติและ callback รับ error',
+      'Pipeline retry การทำงานที่ล้มเหลว',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Stream ชนิดใดที่วางกลาง pipeline เพื่อแปลงข้อมูลระหว่างทางได้?',
+    options: [
+      'Readable',
+      'Writable',
+      'Transform',
+      'Duplex',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="streams/pipe-pipeline" questions={pipelineQuiz} />
+
+<ProgressTracker client:visible id="streams/pipe-pipeline" />

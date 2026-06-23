@@ -1,0 +1,184 @@
+---
+title: 'Building a JSON API'
+description: 'Parse request bodies, route by method and path, and respond with correct JSON headers and status codes.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Reading the request body
+
+Unlike the URL and headers which are available immediately, the request **body** arrives as a stream of chunks. You must collect them manually with `data` and `end` events:
+
+```js
+function readBody(req) {
+  return new Promise(function(resolve, reject) {
+    let raw = '';
+    req.on('data', function(chunk) { raw += chunk; });
+    req.on('end', function() { resolve(raw); });
+    req.on('error', reject);
+  });
+}
+```
+
+Once you have the raw string, parse it with `JSON.parse()` inside a try/catch to handle malformed input gracefully.
+
+## A small in-memory JSON API
+
+The server below manages a list of items in memory. It supports:
+
+- `GET /items` — list all items
+- `POST /items` — add an item (reads JSON body)
+- `GET /items/:id` — fetch one item (returns 404 if missing)
+
+export const jsonApiCode = `
+const http = require('node:http');
+
+// In-memory store
+const items = [
+  { id: 1, name: 'Node.js' },
+  { id: 2, name: 'JavaScript' },
+];
+let nextId = 3;
+
+// Helper: read and parse the JSON request body
+function readBody(req) {
+  return new Promise(function(resolve, reject) {
+    let raw = '';
+    req.on('data', function(chunk) { raw += chunk; });
+    req.on('end', function() {
+      try { resolve(JSON.parse(raw || '{}')); }
+      catch (e) { reject(e); }
+    });
+    req.on('error', reject);
+  });
+}
+
+// Helper: send a JSON response
+function sendJson(res, status, data) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+const server = http.createServer(async function(req, res) {
+  const parsed = new URL(req.url, 'http://localhost:3000');
+  const pathname = parsed.pathname;
+  const method = req.method;
+
+  // GET /items
+  if (method === 'GET' && pathname === '/items') {
+    sendJson(res, 200, items);
+    return;
+  }
+
+  // POST /items
+  if (method === 'POST' && pathname === '/items') {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+
+    if (!body.name || typeof body.name !== 'string') {
+      sendJson(res, 400, { error: 'name is required and must be a string' });
+      return;
+    }
+
+    const item = { id: nextId++, name: body.name };
+    items.push(item);
+    sendJson(res, 201, item);
+    return;
+  }
+
+  // GET /items/:id
+  const match = pathname.match(/^\\/items\\/(\\d+)$/);
+  if (method === 'GET' && match) {
+    const id = parseInt(match[1], 10);
+    const item = items.find(function(i) { return i.id === id; });
+    if (!item) {
+      sendJson(res, 404, { error: 'Item ' + id + ' not found' });
+      return;
+    }
+    sendJson(res, 200, item);
+    return;
+  }
+
+  // Fallback
+  sendJson(res, 404, { error: 'Route not found' });
+});
+
+server.listen(3000, function() {
+  console.log('JSON API at http://localhost:3000');
+  console.log('GET  /items');
+  console.log('POST /items  { "name": "..." }');
+  console.log('GET  /items/1');
+});
+`;
+
+<NodeRunner client:visible code={jsonApiCode} node />
+
+Open in StackBlitz to test the API with the built-in HTTP client or a tool like `curl`:
+
+```bash
+curl http://localhost:3000/items
+curl -X POST http://localhost:3000/items -H 'Content-Type: application/json' -d '{"name":"TypeScript"}'
+curl http://localhost:3000/items/3
+curl http://localhost:3000/items/99
+```
+
+## Status code summary for a REST API
+
+| Scenario | Status Code |
+|----------|-------------|
+| Successful read | 200 OK |
+| Resource created | 201 Created |
+| Missing or invalid body field | 400 Bad Request |
+| Resource not found | 404 Not Found |
+| Server error | 500 Internal Server Error |
+
+<Callout title="Validate input and set proper status codes">
+Two rules that define a professional JSON API: (1) **Always validate input** — check that required fields exist and have the correct types before touching any data store. Return `400 Bad Request` with a clear error message when validation fails. (2) **Use precise status codes** — `201` for a successful POST that creates a resource, `404` when a specific resource is missing, never just `200` for everything. These two habits make your API predictable and easy to debug.
+</Callout>
+
+export const jsonApiQuiz = [
+  {
+    q: 'Why must you collect request body data using `data` and `end` events rather than reading it synchronously?',
+    options: [
+      'Because the body is encrypted and needs to be decoded first',
+      'Because the body arrives as a stream of chunks, not as a single string',
+      'Because JSON parsing is asynchronous',
+      'Because Node.js buffers all request data by default',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What HTTP status code should a POST endpoint return when it successfully creates a new resource?',
+    options: [
+      '200 OK',
+      '201 Created',
+      '204 No Content',
+      '202 Accepted',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A client sends an invalid JSON body. What is the correct response status code?',
+    options: [
+      '500 Internal Server Error',
+      '200 OK with an error field in the body',
+      '400 Bad Request',
+      '422 Unprocessable Entity',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="http-networking/json-api" questions={jsonApiQuiz} />
+
+<ProgressTracker client:visible id="http-networking/json-api" />

@@ -1,0 +1,79 @@
+---
+title: 'Core APIs'
+description: 'An overview of Node.js built-in globals and core modules: process, Buffer, fs, and EventEmitter.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What are Node's Core APIs?
+
+Node.js ships with a rich set of built-in globals and modules that are available without installing anything. These are the primitives every Node.js program is built on.
+
+Key globals and modules covered in this module:
+
+- **`process`** — access to the running process: environment variables, command-line arguments, the working directory, the platform, and lifecycle control.
+- **`Buffer`** — a fixed-length chunk of raw binary data. Predates typed arrays and remains the standard way to work with bytes in Node streams and networking.
+- **`node:fs` / `node:fs/promises`** — read, write, and navigate the filesystem. The promises API lets you use `async/await` natively.
+- **`EventEmitter`** — the backbone of Node's event-driven architecture. Streams, the HTTP server, and many third-party libraries all extend `EventEmitter`.
+
+## What this module covers
+
+| Lesson | Topic |
+|--------|-------|
+| process & env | `process.argv`, `process.env`, exit codes, and platform detection |
+| Buffer | Binary data, encodings, and byte-level manipulation |
+| File System | `fs` callbacks, sync APIs, and the `fs/promises` interface |
+| EventEmitter | Custom events, listeners, and the `once` / `removeListener` lifecycle |
+
+## A first globals demo
+
+The snippet below reads two globals that are available in every Node.js process without any `require` or `import`:
+
+export const indexDemoCode = `
+// process.version — the running Node.js version
+console.log('Node version: ' + process.version);
+
+// Buffer.byteLength — bytes used to store a string (UTF-8 by default)
+var str = 'Hello, Node!';
+console.log('String: ' + str);
+console.log('Chars: ' + str.length);
+console.log('Bytes (UTF-8): ' + Buffer.byteLength(str, 'utf8'));
+`;
+
+<NodeRunner client:visible code={indexDemoCode} node />
+
+<Callout title="Globals vs modules">
+`process` and `Buffer` are true globals — no import needed. `fs`, `path`, `events`, and other built-ins must be imported with `import ... from 'node:fs'` (or the legacy `require('fs')`). The `node:` prefix is the modern convention and makes it immediately clear that the import is a Node built-in.
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'Which of the following is a true Node.js global — available without any import?',
+    options: [
+      'fs',
+      'path',
+      'process',
+      'http',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What is the recommended modern prefix for importing a Node.js built-in module?',
+    options: [
+      'No prefix — just "fs"',
+      'The "node:" prefix — e.g. "node:fs"',
+      'The "@node/" scope — e.g. "@node/fs"',
+      'Built-ins cannot be imported with ESM',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="core-apis/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="core-apis/index" />

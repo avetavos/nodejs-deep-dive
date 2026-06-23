@@ -1,0 +1,153 @@
+---
+title: 'Types และ Coercion'
+description: 'Primitives vs objects, typeof, == vs ===, truthy/falsy และ coercion ที่น่าแปลกใจใน JavaScript'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Primitives vs objects
+
+JavaScript มีค่าสองประเภท:
+
+**Primitives** — ไม่เปลี่ยนแปลงได้ (immutable), เก็บโดยค่า (by value):
+- `string`, `number`, `bigint`, `boolean`, `undefined`, `null`, `symbol`
+
+**Objects** — เปลี่ยนแปลงได้ (mutable), เก็บโดยอ้างอิง (by reference):
+- Plain objects `{}`, arrays `[]`, functions, `Map`, `Set`, `Date` เป็นต้น
+
+```js
+// Primitives: แต่ละตัวแปรถือสำเนาอิสระ
+let a = 42;
+let b = a;
+b = 99;
+console.log(a); // 42 — ไม่เปลี่ยน
+
+// Objects: ทั้งสองตัวแปรชี้ไปยัง object เดียวกัน
+const x = { count: 0 };
+const y = x;
+y.count = 5;
+console.log(x.count); // 5 — object เดียวกัน
+```
+
+## typeof
+
+`typeof` คืนค่าสตริงที่อธิบาย type ของค่า ผลลัพธ์บางอย่างน่าแปลกใจ:
+
+```js
+typeof 42            // 'number'
+typeof 'hello'       // 'string'
+typeof true          // 'boolean'
+typeof undefined     // 'undefined'
+typeof null          // 'object'  ← bug ทางประวัติศาสตร์ แก้ไขไม่ได้
+typeof {}            // 'object'
+typeof []            // 'object'  ← arrays เป็น objects
+typeof function(){}  // 'function'
+typeof Symbol()      // 'symbol'
+typeof 9007n         // 'bigint'
+```
+
+ความผิดพลาด `typeof null === 'object'` มีอยู่ใน spec ตั้งแต่ JavaScript 1.0 หากต้องการตรวจสอบ null โดยเฉพาะ ใช้ `value === null`
+
+## == vs ===
+
+`==` ทำ **type coercion** ก่อนเปรียบเทียบ ส่วน `===` ไม่ทำ — ตรวจสอบทั้งค่าและ type
+
+```js
+0 == false     // true  — false coerces เป็น 0
+0 === false    // false — number vs boolean
+
+'' == false    // true  — ทั้งคู่ coerces เป็น 0
+'' === false   // false
+
+null == undefined  // true  — กฎพิเศษ
+null === undefined // false
+
+1 == '1'   // true  — '1' coerces เป็น 1
+1 === '1'  // false
+```
+
+## Truthy และ Falsy
+
+ค่าทุกตัวเป็น **truthy** หรือ **falsy** เมื่อใช้ใน context ของ boolean
+
+**Falsy values** — มีเพียงหกตัวเท่านั้น:
+- `false`, `0`, `''` (สตริงว่าง), `null`, `undefined`, `NaN`
+
+ทุกอย่างอื่นเป็น truthy — รวมถึง `[]`, `{}`, `'0'` และ `'false'`
+
+```js
+if ([]) console.log('empty array is truthy');   // แสดงผล
+if ({}) console.log('empty object is truthy');  // แสดงผล
+if (0)  console.log('zero is truthy');          // ไม่แสดงผล
+```
+
+## Demo Coercion ที่รันได้
+
+```js
+// สังเกต coercion ที่น่าแปลกใจ
+console.log(0 == false);      // true
+console.log(0 === false);     // false
+console.log(null == undefined); // true
+console.log(null === undefined); // false
+console.log([] == false);     // true  — [] coerces เป็น '' coerces เป็น 0
+console.log(Boolean([]));     // true  — [] เป็น truthy!
+console.log(typeof null);     // object
+```
+
+export const coercionCode = `
+console.log('0 == false:', 0 == false);
+console.log('0 === false:', 0 === false);
+console.log('null == undefined:', null == undefined);
+console.log('null === undefined:', null === undefined);
+console.log('[] == false:', [] == false);
+console.log('Boolean([]):', Boolean([]));
+console.log('typeof null:', typeof null);
+`;
+
+<NodeRunner client:visible code={coercionCode} />
+
+<Callout title="Always use === to avoid coercion surprises">
+operator `===` ไม่เคย coerce types ดังนั้นการเปรียบเทียบจะทำงานตรงตามที่เขียน ใช้ `==` เฉพาะกรณีที่ตั้งใจ: ตรวจสอบทั้ง `null` และ `undefined` พร้อมกันด้วย `value == null`
+</Callout>
+
+export const coercionQuiz = [
+  {
+    q: '`typeof null` คืนค่าอะไรใน JavaScript?',
+    options: [
+      '"null"',
+      '"undefined"',
+      '"object"',
+      '"boolean"',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'ค่าใดต่อไปนี้เป็น falsy?',
+    options: [
+      'Array ว่าง `[]`',
+      'Object ว่าง `{}`',
+      'สตริง `"0"`',
+      'ตัวเลข `0`',
+    ],
+    answer: 3,
+  },
+  {
+    q: 'ผลลัพธ์ของ `null == undefined` คืออะไร?',
+    options: [
+      'false — เพราะ type ต่างกัน',
+      'true — operator == มีกฎพิเศษสำหรับคู่นี้',
+      'TypeError',
+      'true — ทั้งคู่ coerces เป็น 0',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="js-essentials/types-coercion" questions={coercionQuiz} />
+
+<ProgressTracker client:visible id="js-essentials/types-coercion" />

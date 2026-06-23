@@ -1,0 +1,87 @@
+---
+title: 'JavaScript เบื้องต้น'
+description: 'ภาพรวมของ JavaScript ในฐานะภาษาที่ขับเคลื่อน Node.js และสิ่งที่โมดูลนี้ครอบคลุม'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## JavaScript คือภาษาของ Node.js
+
+Node.js คือ runtime ที่รัน JavaScript นอกเบราว์เซอร์ ทุกอย่างที่เขียนใน Node ตั้งแต่ HTTP server ง่ายๆ ไปจนถึง CLI tool ที่ซับซ้อน ล้วนเป็น JavaScript ดังนั้นการเข้าใจภาษาอย่างแน่นหนาจึงเป็นสิ่งจำเป็นก่อนที่จะลงลึกใน API ของ Node
+
+โมดูลนี้ครอบคลุม JavaScript พื้นฐานที่นักพัฒนามักสะดุดมากที่สุดในระบบนิเวศ Node:
+
+| บทเรียน | หัวข้อ |
+|---------|--------|
+| Types และ Coercion | Primitives vs objects, `typeof`, `==` vs `===`, truthy/falsy |
+| Scope และ Closures | `var`/`let`/`const`, block scope, hoisting, lexical scope |
+| `this` และ Context | Dynamic `this`, `call`/`apply`/`bind`, arrow functions |
+| Modules | ESM `import`/`export` vs CommonJS `require`, ใช้เมื่อไหร่ |
+
+JavaScript สมัยใหม่หมายถึง **ES2022 ขึ้นไป** ตลอดทั้งโมดูล — `const`/`let`, arrow functions, destructuring, `async`/`await`, optional chaining และ native ES modules โมดูลนี้ใช้ Node 20+
+
+## Demo แรกที่รันได้
+
+โค้ดด้านล่างแสดงแนวคิด JS หลายอย่างพร้อมกัน: การประกาศ `const`, ฟังก์ชัน, การต่อสตริงแบบไม่ใช้ template literal และ closure เหนือตัวแปรภายนอก ลองรันและสังเกตผลลัพธ์
+
+```js
+const greet = function(name) {
+  return 'Hello, ' + name + '!';
+};
+
+const languages = ['JavaScript', 'TypeScript', 'Node.js'];
+
+for (const lang of languages) {
+  console.log(greet(lang));
+}
+```
+
+export const indexDemoCode = `
+const greet = function(name) {
+  return 'Hello, ' + name + '!';
+};
+
+const languages = ['JavaScript', 'TypeScript', 'Node.js'];
+
+for (const lang of languages) {
+  console.log(greet(lang));
+}
+`;
+
+<NodeRunner client:visible code={indexDemoCode} />
+
+<Callout title="Modern JS throughout">
+โมดูลนี้ใช้ syntax ES2022+ หากพบฟีเจอร์ที่ไม่คุ้นเคย MDN Web Docs คือแหล่งอ้างอิงที่ดีที่สุด — spec ไม่ได้เปลี่ยนแปลงตั้งแต่ Node 18 ที่ทำให้เวอร์ชัน V8 ที่ส่งมาคงที่
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'Node.js ให้สิ่งที่เบราว์เซอร์ไม่มีคืออะไร?',
+    options: [
+      'JavaScript engine',
+      'การเข้าถึง file system, network sockets และ OS APIs โดยไม่มี browser sandbox',
+      'รองรับ `const` และ `let`',
+      'Garbage collection',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'โมดูลนี้พึ่งพาฟีเจอร์ JavaScript เวอร์ชันใด?',
+    options: [
+      'ES5 เท่านั้น — เพื่อความเข้ากันได้สูงสุด',
+      'ES2015 (ES6) เท่านั้น',
+      'ES2022 ขึ้นไป บน Node 20+',
+      'TypeScript ที่คอมไพล์ลงเป็น ES3',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="js-essentials/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="js-essentials/index" />

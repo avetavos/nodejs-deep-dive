@@ -1,0 +1,192 @@
+---
+title: 'Built-in Test Runner'
+description: 'โมดูล node:test และ node:assert — การเขียนทดสอบโดยไม่ต้องพึ่ง dependency ภายนอก ด้วย test(), describe/it, และ node --test'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## node:test — ครบครันในตัว
+
+ตั้งแต่ Node 18 เป็นต้นมา คุณสามารถเขียนและรันการทดสอบได้โดย**ไม่ต้องพึ่ง third-party dependency เลย** โมดูล `node:test` มี `test()`, `describe()`, `it()`, hooks `before`/`after`, และ output แบบ TAP ให้ใช้งาน จับคู่กับ `node:assert` สำหรับ assertions
+
+## โครงสร้างพื้นฐานของการทดสอบ
+
+ไฟล์ทดสอบคือไฟล์ `.js` (หรือ `.mjs`) ธรรมดาที่ import `node:test` และ `node:assert`:
+
+```js
+// math.test.js
+import { test, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('add returns the correct sum', function() {
+  assert.equal(2 + 3, 5);
+});
+```
+
+รันจาก terminal:
+
+```bash
+node --test math.test.js
+```
+
+หรือรันไฟล์ `*.test.js` ทั้งหมดแบบ recursive:
+
+```bash
+node --test
+```
+
+## describe / it — การจัดกลุ่มการทดสอบ
+
+`describe` ใช้จัดกลุ่มการทดสอบที่เกี่ยวข้องกัน ส่วน `it` เป็น alias ของ `test` ที่อ่านได้เป็นธรรมชาติมากกว่าเมื่อใช้ภายใน `describe`:
+
+```js
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+describe('String utilities', function() {
+  it('trim removes leading and trailing whitespace', function() {
+    assert.equal('  hello  '.trim(), 'hello');
+  });
+
+  it('split divides by delimiter', function() {
+    assert.deepEqual('a,b,c'.split(','), ['a', 'b', 'c']);
+  });
+});
+```
+
+```bash
+node --test string-utils.test.js
+# TAP output:
+# ok 1 - String utilities > trim removes leading and trailing whitespace
+# ok 2 - String utilities > split divides by delimiter
+```
+
+## การทดสอบแบบ Async
+
+ส่ง `async` function ให้กับ `test` หรือ `it` ได้เลย runner จะ await มัน — ถ้า promise ถูก reject การทดสอบจะล้มเหลว:
+
+```js
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('fetch-like async test', async function() {
+  const result = await Promise.resolve(42);
+  assert.equal(result, 42);
+});
+```
+
+## คู่มือ node:assert/strict
+
+```js
+import assert from 'node:assert/strict';
+
+assert.equal(actual, expected);          // ==  (strict: ===)
+assert.notEqual(actual, expected);       // !==
+assert.deepEqual(obj1, obj2);            // deep structural equality
+assert.notDeepEqual(obj1, obj2);
+assert.throws(fn, /pattern/);            // fn ต้อง throw error ที่ตรงกัน
+assert.rejects(asyncFn, /pattern/);      // async fn ต้อง reject
+assert.ok(value);                        // ตรวจสอบ truthy
+```
+
+ควรใช้ `node:assert/strict` เสมอแทนที่จะใช้ `node:assert` เพราะ strict variant ใช้ `===` สำหรับการเปรียบเทียบ scalar และหลีกเลี่ยงความผิดพลาดจาก type coercion
+
+## Demo แบบ runnable
+
+snippet ด้านล่างเป็น `node:test` mini-suite ที่ทำงานได้เอง รันในโหมด node เพื่อดู TAP output จริง:
+
+export const nodeTestCode = `
+import { test, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+describe('Array helpers', function() {
+  it('includes finds an element', function() {
+    const arr = [1, 2, 3];
+    assert.ok(arr.includes(2));
+  });
+
+  it('map transforms elements', function() {
+    const result = [1, 2, 3].map(function(x) { return x * 2; });
+    assert.deepEqual(result, [2, 4, 6]);
+  });
+});
+
+test('async: resolves to correct value', async function() {
+  const val = await Promise.resolve('node:test');
+  assert.equal(val, 'node:test');
+});
+`;
+
+<NodeRunner client:visible code={nodeTestCode} node />
+
+<Callout title="Node มี built-in test runner มาตั้งแต่ v18 — ไม่ต้องติดตั้ง dependency เพิ่ม">
+คุณไม่จำเป็นต้องใช้ Jest, Mocha, หรือ Vitest เพื่อเขียนทดสอบใน Node.js `node:test` + `node:assert` ครอบคลุม unit tests, async tests, และ grouped suites ได้ครบถ้วนโดยไม่ต้องติดตั้งอะไร เพิ่ม third-party runner เมื่อคุณต้องการฟีเจอร์เฉพาะ เช่น snapshot testing, coverage UI, หรือ browser-environment simulation เท่านั้น
+</Callout>
+
+## ฟีเจอร์เพิ่มเติม
+
+```bash
+# Watch mode — รัน test ใหม่เมื่อไฟล์เปลี่ยน (Node 22+)
+node --test --watch
+
+# รันเฉพาะ test ที่ตรงกับ pattern
+node --test --test-name-pattern "Array"
+
+# รายงาน code coverage (Node 22+)
+node --test --experimental-test-coverage
+
+# รัน test files แบบ parallel (ค่าเริ่มต้นใน Node 22+)
+node --test --test-concurrency=4
+```
+
+export const nodeTestQuiz = [
+  {
+    q: 'import ใดที่ให้ `test()` และ `describe()` ใน Node.js โดยไม่ต้องติดตั้งอะไรเพิ่ม?',
+    options: [
+      "import { test } from 'jest'",
+      "import { test } from 'node:test'",
+      "import { test } from 'vitest'",
+      "import { test } from 'mocha'",
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะรันไฟล์ `*.test.js` ทั้งหมดในโปรเจกต์แบบ recursive ได้อย่างไร?',
+    options: [
+      'npx jest',
+      'node test',
+      'node --test',
+      'node run-tests',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'จะเกิดอะไรขึ้นเมื่อ async test function reject promise?',
+    options: [
+      'การทดสอบถูก skip โดยไม่แจ้งเตือน',
+      'Node crash โดยไม่รายงานว่าการทดสอบใดล้มเหลว',
+      'การทดสอบถูกทำเครื่องหมายว่าล้มเหลวพร้อมแสดงสาเหตุ',
+      'การ reject ถูกกลืนและการทดสอบผ่าน',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'ทำไมควรใช้ `node:assert/strict` แทน `node:assert`?',
+    options: [
+      'ทำงานเร็วกว่า',
+      'ใช้ strict equality (===) และหลีกเลี่ยงความผิดพลาดจาก type coercion',
+      'รองรับ async assertions',
+      'เป็นเวอร์ชันเดียวที่มีใน Node 20+',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="testing-tooling/node-test" questions={nodeTestQuiz} />
+
+<ProgressTracker client:visible id="testing-tooling/node-test" />

@@ -1,0 +1,149 @@
+---
+title: 'Publishing a Package'
+description: 'How to create, version, and publish an npm package — files, bin, exports, npm version, npm publish, and scoped packages.'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+Publishing a package makes it available on the npm registry so that anyone (or members of your organisation) can install it with `npm install`. The process involves three steps: preparing `package.json` with the right metadata, bumping the version, and running `npm publish`. Each step has guardrails that help you ship clean, predictable releases.
+
+## Key `package.json` fields for publishing
+
+Three fields control what consumers receive and how they can use your package:
+
+```json
+{
+  "name": "my-util-lib",
+  "version": "1.0.0",
+  "description": "A small utility library",
+
+  "files": ["dist", "README.md"],
+
+  "bin": {
+    "my-util": "./dist/cli.js"
+  },
+
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./helpers": {
+      "import": "./dist/helpers.mjs",
+      "require": "./dist/helpers.cjs"
+    }
+  }
+}
+```
+
+- **`files`** — an allowlist of paths included in the published tarball. Everything else (source files, test fixtures, config) is excluded. If omitted, npm applies a default set of exclusions.
+- **`bin`** — maps a CLI command name to an entry-point script. npm creates a symlink in `.bin/` so the command is available in the PATH when the package is installed.
+- **`exports`** — declares the public API surface. Any path not listed here is inaccessible to consumers.
+
+## Bumping the version with `npm version`
+
+npm follows **semantic versioning** (semver). Use `npm version` to bump and tag in one step:
+
+```bash
+# Patch bump: 1.0.0 → 1.0.1 (bug fixes)
+npm version patch
+
+# Minor bump: 1.0.1 → 1.1.0 (backwards-compatible new features)
+npm version minor
+
+# Major bump: 1.1.0 → 2.0.0 (breaking changes)
+npm version major
+```
+
+Each command updates the `"version"` field in `package.json`, commits the change, and creates a signed git tag (e.g. `v1.0.1`). Push the tag with `git push --follow-tags`.
+
+## Publishing with `npm publish`
+
+```bash
+# Publish a public (unscoped) package
+npm publish
+
+# Publish a scoped package as public (scoped packages default to restricted)
+npm publish --access public
+```
+
+npm reads `package.json` to determine the registry target (defaults to `https://registry.npmjs.org`). You must be authenticated (`npm login`) before publishing.
+
+## Scoped packages
+
+A **scoped package** uses the `@scope/name` format and is typically used for organisation namespacing or to group related packages:
+
+```json
+{
+  "name": "@myorg/my-util-lib",
+  "version": "1.0.0"
+}
+```
+
+Scoped packages are **private by default** on the npm registry. To publish them publicly, always pass `--access public`:
+
+```bash
+npm publish --access public
+```
+
+Private scoped packages require a paid npm account or a private registry.
+
+## Testing before publish with `npm pack`
+
+`npm pack` bundles your package into a `.tgz` tarball exactly as npm would if you ran `npm publish` — but it stays local. This lets you inspect the final artifact before shipping it.
+
+```bash
+# Create a local tarball (e.g. myorg-my-util-lib-1.0.0.tgz)
+npm pack
+
+# Inspect its contents without extracting
+tar -tzf myorg-my-util-lib-1.0.0.tgz
+
+# Install it locally in another project to smoke-test
+npm install ../my-util-lib/myorg-my-util-lib-1.0.0.tgz
+```
+
+<Callout title="Test with npm pack before publishing">
+Running `npm pack` is a free dry run. It respects the `"files"` allowlist, applies `.npmignore`, and produces the exact tarball that `npm publish` would upload. Inspect the output to confirm you are not accidentally shipping source maps, test fixtures, or secret config files — mistakes here are permanent because published versions cannot be overwritten.
+</Callout>
+
+export const publishingQuiz = [
+  {
+    q: 'What does the `"files"` field in package.json control?',
+    options: [
+      'The entry point Node uses when the package is imported',
+      'The list of paths included in the published tarball',
+      'The scripts available via npm run',
+      'The peer dependencies consumers must install',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'You run `npm version minor` on a package at version 2.3.1. What is the new version?',
+    options: [
+      '2.3.2',
+      '2.4.0',
+      '3.0.0',
+      '2.3.1-minor',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why must scoped packages use `npm publish --access public` to be installable by the public?',
+    options: [
+      'Scoped packages are always paid and require a billing flag',
+      'Scoped packages default to restricted (private) on the npm registry',
+      'The --access flag is required for all packages since npm v7',
+      'Unscoped packages cannot be published without the flag',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="modules-npm/publishing" questions={publishingQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/publishing" />

@@ -1,0 +1,146 @@
+---
+title: 'Readable Streams'
+description: 'Consuming data with data/end/error events, Readable.from, and async iteration.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is a Readable stream?
+
+A `Readable` is a stream from which data can be consumed. Node's built-in examples include `fs.createReadStream` (reading a file), `process.stdin` (terminal input), and HTTP request bodies. You can also create your own readable sources with `Readable.from` or by extending `Readable`.
+
+Readable streams operate in two modes:
+
+- **Flowing mode** — data events fire continuously as chunks arrive. You attach a `data` listener to enter this mode.
+- **Paused mode** — chunks accumulate until you explicitly call `.read()`. This is the default until you attach a listener or pipe.
+
+The cleanest modern approach is **async iteration** with `for await...of`, which handles paused mode and backpressure automatically.
+
+## The `data`, `end`, and `error` events
+
+The classic event-based API predates async iteration. It remains important to understand because many Node APIs still emit these events:
+
+```js
+const fs = require('node:fs');
+
+const stream = fs.createReadStream('./file.txt', { encoding: 'utf8' });
+
+stream.on('data', function(chunk) {
+  console.log('received chunk of length', chunk.length);
+});
+
+stream.on('end', function() {
+  console.log('no more data');
+});
+
+stream.on('error', function(err) {
+  console.error('stream error', err.message);
+});
+```
+
+- `data` — fires each time a chunk is available. The chunk is a `Buffer` by default, or a string if `encoding` is set.
+- `end` — fires once when there is no more data to consume.
+- `error` — fires if something goes wrong (file missing, permission denied, etc.).
+
+## Readable.from
+
+`Readable.from(iterable)` converts any sync or async iterable into a Readable stream. It is useful for testing and for wrapping in-memory data sources:
+
+```js
+const { Readable } = require('node:stream');
+
+const stream = Readable.from(['chunk1', 'chunk2', 'chunk3']);
+```
+
+The iterable can be a plain array, a generator function, or an async generator — giving you a clean way to produce data lazily.
+
+## Async iteration with `for await`
+
+Since Node 10+, all Readable streams implement the async iterator protocol. This means you can consume them with `for await...of` inside an async function:
+
+```js
+async function processStream(stream) {
+  for await (const chunk of stream) {
+    // handle each chunk
+  }
+}
+```
+
+This approach is easier to read than event listeners, handles backpressure automatically, and surfaces errors as thrown exceptions that your `try/catch` can catch.
+
+## Runnable demo
+
+The demo below creates a Readable from an async generator, then consumes it with `for await`. Each generator yield represents one chunk arriving asynchronously.
+
+export const readableCode = `
+const { Readable } = require('node:stream');
+
+async function* generate() {
+  const words = ['Node', 'streams', 'are', 'powerful'];
+  for (const word of words) {
+    yield word;
+  }
+}
+
+async function main() {
+  const stream = Readable.from(generate());
+  const parts = [];
+
+  for await (const chunk of stream) {
+    parts.push(chunk);
+    console.log('chunk: ' + chunk);
+  }
+
+  console.log('complete: ' + parts.join(' '));
+}
+
+main();
+`;
+
+<NodeRunner client:visible code={readableCode} node />
+
+<Callout title="Readable streams emit chunks — never buffer the whole thing">
+A Readable does not hold the entire data set. It yields one chunk at a time. If you push all chunks into an array before processing, you have rebuilt the in-memory anti-pattern that streams were designed to avoid. Process each chunk as it arrives.
+</Callout>
+
+export const readableQuiz = [
+  {
+    q: 'What event fires when a Readable stream has no more data to deliver?',
+    options: [
+      'finish',
+      'close',
+      'end',
+      'done',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What does Readable.from(iterable) do?',
+    options: [
+      'Reads a file and returns its contents as a string',
+      'Converts any iterable into a Readable stream',
+      'Creates a writable destination for an iterable',
+      'Buffers an entire iterable into memory before streaming',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which approach handles backpressure automatically when consuming a Readable?',
+    options: [
+      'Attaching a data event listener',
+      'Calling stream.read() in a loop',
+      'Using for await...of inside an async function',
+      'Collecting chunks with push() into an array',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="streams/readable" questions={readableQuiz} />
+
+<ProgressTracker client:visible id="streams/readable" />

@@ -1,0 +1,91 @@
+---
+title: 'โมดูล & npm'
+description: 'ภาพรวมของระบบโมดูล Node.js และระบบนิเวศ npm — สิ่งที่โมดูลนี้ครอบคลุม'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ระบบโมดูลสองแบบ หนึ่งระบบนิเวศ
+
+Node.js มาพร้อมกับระบบโมดูลสองแบบ **CommonJS (CJS)** คือระบบดั้งเดิมที่ใช้ `require()` สำหรับโหลดโมดูลแบบ synchronous **ECMAScript Modules (ESM)** คือมาตรฐานสมัยใหม่ที่ใช้ร่วมกับเบราว์เซอร์ และใช้คำสั่ง `import` / `export`
+
+ทั้งสองระบบได้รับการรองรับอย่างสมบูรณ์ใน Node.js เวอร์ชันปัจจุบัน ไฟล์จะใช้ระบบใดขึ้นอยู่กับนามสกุลไฟล์และฟิลด์ `"type"` ใน `package.json` ที่ใกล้ที่สุด
+
+## CJS เทียบกับ ESM โดยสรุป
+
+| | CommonJS | ESM |
+|---|---|---|
+| **ไวยากรณ์** | `require()` / `module.exports` | `import` / `export` |
+| **นามสกุลไฟล์** | `.js` (ค่าเริ่มต้น) หรือ `.cjs` | `.mjs` หรือ `.js` เมื่อ `"type": "module"` |
+| **`"type"` ใน package.json** | `"commonjs"` (หรือไม่มี) | `"module"` |
+| **การโหลด** | Synchronous | Asynchronous (static analysis) |
+| **Top-level `await`** | ไม่รองรับ | รองรับ |
+
+## สิ่งที่โมดูลนี้ครอบคลุม
+
+| บทเรียน | หัวข้อ |
+|--------|-------|
+| ภาพรวม (หน้านี้) | การเปรียบเทียบ CJS กับ ESM และพื้นฐานระบบโมดูล |
+| เจาะลึก package.json | ฟิลด์สำคัญ, semver ranges, และ `npm init` |
+| การค้นหาโมดูล | วิธีที่ Node ค้นหาไฟล์, `exports` map, และ bare specifiers |
+| การจัดการ Dependencies | การติดตั้ง, อัปเดต, และตรวจสอบแพ็คเกจด้วย npm |
+| การเผยแพร่แพ็คเกจ | การเตรียมและเผยแพร่แพ็คเกจไปยัง npm registry |
+
+## ESM ในการทำงานจริง
+
+โค้ดด้านล่างใช้ ESM `import` เพื่อโหลดโมดูลในตัวอย่าง `path` และแสดงตัวคั่นเส้นทางของแพลตฟอร์ม — ตัวอักษรที่ Node ใช้ระหว่างส่วนประกอบไดเรกทอรี (`/` บน Unix, `\` บน Windows):
+
+export const indexDemoCode = `
+import path from 'node:path';
+
+console.log('path.sep:', path.sep);
+console.log('Joined path:', path.join('src', 'content', 'index.mdx'));
+`;
+
+<NodeRunner client:visible code={indexDemoCode} node />
+
+<Callout title="ระบบโมดูลสองแบบ">
+Node รองรับทั้ง CommonJS (`require`) และ ESM (`import`) ฟิลด์ `"type"` ของแพ็คเกจใน `package.json` เป็นตัวควบคุมค่าเริ่มต้น: `"type": "module"` ทำให้ไฟล์ `.js` เป็น ESM; `"type": "commonjs"` (หรือไม่มีฟิลด์ `"type"`) คงไว้ซึ่งค่าเริ่มต้น CommonJS คุณสามารถ override ต่อไฟล์ได้เสมอด้วยนามสกุล `.mjs` (ESM) หรือ `.cjs` (CJS)
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'CommonJS ใช้ไวยากรณ์อะไรในการโหลดโมดูลอื่น?',
+    options: [
+      'require()',
+      'import',
+      'load()',
+      'include()',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'นามสกุลไฟล์อะไรที่บังคับให้ไฟล์ถูกถือว่าเป็น ES module เสมอ โดยไม่คำนึงถึง package.json?',
+    options: [
+      '.js',
+      '.cjs',
+      '.mjs',
+      '.esm',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'ฟิลด์ใดใน package.json ที่สลับทั้งแพ็คเกจไปใช้ ESM เพื่อให้ไฟล์ .js ถูกถือว่าเป็น ES modules?',
+    options: [
+      '"module": "esm"',
+      '"type": "module"',
+      '"format": "esm"',
+      '"esm": true',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="modules-npm/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/index" />

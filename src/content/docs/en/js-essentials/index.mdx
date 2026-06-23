@@ -1,0 +1,87 @@
+---
+title: 'JavaScript Essentials'
+description: 'An overview of JavaScript as the language powering Node.js, and what this module covers.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## JavaScript is the language of Node.js
+
+Node.js is a runtime that executes JavaScript outside the browser. Everything you write in Node — from a simple HTTP server to a complex CLI tool — is JavaScript. That means a solid grip on the language itself is non-negotiable before diving into Node's APIs.
+
+This module covers the JavaScript fundamentals that trip up developers most in the Node ecosystem:
+
+| Lesson | Topic |
+|--------|-------|
+| Types and Coercion | Primitives vs objects, `typeof`, `==` vs `===`, truthy/falsy |
+| Scope and Closures | `var`/`let`/`const`, block scope, hoisting, lexical scope |
+| `this` and Context | Dynamic `this`, `call`/`apply`/`bind`, arrow functions |
+| Modules | ESM `import`/`export` vs CommonJS `require`, when to use each |
+
+Modern JavaScript means **ES2022 and later** throughout — `const`/`let`, arrow functions, destructuring, `async`/`await`, optional chaining, and native ES modules. This module uses Node 20+.
+
+## A first runnable demo
+
+The snippet below demonstrates several JS concepts at once: a `const` declaration, a function, a template-string-free concatenation, and a closure over the outer variable. Run it and inspect the output.
+
+```js
+const greet = function(name) {
+  return 'Hello, ' + name + '!';
+};
+
+const languages = ['JavaScript', 'TypeScript', 'Node.js'];
+
+for (const lang of languages) {
+  console.log(greet(lang));
+}
+```
+
+export const indexDemoCode = `
+const greet = function(name) {
+  return 'Hello, ' + name + '!';
+};
+
+const languages = ['JavaScript', 'TypeScript', 'Node.js'];
+
+for (const lang of languages) {
+  console.log(greet(lang));
+}
+`;
+
+<NodeRunner client:visible code={indexDemoCode} />
+
+<Callout title="Modern JS throughout">
+This module uses ES2022+ syntax. If you see a feature you do not recognise, MDN Web Docs is your friend — the spec has not changed since Node 18 stabilised the V8 version that ships it.
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'What does Node.js provide that a browser does not?',
+    options: [
+      'A JavaScript engine',
+      'Access to the file system, network sockets, and OS APIs without a browser sandbox',
+      'Support for `const` and `let`',
+      'Garbage collection',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which JavaScript version features does this module rely on?',
+    options: [
+      'ES5 only — for maximum compatibility',
+      'ES2015 (ES6) only',
+      'ES2022 and later, running on Node 20+',
+      'TypeScript — which is compiled down to ES3',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="js-essentials/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="js-essentials/index" />

@@ -1,0 +1,105 @@
+---
+title: 'Streams & I/O'
+description: 'Why streams exist, the four stream types, and what this module covers.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The problem with loading everything at once
+
+Imagine reading a 4 GB log file. If you load it all into memory first, Node has to allocate 4 GB before you can inspect a single line. On a machine with 2 GB of RAM, the process crashes before it begins.
+
+Streams solve this by processing data **in chunks** — you start reading the first chunk while the rest is still arriving from disk or network. Memory stays bounded regardless of how large the source is.
+
+The same insight applies to writing: instead of buffering an entire response in memory and sending it all at once, a stream pipes each chunk to the destination as it arrives.
+
+## The four stream types
+
+Node.js defines four abstract stream types in the `node:stream` module:
+
+| Type | Direction | Example |
+|------|-----------|---------|
+| `Readable` | Data flows **out** | `fs.createReadStream`, `process.stdin` |
+| `Writable` | Data flows **in** | `fs.createWriteStream`, `process.stdout` |
+| `Duplex` | Bidirectional | TCP socket (`net.Socket`) |
+| `Transform` | Bidirectional with transformation | `zlib.createGzip` (compresses in-flight) |
+
+Every stream is also an `EventEmitter`. The stream base classes emit standard events (`data`, `end`, `error`, `drain`, `finish`) that you attach handlers to.
+
+## What this module covers
+
+| Lesson | Topic |
+|--------|-------|
+| Readable Streams | `data`/`end`/`error` events, `Readable.from`, async iteration |
+| Writable Streams | `write()`, `end()`, and the `drain` event |
+| Pipe & Pipeline | Connecting streams with `.pipe()` and `stream.pipeline()` |
+| Backpressure | What it is, why it matters, and how pipelines handle it |
+
+## A first look at streaming
+
+The demo below uses `Readable.from` to create a readable stream from an array of strings, then consumes it chunk by chunk with `for await`. Notice that no full array is ever held in a buffer — each item is yielded on demand.
+
+export const streamsIndexCode = `
+const { Readable } = require('node:stream');
+
+async function main() {
+  const source = Readable.from(['hello', ' ', 'streaming', ' ', 'world']);
+
+  let result = '';
+  for await (const chunk of source) {
+    result += chunk;
+    console.log('chunk: ' + JSON.stringify(chunk));
+  }
+  console.log('assembled: ' + result);
+}
+
+main();
+`;
+
+<NodeRunner client:visible code={streamsIndexCode} node />
+
+<Callout title="Streams process data chunk by chunk">
+Instead of loading an entire file or response into memory, streams let you start processing the first chunk while the rest is still arriving — keeping memory use constant regardless of total data size.
+</Callout>
+
+export const streamsIndexQuiz = [
+  {
+    q: 'Why are streams preferred over loading an entire file into memory?',
+    options: [
+      'Streams are always faster due to CPU caching',
+      'Streams keep memory usage bounded regardless of file size',
+      'Streams eliminate the need for error handling',
+      'Streams run on a separate thread',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which Node.js stream type transforms data as it passes through?',
+    options: [
+      'Readable',
+      'Writable',
+      'Duplex',
+      'Transform',
+    ],
+    answer: 3,
+  },
+  {
+    q: 'What base class do all four Node.js stream types extend?',
+    options: [
+      'Buffer',
+      'EventEmitter',
+      'Promise',
+      'Worker',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="streams/index" questions={streamsIndexQuiz} />
+
+<ProgressTracker client:visible id="streams/index" />

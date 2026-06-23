@@ -1,0 +1,256 @@
+---
+title: 'Ecosystem และ Toolchain'
+description: 'การรัน TypeScript ด้วย tsx/ts-node และ --experimental-strip-types, linters และ formatters (ESLint/Prettier/Biome), nodemon/watch mode, และการจัดการ env files'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การรัน TypeScript ใน Node.js
+
+TypeScript ไม่ได้รับการรองรับโดยตรงจาก Node.js — ต้องถูก strip หรือ compile ก่อน คุณมีตัวเลือกหลักสามตัวใน ecosystem สมัยใหม่:
+
+### ตัวเลือกที่ 1: `--experimental-strip-types` (Node 20.6+ / stable Node 22)
+
+Node สามารถลบ type annotations ของ TypeScript ออกเมื่อ startup โดยไม่ต้องใช้ package เพิ่ม มัน **ไม่ได้ตรวจสอบ type** — แค่ลบ types แล้วรัน JavaScript:
+
+```bash
+# Node 22 — stable
+node --experimental-strip-types src/app.ts
+
+# Node 20.6+
+node --experimental-strip-types --input-type=module src/app.ts
+```
+
+ข้อจำกัด: ไม่รองรับ `enum`, `namespace`, `experimentalDecorators` สำหรับฟีเจอร์เหล่านั้นให้ใช้ tsx หรือ ts-node
+
+### ตัวเลือกที่ 2: tsx — TypeScript runner ที่เร็ว
+
+`tsx` เป็น wrapper เบา ๆ รอบ esbuild รองรับ TypeScript ทุกฟีเจอร์และเริ่มในเวลามิลลิวินาที:
+
+```bash
+# รันครั้งเดียว
+npx tsx src/app.ts
+
+# Watch mode — auto-restart เมื่อไฟล์เปลี่ยน
+npx tsx watch src/app.ts
+
+# ติดตั้งเป็น dev dependency
+npm install --save-dev tsx
+```
+
+### ตัวเลือกที่ 3: ts-node — ตัวคลาสสิก
+
+`ts-node` เป็นมาตรฐานมาหลายปี หนักกว่า tsx แต่มี configuration support ที่ครบครัน:
+
+```bash
+npm install --save-dev ts-node typescript
+
+# รันไฟล์
+npx ts-node src/app.ts
+
+# ESM mode (tsconfig ต้องมี "module": "NodeNext")
+npx ts-node --esm src/app.ts
+```
+
+## Linters และ Formatters
+
+### ESLint — ตรวจจับ logic errors และบังคับใช้ style rules
+
+```bash
+# ติดตั้ง ESLint พร้อม TypeScript support
+npm install --save-dev eslint @eslint/js typescript-eslint
+
+# สร้าง flat config (eslint.config.mjs)
+# จากนั้นรัน:
+npx eslint src/
+
+# Auto-fix ปัญหาที่แก้ได้อัตโนมัติ
+npx eslint --fix src/
+```
+
+`eslint.config.mjs` พื้นฐานสำหรับ TypeScript:
+
+```js
+// eslint.config.mjs
+import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+
+export default tseslint.config(
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+);
+```
+
+### Prettier — code formatter แบบ opinionated
+
+```bash
+npm install --save-dev prettier
+
+# Format ไฟล์ทั้งหมด
+npx prettier --write .
+
+# ตรวจสอบ formatting โดยไม่เปลี่ยนไฟล์ (สำหรับ CI)
+npx prettier --check .
+```
+
+Prettier และ ESLint มุ่งเน้นคนละด้าน: Prettier จัดการ formatting (ช่องว่าง, quotes, semicolons) ส่วน ESLint จัดการ logic และ style rules รันทั้งคู่ตามลำดับหรือใช้ `eslint-config-prettier` เพื่อปิด formatting rules ของ ESLint
+
+### Biome — เครื่องมือเดียวสำหรับทั้ง lint และ format
+
+Biome แทนที่ ESLint + Prettier ด้วยเครื่องมือเดียวที่เร็วเขียนด้วย Rust:
+
+```bash
+npm install --save-dev @biomejs/biome
+npx biome init
+
+# Lint และ format ในรอบเดียว
+npx biome check --apply src/
+```
+
+## Watch Mode และ nodemon
+
+### Node built-in watch (Node 18+)
+
+```bash
+# Restart เมื่อไฟล์เปลี่ยน — ไม่ต้องติดตั้งอะไร
+node --watch src/app.js
+
+# Watch ไฟล์เฉพาะ
+node --watch-path=src src/app.js
+```
+
+### nodemon — watcher ที่ผ่านการพิสูจน์แล้ว
+
+```bash
+npm install --save-dev nodemon
+
+# ใช้งานพื้นฐาน
+npx nodemon src/app.js
+
+# กับ TypeScript ผ่าน tsx
+npx nodemon --exec "npx tsx" src/app.ts
+
+# nodemon.json config
+```
+
+```json
+{
+  "watch": ["src"],
+  "ext": "ts,js,json",
+  "exec": "npx tsx src/app.ts"
+}
+```
+
+## Environment Variables และ .env Files
+
+### Native .env loading (Node 20.6+)
+
+```bash
+# โหลด .env โดยไม่ต้องใช้ dotenv
+node --env-file=.env src/app.js
+
+# โหลด env files หลายไฟล์ (ไฟล์หลังจะ override ไฟล์ก่อน)
+node --env-file=.env --env-file=.env.local src/app.js
+```
+
+### dotenv — วิธีคลาสสิก
+
+```bash
+npm install dotenv
+```
+
+```js
+// src/app.js — โหลดที่บรรทัดแรกสุด
+import 'dotenv/config';
+
+console.log(process.env.DATABASE_URL); // จาก .env
+```
+
+### best practices สำหรับ env files
+
+```bash
+# .env — ค่า default, commit ใน git (ไม่มี secrets)
+NODE_ENV=development
+PORT=3000
+LOG_LEVEL=info
+
+# .env.local — overrides เฉพาะเครื่อง, ไม่ commit (ใน .gitignore)
+DATABASE_URL=postgres://localhost:5432/mydb
+SECRET_KEY=dev-only-secret
+
+# .env.example — template แสดง vars ที่ต้องการ, commit ไว้
+DATABASE_URL=
+SECRET_KEY=
+```
+
+เพิ่ม `.env.local` และ `.env*.local` ใน `.gitignore` เสมอ ห้าม commit secrets จริง ๆ
+
+## package.json scripts — ตัวเชื่อมทุกอย่าง
+
+```json
+{
+  "scripts": {
+    "dev": "tsx watch src/app.ts",
+    "build": "tsc --noEmit",
+    "start": "node dist/app.js",
+    "test": "node --test",
+    "lint": "eslint src/ && prettier --check .",
+    "format": "prettier --write . && eslint --fix src/"
+  }
+}
+```
+
+<Callout title="Node 20+ รัน TypeScript ได้โดยตรงด้วย flag — tooling ยังคงพัฒนาต่อไปเรื่อย ๆ">
+Node.js toolchain เปลี่ยนแปลงเร็ว `--experimental-strip-types` ใน Node 22 หมายความว่าคุณสามารถใช้งาน TypeScript โดยไม่ต้องมี build tools เพิ่มเติมสำหรับหลายโปรเจกต์ เริ่มแบบเรียบง่าย เพิ่มความซับซ้อนเมื่อคุณต้องการฟีเจอร์เช่น decorators, bundling, หรือการ targeting หลาย environment เท่านั้น
+</Callout>
+
+export const ecosystemQuiz = [
+  {
+    q: '`node --experimental-strip-types` ทำอะไร?',
+    options: [
+      'ตรวจสอบ TypeScript อย่างครบถ้วนก่อนรัน',
+      'Compile TypeScript เป็น JavaScript และเขียนไฟล์ output',
+      'ลบ TypeScript type annotations และรัน JavaScript โดยตรง',
+      'เปิดใช้งาน TypeScript features เชิงทดลองเช่น decorators',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'ความแตกต่างหลักระหว่าง Prettier และ ESLint คืออะไร?',
+    options: [
+      'Prettier เร็วกว่า; ESLint ช้ากว่า',
+      'Prettier จัดการ code formatting; ESLint จัดการ logic และ style rules',
+      'ESLint ใช้ได้เฉพาะกับ TypeScript; Prettier ใช้ได้กับ JavaScript',
+      'เป็นเครื่องมือเหมือนกันแต่ต่างชื่อ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'flag ใดใน Node.js ที่เปิด built-in watch mode (ไม่ต้องใช้ nodemon)?',
+    options: [
+      '--hot-reload',
+      '--restart',
+      '--watch',
+      '--live',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'flag ใดใน Node 20.6+ ที่โหลดไฟล์ `.env` โดยไม่ต้องใช้ package `dotenv`?',
+    options: [
+      '--dotenv=.env',
+      '--load-env=.env',
+      '--env-file=.env',
+      '--process-env=.env',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="testing-tooling/ecosystem" questions={ecosystemQuiz} />
+
+<ProgressTracker client:visible id="testing-tooling/ecosystem" />

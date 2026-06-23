@@ -1,0 +1,146 @@
+---
+title: 'Readable Streams'
+description: 'การใช้ข้อมูลด้วย events data/end/error, Readable.from และ async iteration'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Readable Stream คืออะไร?
+
+`Readable` คือ Stream ที่สามารถดึงข้อมูลออกมาได้ ตัวอย่างใน Node ได้แก่ `fs.createReadStream` (อ่านไฟล์), `process.stdin` (รับ Input จาก Terminal) และ body ของ HTTP request คุณยังสร้าง Readable ของตัวเองได้ด้วย `Readable.from` หรือการ extend คลาส `Readable`
+
+Readable Stream ทำงานใน 2 โหมด:
+
+- **Flowing mode** — event `data` จะ fire อย่างต่อเนื่องเมื่อ chunk มาถึง คุณแนบ listener `data` เพื่อเข้าสู่โหมดนี้
+- **Paused mode** — chunk จะสะสมจนกว่าคุณจะเรียก `.read()` อย่างชัดเจน นี่คือโหมดเริ่มต้นก่อนที่จะแนบ listener หรือ pipe
+
+แนวทางที่สะอาดที่สุดในปัจจุบันคือใช้ **async iteration** ด้วย `for await...of` ซึ่งจัดการ paused mode และ backpressure โดยอัตโนมัติ
+
+## Events `data`, `end`, และ `error`
+
+API แบบ event-based แบบดั้งเดิมมีมาก่อน async iteration แต่ยังสำคัญต้องเข้าใจเพราะ API ของ Node จำนวนมากยังคง emit event เหล่านี้:
+
+```js
+const fs = require('node:fs');
+
+const stream = fs.createReadStream('./file.txt', { encoding: 'utf8' });
+
+stream.on('data', function(chunk) {
+  console.log('received chunk of length', chunk.length);
+});
+
+stream.on('end', function() {
+  console.log('no more data');
+});
+
+stream.on('error', function(err) {
+  console.error('stream error', err.message);
+});
+```
+
+- `data` — fire ทุกครั้งที่มี chunk พร้อม chunk จะเป็น `Buffer` โดยค่าเริ่มต้น หรือ string หากตั้ง `encoding`
+- `end` — fire ครั้งเดียวเมื่อไม่มีข้อมูลเหลือให้อ่าน
+- `error` — fire หากเกิดข้อผิดพลาด (ไม่มีไฟล์, สิทธิ์ถูกปฏิเสธ ฯลฯ)
+
+## Readable.from
+
+`Readable.from(iterable)` แปลง iterable ใดก็ได้ทั้ง sync และ async ให้เป็น Readable Stream มีประโยชน์สำหรับการทดสอบและการ wrap แหล่งข้อมูลใน Memory:
+
+```js
+const { Readable } = require('node:stream');
+
+const stream = Readable.from(['chunk1', 'chunk2', 'chunk3']);
+```
+
+iterable สามารถเป็น plain array, generator function หรือ async generator ทำให้คุณสร้างข้อมูลแบบ lazy ได้อย่างสะอาด
+
+## Async iteration ด้วย `for await`
+
+ตั้งแต่ Node 10+ Readable Stream ทุกตัวรองรับ async iterator protocol หมายความว่าคุณใช้ `for await...of` ภายใน async function ได้:
+
+```js
+async function processStream(stream) {
+  for await (const chunk of stream) {
+    // จัดการแต่ละ chunk
+  }
+}
+```
+
+แนวทางนี้อ่านง่ายกว่า event listener จัดการ backpressure โดยอัตโนมัติ และแสดง error เป็น exception ที่ `try/catch` รับได้
+
+## Demo ที่รันได้
+
+Demo ด้านล่างสร้าง Readable จาก async generator แล้วใช้ `for await` อ่าน generator yield แต่ละอันแทน chunk ที่มาถึงแบบ async
+
+export const readableCode = `
+const { Readable } = require('node:stream');
+
+async function* generate() {
+  const words = ['Node', 'streams', 'are', 'powerful'];
+  for (const word of words) {
+    yield word;
+  }
+}
+
+async function main() {
+  const stream = Readable.from(generate());
+  const parts = [];
+
+  for await (const chunk of stream) {
+    parts.push(chunk);
+    console.log('chunk: ' + chunk);
+  }
+
+  console.log('complete: ' + parts.join(' '));
+}
+
+main();
+`;
+
+<NodeRunner client:visible code={readableCode} node />
+
+<Callout title="Readable Stream emit ทีละ chunk — อย่า Buffer ทั้งหมด">
+Readable ไม่ได้เก็บข้อมูลทั้งหมด แต่ yield ทีละ chunk หากคุณเก็บทุก chunk ใส่ array ก่อนประมวลผล คุณก็สร้าง anti-pattern การใช้ Memory ที่ Stream ออกแบบมาเพื่อหลีกเลี่ยง ประมวลผลแต่ละ chunk ทันทีที่มาถึง
+</Callout>
+
+export const readableQuiz = [
+  {
+    q: 'Event ใดที่ fire เมื่อ Readable Stream ไม่มีข้อมูลส่งอีกแล้ว?',
+    options: [
+      'finish',
+      'close',
+      'end',
+      'done',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Readable.from(iterable) ทำอะไร?',
+    options: [
+      'อ่านไฟล์และคืนค่าเป็น string',
+      'แปลง iterable ใดก็ได้ให้เป็น Readable Stream',
+      'สร้างปลายทาง Writable สำหรับ iterable',
+      'Buffer iterable ทั้งหมดใน Memory ก่อน stream',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'แนวทางใดจัดการ backpressure โดยอัตโนมัติเมื่ออ่าน Readable?',
+    options: [
+      'แนบ event listener ของ data',
+      'เรียก stream.read() ใน loop',
+      'ใช้ for await...of ภายใน async function',
+      'เก็บ chunk ด้วย push() ใส่ array',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="streams/readable" questions={readableQuiz} />
+
+<ProgressTracker client:visible id="streams/readable" />

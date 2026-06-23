@@ -1,0 +1,134 @@
+---
+title: Backpressure
+description: 'Backpressure คืออะไร สำคัญอย่างไร และ pipe กับ pipeline จัดการอย่างไร'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ปัญหาที่ Backpressure แก้ไข
+
+ลองนึกภาพสายยักษ์ต่อเข้ากับหัวฉีดน้ำในสวน ถ้าน้ำไหลเข้าเร็วกว่าที่หัวฉีดจะพ่นออกได้ สายก็จะพองและแตกในที่สุด เหตุการณ์เดียวกันนี้เกิดขึ้นกับ Node Stream: ถ้า Readable source ผลิตข้อมูลเร็วกว่าที่ Writable จะรับได้ chunk ที่ Buffer สะสมใน Memory จนกระบวนการหมด RAM หรือ crash
+
+**Backpressure** คือกลไกที่ consumer ที่ช้าบอกให้ producer ที่เร็วชะลอลง เทียบได้กับ flow control ใน TCP
+
+## Backpressure ทำงานอย่างไรใน Node
+
+Method `write()` ของ Writable Stream เป็นสัญญาณสำคัญ:
+
+- คืนค่า `true` — internal buffer ต่ำกว่า **high-water mark** (ค่าเริ่มต้น: 16 KB สำหรับ object stream, 64 KB สำหรับ byte stream) producer ส่งข้อมูลต่อได้
+- คืนค่า `false` — buffer อยู่ที่หรือเกิน high-water mark producer ต้อง **pause** และรอ event `drain` ก่อนเขียนต่อ
+
+high-water mark ไม่ใช่ขีดจำกัดแบบ hard — เป็นเพียง soft advisory Node ยัง Buffer chunk เกินขีดนั้นได้แต่ต้องเสียค่า Memory การเคารพสัญญาณนี้ทำให้การใช้ Memory คงที่
+
+## Backpressure แบบ manual
+
+ก่อนที่จะมี `pipe` และ `pipeline` คุณต้องจัดการเองดังนี้:
+
+```js
+function pumpWithBackpressure(readable, writable) {
+  readable.on('data', function(chunk) {
+    var ok = writable.write(chunk);
+    if (!ok) {
+      readable.pause();             // หยุด source
+      writable.once('drain', function() {
+        readable.resume();          // resume เมื่อพร้อม
+      });
+    }
+  });
+
+  readable.on('end', function() {
+    writable.end();
+  });
+}
+```
+
+Pattern นี้ verbose และเกิดข้อผิดพลาดได้ง่าย ลืม `readable.pause()` ครั้งเดียว buffer ก็เติบโตไม่หยุด
+
+## pipe และ pipeline จัดการโดยอัตโนมัติอย่างไร
+
+`readable.pipe(writable)` และ `stream.pipeline()` implement pattern ข้างต้นภายใน:
+
+1. ส่ง chunk จาก readable ไปยัง writable
+2. Pause readable เมื่อ `write()` คืนค่า `false`
+3. Resume readable เมื่อเกิด event `drain`
+
+คุณไม่จำเป็นต้องจัดการการ pause และ resume เองเมื่อใช้ `pipe` หรือ `pipeline` นี่คือเหตุผลหลักที่ควรใช้แทน raw event listener
+
+## แสดง Backpressure ด้วย high-water mark แบบกำหนดเอง
+
+Demo ด้านล่างสร้าง Readable และ Writable ที่มี high-water mark เล็กมาก (1 byte) เพื่อให้ backpressure trigger ทุก chunk สังเกตว่า readable ถูก pause และ resume โดยอัตโนมัติ
+
+export const backpressureCode = `
+const { Readable, Writable, pipeline } = require('node:stream');
+
+const source = Readable.from(['a', 'b', 'c', 'd', 'e'], {
+  objectMode: true,
+  highWaterMark: 1
+});
+
+const sink = new Writable({
+  objectMode: true,
+  highWaterMark: 1,
+  write(chunk, encoding, callback) {
+    console.log('sink writing: ' + chunk);
+    // simulate a slow sink
+    setTimeout(callback, 10);
+  }
+});
+
+pipeline(source, sink, function(err) {
+  if (err) {
+    console.error('error:', err.message);
+  } else {
+    console.log('done — pipeline handled backpressure automatically');
+  }
+});
+`;
+
+<NodeRunner client:visible code={backpressureCode} node />
+
+<Callout title="Backpressure ป้องกัน source ที่เร็วไม่ให้ท่วม sink ที่ช้า">
+เมื่อ Writable buffer เต็ม write() คืนค่า false การตอบสนองที่ถูกต้องคือ pause Readable ทันทีและ resume เมื่อ event drain fire เท่านั้น API ของ pipe และ pipeline ทำสิ่งนี้ให้คุณ — ใช้แทน raw event listener เพื่อหลีกเลี่ยง memory leak โดยไม่ตั้งใจ
+</Callout>
+
+export const backpressureQuiz = [
+  {
+    q: 'writable.write() คืนค่า false หมายความว่าอะไร?',
+    options: [
+      'การเขียนล้มเหลวเพราะ error',
+      'internal buffer อยู่ที่หรือเกิน high-water mark — ต้อง pause source',
+      'Stream จบแล้วและไม่สามารถเขียนข้อมูลเพิ่ม',
+      'chunk ถูกทิ้งเพราะใหญ่เกินไป',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ควร listen event ใดเพื่อรู้ว่าปลอดภัยที่จะ resume การเขียนหลัง backpressure?',
+    options: [
+      'resume',
+      'ready',
+      'drain',
+      'flush',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'readable.pipe() และ stream.pipeline() ช่วยเรื่อง backpressure อย่างไร?',
+    options: [
+      'เพิ่ม high-water mark ให้ buffer ไม่เต็ย',
+      'รัน Writable บน worker thread เพื่อให้ตามทัน Readable',
+      'Pause Readable โดยอัตโนมัติเมื่อ write() คืนค่า false และ resume เมื่อ drain',
+      'ทิ้ง chunk ที่ไม่สามารถเขียนได้ทันที',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="streams/backpressure" questions={backpressureQuiz} />
+
+<ProgressTracker client:visible id="streams/backpressure" />

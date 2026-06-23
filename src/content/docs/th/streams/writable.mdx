@@ -1,0 +1,137 @@
+---
+title: 'Writable Streams'
+description: 'การเขียนข้อมูลด้วย write() และ end() และการควบคุมการไหลด้วย event drain'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Writable Stream คืออะไร?
+
+`Writable` คือ Stream ที่สามารถเขียนข้อมูลเข้าไปได้ ตัวอย่างใน Node ได้แก่ `fs.createWriteStream` (เขียนไฟล์), `process.stdout` (แสดงผลที่ Terminal) และ HTTP response object คุณยังสร้าง Writable แบบกำหนดเองได้โดย extend คลาส `Writable` และ implement method `_write`
+
+## write() และ end()
+
+Method หลักสองตัวบน Writable คือ:
+
+- **`writable.write(chunk[, encoding][, callback])`** — เขียน chunk ข้อมูล คืนค่า `true` ถ้า internal buffer ต่ำกว่า high-water mark, `false` ถ้าปลายทางตามไม่ทัน (สัญญาณ backpressure)
+- **`writable.end([chunk][, callback])`** — บอกว่าไม่มีข้อมูลเพิ่มเติมแล้ว เขียน chunk สุดท้ายเพิ่มได้ (optional) และ trigger event `finish` เมื่อ flush ข้อมูลทั้งหมดแล้ว
+
+```js
+const fs = require('node:fs');
+
+const dest = fs.createWriteStream('./output.txt');
+
+dest.write('first line\n');
+dest.write('second line\n');
+dest.end('last line\n', function() {
+  console.log('all data flushed');
+});
+```
+
+## Event `finish`
+
+หลังจากเรียก `end()` และ flush ข้อมูลทั้งหมดไปยัง underlying system แล้ว Stream จะ emit `finish` นี่คือเวลาที่ถูกต้องเพื่อรู้ว่าการเขียนเสร็จสมบูรณ์จริงๆ:
+
+```js
+dest.on('finish', function() {
+  console.log('write complete');
+});
+```
+
+## Event `drain` และการควบคุมการไหล
+
+`write()` คืนค่า boolean เมื่อคืนค่า `false` internal buffer เต็มแล้ว — คุณต้อง **หยุดเขียน** และรอ event `drain` ก่อนจึงเขียนต่อ การเพิกเฉยต่อสัญญาณนี้ทำให้ Memory เติบโตแบบไม่มีขอบเขตเพราะ chunk ที่ Buffer สะสมขึ้นเรื่อยๆ
+
+```js
+function writeWithDrain(writable, chunks) {
+  var i = 0;
+
+  function next() {
+    while (i < chunks.length) {
+      var ok = writable.write(chunks[i]);
+      i++;
+      if (!ok) {
+        // buffer เต็ม — รอ drain ก่อนต่อ
+        writable.once('drain', next);
+        return;
+      }
+    }
+    writable.end();
+  }
+
+  next();
+}
+```
+
+นี่คือ pattern แบบ manual ที่ `pipe` และ `pipeline` จัดการให้คุณโดยอัตโนมัติ การเข้าใจ pattern นี้อธิบายว่าทำไม API ระดับสูงเหล่านั้นจึงมีอยู่
+
+## Demo ที่รันได้
+
+Demo สร้าง Writable แบบกำหนดเองที่ log แต่ละ chunk ลง Console จำลอง sink ที่ช้า แล้วเขียนข้อมูลสามชุดและปิด Stream
+
+export const writableCode = `
+const { Writable } = require('node:stream');
+
+const sink = new Writable({
+  write(chunk, encoding, callback) {
+    console.log('sink received: ' + chunk.toString());
+    callback(); // signal ready for next chunk
+  }
+});
+
+sink.on('finish', function() {
+  console.log('stream finished');
+});
+
+sink.write('alpha');
+sink.write('beta');
+sink.end('gamma');
+`;
+
+<NodeRunner client:visible code={writableCode} node />
+
+<Callout title="ให้ความสำคัญกับค่าที่ write() คืนมาเพื่อควบคุมการไหล">
+เมื่อ writable.write() คืนค่า false แสดงว่า destination buffer เต็มแล้ว หยุดเขียนทันทีและรอ event drain ก่อนส่งข้อมูลเพิ่ม การเพิกเฉยต่อสัญญาณนี้ทำให้ Node process Buffer ข้อมูลไว้ใน Memory ไม่จำกัด และสุดท้ายจะ crash เพราะ Out of Memory
+</Callout>
+
+export const writableQuiz = [
+  {
+    q: 'writable.write() คืนค่าอะไรเมื่อ internal buffer เต็ม?',
+    options: [
+      'null',
+      'true',
+      'false',
+      'Promise ที่ resolve เมื่อ drain',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Event ใด fire หลังจากเรียก writable.end() และ flush ข้อมูลทั้งหมดแล้ว?',
+    options: [
+      'end',
+      'close',
+      'drain',
+      'finish',
+    ],
+    answer: 3,
+  },
+  {
+    q: 'ควรทำอะไรเมื่อ writable.write() คืนค่า false?',
+    options: [
+      'เรียก writable.end() ทันที',
+      'เขียนต่อไป — false เป็นแค่คำเตือน',
+      'หยุดเขียนและรอ event drain',
+      'ทำลาย Stream และสร้างใหม่',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="streams/writable" questions={writableQuiz} />
+
+<ProgressTracker client:visible id="streams/writable" />

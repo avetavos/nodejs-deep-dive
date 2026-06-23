@@ -1,0 +1,198 @@
+---
+title: 'ประสิทธิภาพและ perf_hooks'
+description: 'การวัดเวลาการทำงานด้วย perf_hooks, performance.now(), PerformanceObserver, การ profiling เบื้องต้น และการรักษา event loop ไม่ให้ถูกบล็อก'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทำไมต้องวัด?
+
+> "การ optimize ก่อนเวลาอันควรคือต้นตอของความชั่วทั้งปวง" — Donald Knuth
+
+ก่อนที่คุณจะ optimize อะไรก็ตาม **ต้องวัดก่อนเสมอ** โมดูล `perf_hooks` ของ Node ให้การจับเวลาแบบ sub-millisecond ผ่าน High Resolution Time API — `performance.now()` เดียวกับที่คุณรู้จักจาก browser แต่ใช้ได้ใน Node แบบ native และ `PerformanceObserver` สำหรับการรับ entry แบบ async
+
+## performance.now()
+
+`performance.now()` คืนค่า float ในหน่วย **milliseconds** ที่มีความแม่นยำระดับ microsecond เป็น monotonic — ไม่เคยถอยหลัง แม้ระบบนาฬิกาจะถูกปรับ:
+
+```js
+import { performance } from 'node:perf_hooks';
+
+const start = performance.now();
+
+// --- งานที่ต้องการวัด ---
+let sum = 0;
+for (let i = 0; i < 1_000_000; i++) {
+  sum += i;
+}
+// ----------------------
+
+const elapsed = performance.now() - start;
+console.log('Sum loop took: ' + elapsed.toFixed(3) + ' ms');
+```
+
+## performance.mark() และ performance.measure()
+
+สำหรับการวัดที่มีชื่อและแสดงใน DevTools timelines:
+
+```js
+import { performance, PerformanceObserver } from 'node:perf_hooks';
+
+performance.mark('db-start');
+// ... จำลอง DB query ...
+await new Promise(function(resolve) { setTimeout(resolve, 50); });
+performance.mark('db-end');
+
+performance.measure('database-query', 'db-start', 'db-end');
+
+const entries = performance.getEntriesByName('database-query');
+console.log(entries[0].duration.toFixed(2) + ' ms');
+```
+
+## PerformanceObserver — การเก็บข้อมูลแบบ async
+
+`PerformanceObserver` เรียก callback เมื่อมี performance entry ใหม่ถูกสร้างขึ้น มีประโยชน์สำหรับการวัด library code ที่คุณไม่ได้ควบคุม:
+
+```js
+import { PerformanceObserver, performance } from 'node:perf_hooks';
+
+const obs = new PerformanceObserver(function(list) {
+  for (const entry of list.getEntries()) {
+    console.log(entry.name + ': ' + entry.duration.toFixed(2) + ' ms');
+  }
+});
+
+obs.observe({ entryTypes: ['measure'] });
+
+performance.mark('a');
+// ... ทำงาน ...
+performance.mark('b');
+performance.measure('my-operation', 'a', 'b');
+
+// disconnect เสมอเมื่อเสร็จแล้ว เพื่อป้องกัน memory leak
+obs.disconnect();
+```
+
+## Demo แบบ Live — จับเวลา CPU-bound loop
+
+export const perfCode = `
+import { performance } from 'node:perf_hooks';
+
+function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+const iterations = [10, 20, 30, 35];
+
+for (const n of iterations) {
+  const t0 = performance.now();
+  const result = fibonacci(n);
+  const elapsed = performance.now() - t0;
+  console.log('fib(' + n + ') = ' + result + '  [' + elapsed.toFixed(3) + ' ms]');
+}
+`;
+
+<NodeRunner client:visible code={perfCode} node />
+
+## การรักษา event loop ไม่ให้ถูกบล็อก
+
+CPU-bound loop ที่ทำงานนานกว่า ~50 ms จะ**บล็อก event loop** — ไม่มี I/O, ไม่มี timer, ไม่มี request อื่นที่ประมวลผลได้ในระหว่างนั้น
+
+```js
+// แย่ — บล็อก event loop ตลอดเวลา
+function blockingWork(data) {
+  const result = [];
+  for (const item of data) {
+    result.push(expensiveTransform(item)); // แต่ละ call ใช้เวลา ~1ms, 10000 items = บล็อก 10s
+  }
+  return result;
+}
+
+// ดีกว่า — yield control เป็นระยะด้วย setImmediate
+async function nonBlockingWork(data) {
+  const result = [];
+  for (let i = 0; i < data.length; i++) {
+    result.push(expensiveTransform(data[i]));
+    if (i % 100 === 0) {
+      // Yield ให้ event loop ทุก 100 items
+      await new Promise(function(resolve) { setImmediate(resolve); });
+    }
+  }
+  return result;
+}
+
+// ดีที่สุดสำหรับงาน CPU-heavy — offload ไปยัง Worker Thread
+import { Worker } from 'node:worker_threads';
+// (ดูเพิ่มเติมในโมดูล Streams & Worker Threads)
+```
+
+## CPU profiling ด้วย `--prof`
+
+สำหรับการ profile CPU เชิงลึก Node มี V8 profiler ในตัว:
+
+```bash
+# รันพร้อม profiling
+node --prof src/app.js
+
+# แปลง isolate log เป็นรายงานที่อ่านได้
+node --prof-process isolate-*.log > profile.txt
+```
+
+output จะแสดงว่า function ใดใช้ CPU time มากที่สุด (ticks) ดูที่ส่วน "Bottom up (heavy) profile" เพื่อหา hot paths
+
+<Callout title="วัดก่อน optimize — รักษา event loop ไม่ให้ถูกบล็อก">
+วัดด้วย `performance.now()` หรือ `--prof` เสมอก่อนตัดสินใจว่าจะ optimize อะไร ปัญหาประสิทธิภาพที่พบบ่อยที่สุดใน Node.js คือ CPU-bound synchronous loop ที่บล็อก event loop ระบุ hot path ก่อน แล้วค่อยเลือกระหว่างการปรับปรุง algorithm, การแบ่งงานด้วย `setImmediate`, หรือการย้ายงานไปยัง Worker Threads
+</Callout>
+
+export const performanceQuiz = [
+  {
+    q: '`performance.now()` คืนค่าในหน่วยอะไร?',
+    options: [
+      'วินาที',
+      'ไมโครวินาที',
+      'มิลลิวินาที (พร้อมความแม่นยำ sub-ms)',
+      'นาโนวินาที',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'ทำไม `performance.now()` ถึงเหมาะสำหรับการ benchmark มากกว่า `Date.now()`?',
+    options: [
+      'เรียกได้เร็วกว่า',
+      'เป็น monotonic และไม่ได้รับผลกระทบจากการปรับนาฬิการะบบ',
+      'คืนค่า integer ซึ่งเปรียบเทียบได้ง่ายกว่า',
+      'บันทึก log ไปที่ console โดยอัตโนมัติ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'CPU-bound loop ที่ทำงานนานทำให้เกิดปัญหาอะไรใน Node.js?',
+    options: [
+      'ใช้ memory มากเกินความจำเป็น',
+      'บล็อก event loop ทำให้ I/O callbacks และ timers ไม่สามารถทำงานได้',
+      'ทำให้ process restart อัตโนมัติ',
+      'กระตุ้น garbage collection',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เทคนิคใดที่ yield control กลับให้ event loop เป็นระยะระหว่าง loop ขนาดใหญ่?',
+    options: [
+      'ใช้ process.exit() ระหว่าง iterations',
+      'เรียก setImmediate (ห่อใน Promise) ทุก N items',
+      'ใช้ fs.readFileSync แบบ synchronous ในแต่ละขั้นตอน',
+      'เพิ่ม console.log ภายใน loop',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="testing-tooling/performance" questions={performanceQuiz} />
+
+<ProgressTracker client:visible id="testing-tooling/performance" />

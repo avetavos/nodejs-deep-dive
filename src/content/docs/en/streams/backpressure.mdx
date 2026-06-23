@@ -1,0 +1,134 @@
+---
+title: Backpressure
+description: 'What backpressure is, why it matters, and how pipe and pipeline handle it automatically.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The problem backpressure solves
+
+Imagine a fire hose attached to a garden sprinkler. If water arrives faster than the sprinkler can spray it, the hose eventually bursts. The same thing happens in Node streams: if a fast Readable source produces data faster than a slow Writable can consume it, buffered chunks pile up in memory until the process runs out of RAM or crashes.
+
+**Backpressure** is the mechanism by which a slow consumer tells a fast producer to slow down. It is the stream equivalent of flow control in TCP.
+
+## How backpressure works in Node
+
+The Writable stream's `write()` method is the key signal:
+
+- Returns `true` — the internal buffer is below the **high-water mark** (default: 16 KB for object streams, 64 KB for byte streams). The producer can keep sending.
+- Returns `false` — the buffer is at or above the high-water mark. The producer must **pause** and wait for the `drain` event before writing more.
+
+The high-water mark is not a hard limit; it is a soft advisory. Node buffers chunks beyond it, but doing so costs memory. Respecting the signal keeps memory usage flat.
+
+## Manual backpressure
+
+Before `pipe` and `pipeline`, you had to handle this yourself:
+
+```js
+function pumpWithBackpressure(readable, writable) {
+  readable.on('data', function(chunk) {
+    var ok = writable.write(chunk);
+    if (!ok) {
+      readable.pause();             // stop the source
+      writable.once('drain', function() {
+        readable.resume();          // resume when ready
+      });
+    }
+  });
+
+  readable.on('end', function() {
+    writable.end();
+  });
+}
+```
+
+This pattern is verbose and error-prone. One forgotten `readable.pause()` call causes the buffer to grow without bound.
+
+## How pipe and pipeline handle it automatically
+
+`readable.pipe(writable)` and `stream.pipeline()` implement the above pattern internally. They:
+
+1. Forward each chunk from the readable to the writable.
+2. Pause the readable when `write()` returns `false`.
+3. Resume the readable on the `drain` event.
+
+You never need to manage pausing and resuming manually when using `pipe` or `pipeline`. This is one of the primary reasons to prefer them over raw event listeners.
+
+## Visualising backpressure with custom high-water marks
+
+The demo below creates a Readable and a Writable with a very small high-water mark (1 byte) to make backpressure trigger on every chunk. Watch how the readable is automatically paused and resumed.
+
+export const backpressureCode = `
+const { Readable, Writable, pipeline } = require('node:stream');
+
+const source = Readable.from(['a', 'b', 'c', 'd', 'e'], {
+  objectMode: true,
+  highWaterMark: 1
+});
+
+const sink = new Writable({
+  objectMode: true,
+  highWaterMark: 1,
+  write(chunk, encoding, callback) {
+    console.log('sink writing: ' + chunk);
+    // simulate a slow sink
+    setTimeout(callback, 10);
+  }
+});
+
+pipeline(source, sink, function(err) {
+  if (err) {
+    console.error('error:', err.message);
+  } else {
+    console.log('done — pipeline handled backpressure automatically');
+  }
+});
+`;
+
+<NodeRunner client:visible code={backpressureCode} node />
+
+<Callout title="Backpressure prevents a fast source from overwhelming a slow sink">
+When the Writable buffer fills up, write() returns false. The correct response is to pause the Readable immediately and resume it only after the drain event fires. The pipe and pipeline APIs do this for you — use them instead of raw event listeners to avoid accidental memory leaks.
+</Callout>
+
+export const backpressureQuiz = [
+  {
+    q: 'What does it mean when writable.write() returns false?',
+    options: [
+      'The write failed due to an error',
+      'The internal buffer is at or above the high-water mark — pause the source',
+      'The stream is finished and no more data can be written',
+      'The chunk was discarded because it was too large',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What event should you listen for to know when it is safe to resume writing after backpressure?',
+    options: [
+      'resume',
+      'ready',
+      'drain',
+      'flush',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'How do readable.pipe() and stream.pipeline() help with backpressure?',
+    options: [
+      'They increase the high-water mark so the buffer never fills',
+      'They run the Writable on a worker thread to match the Readable speed',
+      'They automatically pause the Readable when write() returns false and resume on drain',
+      'They drop chunks that cannot be written immediately',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="streams/backpressure" questions={backpressureQuiz} />
+
+<ProgressTracker client:visible id="streams/backpressure" />

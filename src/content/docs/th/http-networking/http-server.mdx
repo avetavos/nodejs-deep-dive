@@ -1,0 +1,132 @@
+---
+title: 'การสร้าง HTTP Server'
+description: 'ใช้ http.createServer เพื่อรับ request ตั้ง status codes และ headers และส่ง response'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## http.createServer
+
+`http.createServer(callback)` คืนค่า `Server` instance โดย callback — เรียกว่า **request listener** — จะถูกเรียกทุกครั้งที่มี HTTP request เข้ามา โดยรับ argument สองตัวคือ:
+
+- `req` — object `IncomingMessage` ที่อธิบาย request (method, URL, headers, body stream)
+- `res` — object `ServerResponse` ที่ใช้เขียน response
+
+เรียก `server.listen(port, callback)` เพื่อเริ่มรับ connection โดย callback จะทำงานเมื่อ server พร้อมแล้ว
+
+## Status codes และ Headers
+
+HTTP response ทุกอันมี **status code** และชุด **headers** ใช้ `res.writeHead(statusCode, headersObject)` เพื่อกำหนดทั้งสองอย่างพร้อมกันก่อนที่จะเขียน body ใด ๆ
+
+status codes ที่ใช้บ่อย:
+
+| Code | ความหมาย |
+|------|----------|
+| 200 | OK |
+| 201 | Created |
+| 400 | Bad Request |
+| 404 | Not Found |
+| 500 | Internal Server Error |
+
+## res.end — ส่ง response body
+
+`res.end(data)` เขียน chunk สุดท้ายของ response body และบอก Node.js ว่า response เสร็จสมบูรณ์แล้ว ทุก request handler **ต้อง** เรียก `res.end()` (หรือ `res.destroy()`) — ถ้าลืม client จะรอไปตลอดและ connection จะ timeout
+
+คุณยังสามารถใช้ `res.write(data)` เพื่อส่งข้อมูลเป็น chunk ก่อนที่จะเรียก `res.end()` ได้
+
+## Server ที่สมบูรณ์พร้อม status codes และ headers
+
+export const httpServerCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  // กำหนด status code 200 และ Content-Type header
+  res.writeHead(200, {
+    'Content-Type': 'text/html',
+    'X-Powered-By': 'Node.js'
+  });
+
+  // ส่ง response body และปิด connection
+  res.end('<h1>Hello from Node.js!</h1><p>Status: 200 OK</p>');
+});
+
+server.listen(3000, function() {
+  console.log('Server running at http://localhost:3000');
+});
+`;
+
+<NodeRunner client:visible code={httpServerCode} node />
+
+เปิดใน StackBlitz แล้วเข้า `http://localhost:3000` ใน preview tab เพื่อดู HTML response ที่ render ออกมาพร้อม headers ที่ถูกต้อง
+
+## การตอบกลับด้วย status codes ต่าง ๆ
+
+export const statusCodesCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  if (req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('200 OK - Home page');
+  } else if (req.url === '/created') {
+    res.writeHead(201, { 'Content-Type': 'text/plain' });
+    res.end('201 Created - Resource was created');
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found - No page at ' + req.url);
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Server running at http://localhost:3000');
+  console.log('Try: /, /created, /anything-else');
+});
+`;
+
+<NodeRunner client:visible code={statusCodesCode} node />
+
+<Callout title="ต้องตั้ง Content-Type และ end ทุก response เสมอ">
+กฎสองข้อที่จะช่วยให้คุณรอดพ้นจาก bug ลึกลับ: (1) ตั้ง header `Content-Type` ทุกครั้งเพื่อให้ client รู้ว่าจะ interpret body อย่างไร เช่น `text/plain`, `text/html` หรือ `application/json` (2) เรียก `res.end()` เสมอ หากลืมจะทำให้ connection ค้างและ client รอตลอดไป Node.js จะไม่ปิด connection ให้คุณ
+</Callout>
+
+export const httpServerQuiz = [
+  {
+    q: 'จุดประสงค์ของ res.end() ใน Node.js HTTP server คืออะไร?',
+    options: [
+      'เริ่ม server และเปิดรับ connection',
+      'ส่ง response body สุดท้ายและบอกว่า response เสร็จสมบูรณ์',
+      'ปิด server อย่างถาวร',
+      'กำหนด HTTP status code',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'method ใดที่กำหนดทั้ง status code และ response headers ในครั้งเดียว?',
+    options: [
+      'res.setHeader()',
+      'res.status()',
+      'res.writeHead()',
+      'res.send()',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'จะเกิดอะไรขึ้นถ้าลืมเรียก res.end() ใน request handler?',
+    options: [
+      'Node.js ปิด connection อัตโนมัติหลัง 30 วินาที',
+      'server crash ทันที',
+      'client รอไปตลอดและ connection จะ timeout',
+      'response ถูกส่งพร้อม empty body อัตโนมัติ',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="http-networking/http-server" questions={httpServerQuiz} />
+
+<ProgressTracker client:visible id="http-networking/http-server" />

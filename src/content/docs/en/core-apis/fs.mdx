@@ -1,0 +1,163 @@
+---
+title: File System
+description: 'Reading, writing, and navigating the filesystem with node:fs, node:fs/promises, and sync vs async APIs.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Three flavours of the fs module
+
+Node ships the same filesystem operations in three distinct APIs:
+
+| Style | Import | When to use |
+|---|---|---|
+| Callback (async) | `import fs from 'node:fs'` | Legacy code, Node streams |
+| Synchronous | `import fs from 'node:fs'` | CLI scripts, startup-time config |
+| Promise (async) | `import fs from 'node:fs/promises'` | All new server code |
+
+<Callout title="Prefer fs/promises in servers">
+`fs.readFileSync` and friends block the entire event loop — no other request can be handled while the OS reads the file. In a server process, always use the `node:fs/promises` API (or callback-based streams) so the event loop stays free to handle concurrent requests. The sync APIs are acceptable in CLI scripts or at process startup (before the server begins accepting requests).
+</Callout>
+
+## Reading a file
+
+### Callback style
+
+```js
+import fs from 'node:fs';
+
+fs.readFile('./hello.txt', 'utf8', function(err, data) {
+  if (err) throw err;
+  console.log(data);
+});
+```
+
+### Promise style (recommended)
+
+export const fsReadCode = `
+import { writeFile, readFile, readdir, rm } from 'node:fs/promises';
+
+async function demo() {
+  // Write a file
+  await writeFile('/tmp/demo.txt', 'Hello from Node.js!', 'utf8');
+  console.log('Written: /tmp/demo.txt');
+
+  // Read it back
+  var content = await readFile('/tmp/demo.txt', 'utf8');
+  console.log('Read back:', content);
+
+  // List /tmp directory
+  var entries = await readdir('/tmp');
+  console.log('Files in /tmp (first 5):', entries.slice(0, 5));
+
+  // Clean up
+  await rm('/tmp/demo.txt');
+  console.log('Deleted /tmp/demo.txt');
+}
+
+demo().catch(console.error);
+`;
+
+<NodeRunner client:visible code={fsReadCode} node />
+
+## Writing a file
+
+`writeFile` creates the file if it does not exist and **replaces** the contents if it does. Use `appendFile` to add to an existing file.
+
+export const fsWriteCode = `
+import { writeFile, appendFile, readFile, rm } from 'node:fs/promises';
+
+async function demo() {
+  var path = '/tmp/log.txt';
+
+  await writeFile(path, 'Line 1\\n', 'utf8');
+  await appendFile(path, 'Line 2\\n', 'utf8');
+  await appendFile(path, 'Line 3\\n', 'utf8');
+
+  var result = await readFile(path, 'utf8');
+  console.log('File contents:');
+  console.log(result);
+
+  await rm(path);
+}
+
+demo().catch(console.error);
+`;
+
+<NodeRunner client:visible code={fsWriteCode} node />
+
+## Checking existence and stats
+
+export const fsStatCode = `
+import { stat, writeFile, rm } from 'node:fs/promises';
+
+async function demo() {
+  var path = '/tmp/stat-test.txt';
+  await writeFile(path, 'stat demo', 'utf8');
+
+  var info = await stat(path);
+  console.log('size (bytes):', info.size);
+  console.log('isFile:', info.isFile());
+  console.log('isDirectory:', info.isDirectory());
+  console.log('modified:', info.mtime.toISOString());
+
+  await rm(path);
+}
+
+demo().catch(console.error);
+`;
+
+<NodeRunner client:visible code={fsStatCode} node />
+
+## Synchronous reads — startup only
+
+```js
+import { readFileSync } from 'node:fs';
+
+// Acceptable at startup — process has not yet started accepting requests
+const config = JSON.parse(readFileSync('./config.json', 'utf8'));
+```
+
+Never call `readFileSync` inside a request handler, route callback, or any function invoked after the server starts.
+
+export const fsQuiz = [
+  {
+    q: 'Why should you avoid fs.readFileSync inside a server request handler?',
+    options: [
+      'It requires a callback and cannot be used with async/await',
+      'It blocks the event loop, preventing all other requests from being handled',
+      'It is deprecated in Node 20+',
+      'It only works on Linux systems',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does fs.writeFile do if the target file already exists?',
+    options: [
+      'It throws an error — you must delete the file first',
+      'It appends to the existing content',
+      'It replaces the file contents entirely',
+      'It creates a backup and writes to a new file',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which import gives you the promise-based fs API?',
+    options: [
+      'import fs from "node:fs"',
+      'import fs from "node:fs/promises"',
+      'import { promises } from "fs" — this is the only valid form',
+      'import fs from "node:fs/async"',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="core-apis/fs" questions={fsQuiz} />
+
+<ProgressTracker client:visible id="core-apis/fs" />

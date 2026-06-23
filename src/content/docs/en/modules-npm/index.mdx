@@ -1,0 +1,91 @@
+---
+title: 'Modules & npm'
+description: 'An overview of Node.js module systems and the npm ecosystem — what this module covers.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Two module systems, one ecosystem
+
+Node.js ships with two module systems. **CommonJS (CJS)** is the original system and uses `require()` to load modules synchronously. **ECMAScript Modules (ESM)** is the modern standard, shared with browsers, and uses `import` / `export` statements.
+
+Both systems are fully supported in current Node.js versions. Which one a file uses depends on the file extension and the `"type"` field in the nearest `package.json`.
+
+## CJS vs ESM at a glance
+
+| | CommonJS | ESM |
+|---|---|---|
+| **Syntax** | `require()` / `module.exports` | `import` / `export` |
+| **File extension** | `.js` (default) or `.cjs` | `.mjs`, or `.js` when `"type": "module"` |
+| **`"type"` in package.json** | `"commonjs"` (or absent) | `"module"` |
+| **Loading** | Synchronous | Asynchronous (static analysis) |
+| **Top-level `await`** | Not supported | Supported |
+
+## What this module covers
+
+| Lesson | Topic |
+|--------|-------|
+| Overview (this page) | CJS vs ESM comparison and module system basics |
+| package.json Deep Dive | Key fields, semver ranges, and `npm init` |
+| Module Resolution | How Node finds files, the `exports` map, and bare specifiers |
+| Managing Dependencies | Installing, updating, and auditing packages with npm |
+| Publishing Packages | Preparing and publishing a package to the npm registry |
+
+## ESM in action
+
+The snippet below uses ESM `import` to load the built-in `path` module and print the platform path separator — the character Node uses between directory components (`/` on Unix, `\` on Windows):
+
+export const indexDemoCode = `
+import path from 'node:path';
+
+console.log('path.sep:', path.sep);
+console.log('Joined path:', path.join('src', 'content', 'index.mdx'));
+`;
+
+<NodeRunner client:visible code={indexDemoCode} node />
+
+<Callout title="Two module systems">
+Node supports both CommonJS (`require`) and ESM (`import`). A package's `"type"` field in `package.json` controls the default: `"type": "module"` makes `.js` files ESM; `"type": "commonjs"` (or no `"type"` field) keeps the CommonJS default. You can always override per-file with `.mjs` (ESM) or `.cjs` (CJS) extensions.
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'Which syntax does CommonJS use to load another module?',
+    options: [
+      'require()',
+      'import',
+      'load()',
+      'include()',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'What file extension always forces a file to be treated as an ES module regardless of package.json?',
+    options: [
+      '.js',
+      '.cjs',
+      '.mjs',
+      '.esm',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which package.json field switches the entire package to ESM so that .js files are treated as ES modules?',
+    options: [
+      '"module": "esm"',
+      '"type": "module"',
+      '"format": "esm"',
+      '"esm": true',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="modules-npm/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/index" />

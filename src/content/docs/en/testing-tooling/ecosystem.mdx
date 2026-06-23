@@ -1,0 +1,256 @@
+---
+title: 'Ecosystem & Toolchain'
+description: 'Running TypeScript with tsx/ts-node and --experimental-strip-types, linters and formatters (ESLint/Prettier/Biome), nodemon/watch mode, and env file management.'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Running TypeScript in Node.js
+
+TypeScript is not natively understood by Node.js — it must be stripped or compiled first. You have three main options in the modern ecosystem:
+
+### Option 1: `--experimental-strip-types` (Node 20.6+ / stable Node 22)
+
+Node can strip TypeScript type annotations at startup without any extra package. It does **not** type-check — it just removes the types and runs the JavaScript:
+
+```bash
+# Node 22 — stable
+node --experimental-strip-types src/app.ts
+
+# Node 20.6+
+node --experimental-strip-types --input-type=module src/app.ts
+```
+
+Limitations: no `enum`, no `namespace`, no `experimentalDecorators`. For those, use tsx or ts-node.
+
+### Option 2: tsx — fast TypeScript runner
+
+`tsx` is a lightweight wrapper around esbuild. It handles all TypeScript features and starts in milliseconds:
+
+```bash
+# Run once
+npx tsx src/app.ts
+
+# Watch mode — auto-restart on changes
+npx tsx watch src/app.ts
+
+# Install as a dev dependency
+npm install --save-dev tsx
+```
+
+### Option 3: ts-node — the classic
+
+`ts-node` has been the standard for years. It is heavier than tsx but has mature configuration support:
+
+```bash
+npm install --save-dev ts-node typescript
+
+# Run a file
+npx ts-node src/app.ts
+
+# ESM mode (tsconfig must have "module": "NodeNext")
+npx ts-node --esm src/app.ts
+```
+
+## Linters and Formatters
+
+### ESLint — catch logic errors and enforce style rules
+
+```bash
+# Install ESLint with TypeScript support
+npm install --save-dev eslint @eslint/js typescript-eslint
+
+# Create a flat config (eslint.config.mjs)
+# then run:
+npx eslint src/
+
+# Auto-fix fixable issues
+npx eslint --fix src/
+```
+
+A minimal `eslint.config.mjs` for TypeScript:
+
+```js
+// eslint.config.mjs
+import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+
+export default tseslint.config(
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+);
+```
+
+### Prettier — opinionated code formatter
+
+```bash
+npm install --save-dev prettier
+
+# Format all files
+npx prettier --write .
+
+# Check formatting without changing files (for CI)
+npx prettier --check .
+```
+
+Prettier and ESLint focus on different things: Prettier handles formatting (spacing, quotes, semicolons), ESLint handles logic and style rules. Run both in sequence or use `eslint-config-prettier` to disable ESLint's formatting rules.
+
+### Biome — one tool for both lint and format
+
+Biome replaces ESLint + Prettier with a single fast tool written in Rust:
+
+```bash
+npm install --save-dev @biomejs/biome
+npx biome init
+
+# Lint and format in one pass
+npx biome check --apply src/
+```
+
+## Watch Mode and nodemon
+
+### Node built-in watch (Node 18+)
+
+```bash
+# Restart on any file change — no install required
+node --watch src/app.js
+
+# Watch specific files
+node --watch-path=src src/app.js
+```
+
+### nodemon — battle-tested watcher
+
+```bash
+npm install --save-dev nodemon
+
+# Basic usage
+npx nodemon src/app.js
+
+# With TypeScript via tsx
+npx nodemon --exec "npx tsx" src/app.ts
+
+# nodemon.json config
+```
+
+```json
+{
+  "watch": ["src"],
+  "ext": "ts,js,json",
+  "exec": "npx tsx src/app.ts"
+}
+```
+
+## Environment Variables and .env Files
+
+### Native .env loading (Node 20.6+)
+
+```bash
+# Load a .env file without dotenv
+node --env-file=.env src/app.js
+
+# Load multiple env files (later files override earlier)
+node --env-file=.env --env-file=.env.local src/app.js
+```
+
+### dotenv — the classic
+
+```bash
+npm install dotenv
+```
+
+```js
+// src/app.js — load at the very top
+import 'dotenv/config';
+
+console.log(process.env.DATABASE_URL); // from .env
+```
+
+### Best practices for env files
+
+```bash
+# .env — default values, committed to git (no secrets)
+NODE_ENV=development
+PORT=3000
+LOG_LEVEL=info
+
+# .env.local — local overrides, NOT committed (in .gitignore)
+DATABASE_URL=postgres://localhost:5432/mydb
+SECRET_KEY=dev-only-secret
+
+# .env.example — template showing required vars, committed
+DATABASE_URL=
+SECRET_KEY=
+```
+
+Always add `.env.local` and `.env*.local` to `.gitignore`. Never commit real secrets.
+
+## package.json scripts — the glue
+
+```json
+{
+  "scripts": {
+    "dev": "tsx watch src/app.ts",
+    "build": "tsc --noEmit",
+    "start": "node dist/app.js",
+    "test": "node --test",
+    "lint": "eslint src/ && prettier --check .",
+    "format": "prettier --write . && eslint --fix src/"
+  }
+}
+```
+
+<Callout title="Node 20+ can run TypeScript directly with a flag — tooling keeps evolving">
+The Node.js toolchain moves fast. `--experimental-strip-types` in Node 22 means you can ship TypeScript with zero extra build tools for many projects. Start simple, add complexity only when you need features like decorators, bundling, or multi-environment targeting.
+</Callout>
+
+export const ecosystemQuiz = [
+  {
+    q: 'What does `node --experimental-strip-types` do?',
+    options: [
+      'Fully type-checks TypeScript before running',
+      'Compiles TypeScript to JavaScript and writes output files',
+      'Strips TypeScript type annotations and runs the JavaScript directly',
+      'Enables experimental TypeScript features like decorators',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What is the key difference between Prettier and ESLint?',
+    options: [
+      'Prettier is faster; ESLint is slower',
+      'Prettier handles code formatting; ESLint handles logic and style rules',
+      'ESLint only works with TypeScript; Prettier works with JavaScript',
+      'They are identical tools with different names',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which Node.js flag enables built-in watch mode (no nodemon needed)?',
+    options: [
+      '--hot-reload',
+      '--restart',
+      '--watch',
+      '--live',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which Node 20.6+ flag loads a `.env` file without the `dotenv` package?',
+    options: [
+      '--dotenv=.env',
+      '--load-env=.env',
+      '--env-file=.env',
+      '--process-env=.env',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="testing-tooling/ecosystem" questions={ecosystemQuiz} />
+
+<ProgressTracker client:visible id="testing-tooling/ecosystem" />

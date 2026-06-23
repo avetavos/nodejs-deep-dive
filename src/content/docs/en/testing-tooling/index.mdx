@@ -1,0 +1,115 @@
+---
+title: 'Testing & Tooling'
+description: 'An overview of Node.js built-in testing, debugging, performance measurement, and the modern toolchain. What this module covers.'
+sidebar:
+  order: 1
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why tooling matters
+
+Writing code is only half the job. Knowing how to **test**, **debug**, **measure**, and **configure** your Node.js environment turns a working script into a maintainable, production-ready application.
+
+Node 18+ ships a built-in test runner, a powerful inspector protocol, and `perf_hooks` for timing — meaning you can do a lot without installing anything.
+
+## What this module covers
+
+| Lesson | Topic |
+|--------|-------|
+| Built-in Test Runner | `node:test`, `node:assert`, `test()`, `describe`/`it`, `node --test` |
+| Debugging | `node --inspect`, Chrome DevTools, breakpoints, `console` methods |
+| Performance | `perf_hooks`, `performance.now()`, `PerformanceObserver`, avoiding blocking |
+| Ecosystem & Toolchain | TypeScript runners, ESLint/Prettier/Biome, nodemon, env files |
+
+## The toolchain at a glance
+
+```
+┌─────────────────────────────────────────────────┐
+│  Your Node.js Project                           │
+│                                                 │
+│  Source code (.ts / .js / .mjs)                 │
+│       │                                         │
+│       ▼                                         │
+│  Linter / Formatter  ──►  ESLint, Prettier,     │
+│                            Biome                │
+│       │                                         │
+│       ▼                                         │
+│  TypeScript runner   ──►  tsx, ts-node,         │
+│                            --experimental-      │
+│                            strip-types          │
+│       │                                         │
+│       ▼                                         │
+│  Test runner         ──►  node:test (built-in)  │
+│                            or Vitest / Jest      │
+│       │                                         │
+│       ▼                                         │
+│  Debugger            ──►  node --inspect +      │
+│                            Chrome DevTools       │
+│       │                                         │
+│       ▼                                         │
+│  Performance         ──►  perf_hooks,           │
+│                            PerformanceObserver   │
+└─────────────────────────────────────────────────┘
+```
+
+## Choosing what to install
+
+Node's built-ins cover most basic needs. Here is a quick decision guide:
+
+```bash
+# Zero dependencies — use the built-in runner
+node --test src/**/*.test.js
+
+# TypeScript without a build step (Node 20.6+)
+node --experimental-strip-types src/app.ts
+
+# Faster HMR + watch mode
+npx tsx watch src/app.ts
+
+# Lint + format in one tool (zero config)
+npx biome check --apply src/
+```
+
+<Callout title="Built-in first, then extend">
+Start with `node:test`, `node --inspect`, and `perf_hooks`. Add third-party tools only when you hit a real limitation — not by default.
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'Which Node.js version introduced the built-in `node:test` runner?',
+    options: [
+      'Node 14',
+      'Node 16',
+      'Node 18',
+      'Node 22',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which built-in module is used for measuring execution time in Node.js?',
+    options: [
+      'node:timers',
+      'node:perf_hooks',
+      'node:process',
+      'node:v8',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What flag lets Node 20.6+ run TypeScript files directly without a build step?',
+    options: [
+      '--ts-mode',
+      '--allow-typescript',
+      '--experimental-strip-types',
+      '--run-ts',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="testing-tooling/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="testing-tooling/index" />

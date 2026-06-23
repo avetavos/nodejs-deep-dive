@@ -1,0 +1,143 @@
+---
+title: Buffer
+description: 'การทำงานกับข้อมูลไบนารีใน Node.js ด้วย Buffer: Buffer.from, encodings, byte length และการ slice'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทำไม Buffer ถึงมีอยู่
+
+JavaScript strings ถูกเก็บภายในเป็น **UTF-16** — สอง bytes ต่อ code point ใน Basic Multilingual Plane ซึ่งใช้ได้ดีสำหรับข้อความ แต่งาน networking และ filesystem จัดการ raw bytes: TCP packet, ภาพ JPEG หรือ binary protocol frame ไม่มี encoding ในตัว
+
+`Buffer` คือคำตอบของ Node: ลำดับของ bytes ที่มีขนาดคงที่ ที่ expose เป็น Uint8Array subclass มีมาก่อน typed arrays และยังคงเป็น type มาตรฐานที่คุณจะเห็นใน Node's streams, HTTP, crypto และ fs APIs
+
+<Callout title="Strings เป็น UTF-16 ใน JS; Buffer จัดการ raw bytes">
+JavaScript `string` ที่มี 4 ตัวอักษรอาจใช้ 4, 8 หรือมากกว่า bytes ขึ้นอยู่กับ encoding `Buffer` แยกแนวคิด "กี่ตัวอักษร" ออกจาก "กี่ bytes บน wire" ใช้ `Buffer.byteLength(str, encoding)` เสมอ — ไม่ใช่ `str.length` — เมื่อต้องการ byte size ของ string
+</Callout>
+
+## การสร้าง Buffer
+
+วิธีที่แนะนำคือ `Buffer.from()` constructor `new Buffer()` ที่ deprecated ถูกลบออกไปแล้ว อย่าใช้
+
+export const bufferFromCode = `
+// From a string (UTF-8 by default)
+var buf1 = Buffer.from('Hello');
+console.log('buf1:', buf1);           // <Buffer 48 65 6c 6c 6f>
+console.log('buf1 length:', buf1.length); // 5 bytes
+
+// From a hex string
+var buf2 = Buffer.from('deadbeef', 'hex');
+console.log('buf2:', buf2);           // <Buffer de ad be ef>
+console.log('buf2 length:', buf2.length); // 4 bytes
+
+// Allocate a zeroed buffer of N bytes
+var buf3 = Buffer.alloc(4);
+console.log('buf3 (zeroed):', buf3);  // <Buffer 00 00 00 00>
+`;
+
+<NodeRunner client:visible code={bufferFromCode} node />
+
+## Encodings: utf8, hex, base64
+
+`toString(encoding)` แปลง Buffer กลับเป็น string ใน encoding ที่ต้องการ
+
+export const encodingsCode = `
+var original = 'Node.js';
+var buf = Buffer.from(original, 'utf8');
+
+console.log('utf8  :', buf.toString('utf8'));
+console.log('hex   :', buf.toString('hex'));
+console.log('base64:', buf.toString('base64'));
+
+// Round-trip: base64 -> Buffer -> string
+var b64 = buf.toString('base64');
+var decoded = Buffer.from(b64, 'base64').toString('utf8');
+console.log('decoded:', decoded);
+`;
+
+<NodeRunner client:visible code={encodingsCode} node />
+
+## Byte length vs string length
+
+export const byteLengthCode = `
+// ASCII: 1 char = 1 byte
+var ascii = 'hello';
+console.log('ascii chars:', ascii.length);
+console.log('ascii bytes:', Buffer.byteLength(ascii, 'utf8'));
+
+// Thai: multi-byte in UTF-8
+var thai = 'สวัสดี';
+console.log('thai chars:', thai.length);
+console.log('thai bytes (utf8):', Buffer.byteLength(thai, 'utf8'));
+
+// Emoji: surrogate pair in JS = 2 .length units
+var emoji = 'Node 🚀';
+console.log('emoji .length:', emoji.length);
+console.log('emoji bytes (utf8):', Buffer.byteLength(emoji, 'utf8'));
+`;
+
+<NodeRunner client:visible code={byteLengthCode} node />
+
+## Slicing และ copying
+
+`buf.slice(start, end)` (หรือ `buf.subarray`) คืน view ไปยัง memory เดียวกัน — การแก้ไข slice จะแก้ไข original ด้วย ใช้ `Buffer.from(slice)` เพื่อได้ copy อิสระ
+
+export const sliceCode = `
+var buf = Buffer.from('Hello, World!');
+var slice = buf.slice(0, 5);
+console.log('slice:', slice.toString()); // Hello
+
+// slice shares memory — mutating it mutates buf
+slice[0] = 0x4A; // 'J'
+console.log('buf after mutation:', buf.toString()); // Jello, World!
+
+// Independent copy
+var copy = Buffer.from(buf.slice(7, 12));
+copy[0] = 0x57; // 'W'
+console.log('copy:', copy.toString());   // World with W
+console.log('buf unchanged:', buf.toString());
+`;
+
+<NodeRunner client:visible code={sliceCode} node />
+
+export const bufferQuiz = [
+  {
+    q: 'ทำไม Buffer.byteLength(str) ถึงมักต่างจาก str.length?',
+    options: [
+      'Buffer นับ null terminators; strings ไม่นับ',
+      'str.length นับ UTF-16 code units; Buffer.byteLength นับ bytes ใน encoding ที่เลือก',
+      'มีค่าเท่ากันเสมอสำหรับ ASCII',
+      'Buffer.byteLength นับ bits ไม่ใช่ bytes',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Buffer.from("deadbeef", "hex") ให้ผลลัพธ์อะไร?',
+    options: [
+      'Buffer ที่มีตัวอักษร ASCII d, e, a, d, b, e, e, f',
+      'Buffer ขนาด 4 bytes ที่ decode จาก hex string',
+      'error — hex ไม่ใช่ encoding ที่ถูกต้องสำหรับ Buffer.from',
+      'Buffer ขนาด 8 bytes หนึ่ง byte ต่อหนึ่ง hex character',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เกิดอะไรขึ้นเมื่อคุณแก้ไข slice ที่ได้จาก buf.slice()?',
+    options: [
+      'slice เป็น copy อิสระ — original ไม่ถูกกระทบ',
+      'ทั้ง slice และ original buffer ถูกแก้ไข',
+      'เกิด error — Buffer slices เป็น read-only',
+      'แค่ original เท่านั้นที่ถูกแก้ไข',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="core-apis/buffer" questions={bufferQuiz} />
+
+<ProgressTracker client:visible id="core-apis/buffer" />

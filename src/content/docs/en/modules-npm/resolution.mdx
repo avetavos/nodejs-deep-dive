@@ -1,0 +1,158 @@
+---
+title: 'Module Resolution'
+description: 'How Node.js resolves import and require — node_modules lookup, file extensions, ESM vs CJS interop, and the exports map.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+When you write `import 'express'` or `require('express')`, Node follows a deterministic resolution algorithm to locate the actual file on disk. Understanding this algorithm helps you debug missing-module errors, understand why subpath imports work, and reason about how ESM and CJS packages interoperate.
+
+## Bare specifiers
+
+A **bare specifier** is a module name that does not start with `./`, `../`, or `/` — for example `'express'` or `'lodash/fp'`. Node resolves bare specifiers by walking up the directory tree from the importing file, checking each `node_modules/` folder along the way until it finds a match or reaches the filesystem root.
+
+```bash
+# Given a file at /project/src/app.js importing 'express',
+# Node checks these locations in order:
+/project/src/node_modules/express
+/project/node_modules/express        ← found here
+/node_modules/express
+```
+
+This traversal is what allows nested packages to carry their own dependency versions without conflicting with siblings.
+
+## File extensions
+
+Node resolves specifiers to concrete files using these rules:
+
+- **`.js`** — treated as CJS by default, or ESM when the nearest `package.json` has `"type": "module"`.
+- **`.mjs`** — always ESM, regardless of `package.json`.
+- **`.cjs`** — always CJS, regardless of `package.json`.
+
+ESM enforces **explicit extensions** in specifiers. Unlike CJS, you cannot omit the extension and rely on Node to guess:
+
+```js
+// CJS — extension optional (Node tries .js, .json, index.js …)
+const utils = require('./utils');
+
+// ESM — extension required
+import utils from './utils.js';
+```
+
+## ESM vs CJS interop
+
+The two module systems can coexist, but with constraints:
+
+```js
+// ── CJS file (utils.cjs) ─────────────────────────────────────
+// CJS can require other CJS modules normally.
+const fs = require('fs');
+module.exports = { readConfig: () => fs.readFileSync('.env', 'utf8') };
+
+// CJS CANNOT require() an ESM module — this throws ERR_REQUIRE_ESM:
+// const esm = require('./modern.mjs'); // ❌
+
+// ── ESM file (app.mjs) ──────────────────────────────────────
+// ESM CAN import a CJS module; it receives module.exports as the default.
+import cjsUtils from './utils.cjs'; // ✅ default = module.exports object
+
+// ESM can also import another ESM module normally.
+import { helper } from './helpers.mjs'; // ✅
+```
+
+The asymmetry exists because ESM loading is static and asynchronous while CJS loading is synchronous. A synchronous `require()` call cannot wait for an async ESM evaluation.
+
+## The `exports` map
+
+The `"exports"` field in `package.json` is the authoritative way for a package to declare its public API surface. Any path not listed in `"exports"` is private — consumers cannot import it directly.
+
+```json
+{
+  "name": "my-lib",
+  "version": "1.0.0",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./utils": {
+      "import": "./dist/utils.mjs",
+      "require": "./dist/utils.cjs"
+    }
+  }
+}
+```
+
+With this map:
+- `import 'my-lib'` resolves to `dist/index.mjs`.
+- `require('my-lib')` resolves to `dist/index.cjs`.
+- `import 'my-lib/utils'` resolves to `dist/utils.mjs`.
+- `import 'my-lib/internal/secret'` throws — `"./internal/secret"` is not exported.
+
+## Running inline ESM with `--input-type`
+
+You can pipe ESM source directly to Node without a file on disk:
+
+```bash
+echo "import os from 'node:os'; console.log(os.platform());" | node --input-type=module
+```
+
+This is useful for quick experiments or CI one-liners that need ESM semantics without touching the project's `package.json`.
+
+## Importing a built-in module
+
+export const resolutionDemoCode = `
+import os from 'node:os';
+
+console.log('Platform:', os.platform());
+console.log('Architecture:', os.arch());
+console.log('CPUs:', os.cpus().length);
+`;
+
+<NodeRunner client:visible code={resolutionDemoCode} node />
+
+<Callout title="ESM is static and async; CJS is dynamic and sync">
+Because ESM imports are resolved statically (before any code runs), bundlers and runtimes can perform **tree-shaking** — eliminating exports that are never imported. CJS `require()` calls can appear inside conditionals or loops, making static analysis impossible and preventing dead-code elimination.
+</Callout>
+
+export const resolutionQuiz = [
+  {
+    q: 'When Node resolves a bare specifier like `"express"`, where does it look first?',
+    options: [
+      'The global node_modules at the filesystem root',
+      'The node_modules folder closest to the importing file',
+      'The node_modules folder at the project root',
+      'The folder containing the Node.js binary',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why must ESM specifiers include explicit file extensions?',
+    options: [
+      'ESM does not support index.js files',
+      'ESM is static and cannot perform extension guessing at runtime',
+      'Node.js only supports .mjs extensions in ESM',
+      'The exports map requires full paths',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which statement about ESM/CJS interop is correct?',
+    options: [
+      'CJS can require() an ESM module by using .mjs extension',
+      'ESM cannot import CJS modules under any circumstances',
+      'ESM can import a CJS module; CJS cannot require() an ESM module',
+      'Both systems are fully interoperable in both directions',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="modules-npm/resolution" questions={resolutionQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/resolution" />

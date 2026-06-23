@@ -1,0 +1,79 @@
+---
+title: 'Core APIs'
+description: 'ภาพรวมของ globals และโมดูลหลักที่ติดมากับ Node.js: process, Buffer, fs และ EventEmitter'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Core APIs ของ Node คืออะไร?
+
+Node.js มาพร้อม globals และโมดูลที่ติดมาในตัว (built-in) ที่สามารถใช้งานได้โดยไม่ต้องติดตั้งอะไรเพิ่ม สิ่งเหล่านี้คือ primitives ที่โปรแกรม Node.js ทุกตัวสร้างขึ้นมาบน
+
+globals และโมดูลหลักที่โมดูลนี้จะครอบคลุม:
+
+- **`process`** — เข้าถึงข้อมูลของ process ที่กำลังทำงาน: environment variables, command-line arguments, working directory, platform และการควบคุม lifecycle
+- **`Buffer`** — ชิ้นส่วนของข้อมูลไบนารีดิบที่มีขนาดคงที่ มีมาก่อน typed arrays และยังคงเป็นวิธีมาตรฐานในการจัดการ bytes ใน Node streams และ networking
+- **`node:fs` / `node:fs/promises`** — อ่าน เขียน และนำทางในระบบไฟล์ promises API ทำให้ใช้ `async/await` ได้โดยตรง
+- **`EventEmitter`** — แกนหลักของสถาปัตยกรรม event-driven ของ Node Streams, HTTP server และ library ของ third-party หลายตัวล้วน extend `EventEmitter`
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | หัวข้อ |
+|--------|-------|
+| process & env | `process.argv`, `process.env`, exit codes และการตรวจจับ platform |
+| Buffer | ข้อมูลไบนารี, encoding และการจัดการระดับ byte |
+| File System | callbacks ของ `fs`, sync APIs และ interface `fs/promises` |
+| EventEmitter | custom events, listeners และ lifecycle ของ `once` / `removeListener` |
+
+## demo globals เบื้องต้น
+
+snippet ด้านล่างอ่าน globals สองตัวที่มีให้ใช้ใน Node.js process ทุกตัวโดยไม่ต้อง `require` หรือ `import`:
+
+export const indexDemoCode = `
+// process.version — the running Node.js version
+console.log('Node version: ' + process.version);
+
+// Buffer.byteLength — bytes used to store a string (UTF-8 by default)
+var str = 'Hello, Node!';
+console.log('String: ' + str);
+console.log('Chars: ' + str.length);
+console.log('Bytes (UTF-8): ' + Buffer.byteLength(str, 'utf8'));
+`;
+
+<NodeRunner client:visible code={indexDemoCode} node />
+
+<Callout title="Globals vs modules">
+`process` และ `Buffer` คือ globals แท้จริง — ไม่ต้อง import `fs`, `path`, `events` และ built-ins อื่นๆ ต้อง import ด้วย `import ... from 'node:fs'` (หรือ `require('fs')` แบบเดิม) prefix `node:` คือแบบแผนสมัยใหม่ที่ทำให้เห็นชัดทันทีว่า import นั้นคือ Node built-in
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'อันไหนคือ Node.js global แท้จริงที่ใช้ได้โดยไม่ต้อง import?',
+    options: [
+      'fs',
+      'path',
+      'process',
+      'http',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'prefix สมัยใหม่ที่แนะนำสำหรับการ import โมดูล built-in ของ Node.js คืออะไร?',
+    options: [
+      'ไม่มี prefix — แค่ "fs"',
+      'prefix "node:" — เช่น "node:fs"',
+      'scope "@node/" — เช่น "@node/fs"',
+      'built-ins ไม่สามารถ import ด้วย ESM ได้',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="core-apis/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="core-apis/index" />

@@ -1,0 +1,170 @@
+---
+title: EventEmitter
+description: 'Node.js EventEmitter: on, emit, once, removeListener, and building custom event-driven classes.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The backbone of Node's event-driven model
+
+`EventEmitter` (from `node:events`) is the class that powers virtually every I/O object in Node.js. The HTTP server, TCP sockets, file streams, child processes, and many third-party libraries all extend `EventEmitter`. Understanding it means understanding how Node communicates between components.
+
+<Callout title="EventEmitter is the backbone of Node's streams, HTTP, and more">
+`http.Server`, `net.Socket`, `fs.ReadStream` — all of these extend `EventEmitter`. When a request arrives, the server emits `'request'`. When a socket disconnects, it emits `'close'`. Learning `EventEmitter` is learning the fundamental communication contract of Node.js.
+</Callout>
+
+## Basic usage: on, emit, removeListener
+
+export const eeBasicCode = `
+import { EventEmitter } from 'node:events';
+
+var emitter = new EventEmitter();
+
+// Register a listener
+emitter.on('greet', function(name) {
+  console.log('Hello, ' + name + '!');
+});
+
+// Emit the event — listener runs synchronously
+emitter.emit('greet', 'Alice');
+emitter.emit('greet', 'Bob');
+
+// Remove the listener
+var handler = function(msg) {
+  console.log('message:', msg);
+};
+emitter.on('message', handler);
+emitter.emit('message', 'first');
+emitter.removeListener('message', handler);
+emitter.emit('message', 'second'); // no output — listener removed
+`;
+
+<NodeRunner client:visible code={eeBasicCode} node />
+
+## once — fire exactly one time
+
+`once` registers a listener that automatically removes itself after the first emission.
+
+export const eeOnceCode = `
+import { EventEmitter } from 'node:events';
+
+var emitter = new EventEmitter();
+
+emitter.once('connect', function() {
+  console.log('Connected! (fires once only)');
+});
+
+emitter.emit('connect'); // prints "Connected!"
+emitter.emit('connect'); // nothing — listener already removed
+emitter.emit('connect'); // nothing
+
+console.log('listener count:', emitter.listenerCount('connect')); // 0
+`;
+
+<NodeRunner client:visible code={eeOnceCode} node />
+
+## Building a custom EventEmitter class
+
+Extend `EventEmitter` to give your own classes event-driven capabilities.
+
+export const eeCustomCode = `
+import { EventEmitter } from 'node:events';
+
+class DataLoader extends EventEmitter {
+  constructor() {
+    super();
+    this._items = [];
+  }
+
+  load(item) {
+    this._items.push(item);
+    this.emit('data', item);
+    if (this._items.length >= 3) {
+      this.emit('done', this._items);
+    }
+  }
+}
+
+var loader = new DataLoader();
+
+loader.on('data', function(item) {
+  console.log('loaded item:', item);
+});
+
+loader.once('done', function(all) {
+  console.log('all done! total:', all.length, 'items');
+  console.log('items:', all.join(', '));
+});
+
+loader.load('alpha');
+loader.load('beta');
+loader.load('gamma');
+`;
+
+<NodeRunner client:visible code={eeCustomCode} node />
+
+## Listener count and off()
+
+`off` is an alias for `removeListener` added in Node 10. `listenerCount` lets you inspect how many listeners are registered for an event — useful for detecting potential memory leaks.
+
+export const eeCountCode = `
+import { EventEmitter } from 'node:events';
+
+var ee = new EventEmitter();
+
+var handler1 = function() { console.log('handler1'); };
+var handler2 = function() { console.log('handler2'); };
+
+ee.on('event', handler1);
+ee.on('event', handler2);
+console.log('count before off:', ee.listenerCount('event')); // 2
+
+ee.off('event', handler1);
+console.log('count after off:', ee.listenerCount('event'));  // 1
+
+ee.emit('event'); // only handler2 runs
+`;
+
+<NodeRunner client:visible code={eeCountCode} node />
+
+export const eventsQuiz = [
+  {
+    q: 'What is the key difference between emitter.on() and emitter.once()?',
+    options: [
+      'on() is synchronous; once() is asynchronous',
+      'once() registers a listener that is automatically removed after the first emission',
+      'on() can only listen to built-in events; once() works for custom events',
+      'once() fires the listener immediately without waiting for emit()',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When does an EventEmitter listener run relative to emitter.emit()?',
+    options: [
+      'Asynchronously — after the current call stack clears',
+      'In the next microtask',
+      'Synchronously — before emit() returns',
+      'In the next setTimeout callback',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which Node.js built-in classes extend EventEmitter?',
+    options: [
+      'Only third-party libraries extend EventEmitter',
+      'Buffer and process only',
+      'http.Server, net.Socket, fs.ReadStream, and many more',
+      'Only http.Server',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="core-apis/events" questions={eventsQuiz} />
+
+<ProgressTracker client:visible id="core-apis/events" />

@@ -1,0 +1,167 @@
+---
+title: 'this และ Context'
+description: 'การกำหนด this ใน functions vs methods, call/apply/bind และทำไม arrow functions ถึงไม่มี this ของตัวเอง'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## this คืออะไร?
+
+`this` เป็น keyword พิเศษที่อ้างถึง **execution context** — object ที่ถือเป็น receiver ของการเรียกฟังก์ชันปัจจุบัน ต่างจากภาษาส่วนใหญ่ `this` ใน JavaScript ไม่ถูก bind เมื่อนิยาม แต่ถูกกำหนด ณ **เวลาที่เรียก** โดยวิธีที่ฟังก์ชันถูก invoke
+
+## this ในรูปแบบการเรียกต่างๆ
+
+```js
+// 1. Method call — this คือ object ก่อนจุด
+const user = {
+  name: 'Alice',
+  greet: function() {
+    return 'Hi, I am ' + this.name;
+  },
+};
+console.log(user.greet()); // 'Hi, I am Alice'
+
+// 2. Plain function call — this คือ undefined (strict mode) หรือ globalThis
+function whoAmI() {
+  return typeof this; // 'undefined' ใน strict mode
+}
+
+// 3. Constructor call — this คือ object ที่สร้างใหม่
+function Person(name) {
+  this.name = name;
+}
+const p = new Person('Bob');
+console.log(p.name); // 'Bob'
+```
+
+## การสูญเสีย this
+
+ปัญหาที่พบบ่อยที่สุด: การแยก method ออกจาก object ทำให้ binding หาย
+
+```js
+const timer = {
+  label: 'tick',
+  start: function() {
+    // หลังจาก 0 ms fn ถูกเรียกเป็น plain function — this.label เป็น undefined
+    setTimeout(function() {
+      console.log(this.label); // undefined — 'this' ไม่ใช่ timer
+    }, 0);
+  },
+};
+```
+
+## call, apply และ bind
+
+ทั้งสาม method นี้ให้คุณ **กำหนด `this` อย่างชัดเจน**
+
+```js
+function introduce(greeting, punctuation) {
+  return greeting + ', I am ' + this.name + punctuation;
+}
+
+const obj = { name: 'Carol' };
+
+// call — ส่ง arguments แยกกัน
+introduce.call(obj, 'Hello', '!');     // 'Hello, I am Carol!'
+
+// apply — ส่ง arguments เป็น array
+introduce.apply(obj, ['Hey', '.']);    // 'Hey, I am Carol.'
+
+// bind — return ฟังก์ชันใหม่ที่ this ถูก bind อย่างถาวร
+const boundIntroduce = introduce.bind(obj);
+boundIntroduce('Hi', '?');            // 'Hi, I am Carol?'
+```
+
+## Arrow functions และ this
+
+Arrow functions **ไม่มี `this` ของตัวเอง** พวกมัน inherit `this` จาก **lexical enclosing scope** — function หรือ module scope รอบนอกที่จุดที่เขียน
+
+```js
+const timer2 = {
+  label: 'tick',
+  start: function() {
+    // Arrow function inherit 'this' จาก start() — ซึ่งคือ timer2
+    setTimeout(() => {
+      console.log(this.label); // 'tick' — bound อย่างถูกต้อง
+    }, 0);
+  },
+};
+```
+
+ทำให้ arrow functions เป็นตัวเลือกที่เหมาะสมสำหรับ callbacks ภายใน methods
+
+## Demo ที่รันได้
+
+export const thisCode = `
+const counter = {
+  count: 0,
+  // Regular function — 'this' คือ counter เมื่อเรียกเป็น counter.method()
+  incrementRegular: function() {
+    this.count += 1;
+    return this.count;
+  },
+};
+
+console.log('after increment:', counter.incrementRegular()); // 1
+console.log('after increment:', counter.incrementRegular()); // 2
+
+// แยก method ออก — 'this' หาย
+const detached = counter.incrementRegular;
+try {
+  detached(); // TypeError ใน strict mode
+} catch (e) {
+  console.log('detached call error:', e.message);
+}
+
+// แก้ด้วย bind
+const bound = counter.incrementRegular.bind(counter);
+console.log('bound call:', bound()); // 3
+`;
+
+<NodeRunner client:visible code={thisCode} />
+
+<Callout title="Arrow functions inherit this from the enclosing scope">
+Arrow functions ไม่สร้าง binding `this` ของตัวเอง ทำให้เหมาะอย่างยิ่งสำหรับ callbacks และ nested functions ภายใน class methods หรือ object methods ที่ต้องการรักษา `this` ภายนอกไว้ อย่างไรก็ตาม ไม่ควรใช้ arrow function เป็น object method โดยตรง — ไม่มี `this` ภายนอกที่จะ inherit ทำให้ `this` จะเป็น `undefined` หรือ `globalThis`
+</Callout>
+
+export const thisQuiz = [
+  {
+    q: '`this` ของ regular function (non-arrow) ใน JavaScript ถูกกำหนดเมื่อไหร่?',
+    options: [
+      'เมื่อนิยาม — ตามที่ฟังก์ชันถูกเขียนใน source code',
+      'เมื่อเรียก — ตามวิธีที่ฟังก์ชันถูก invoke',
+      'เมื่อโหลด module — ตาม file ที่อยู่',
+      'เป็น `globalThis` เสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`fn.bind(obj)` return อะไร?',
+    options: [
+      'ผลลัพธ์จากการเรียก `fn` โดยมี `obj` เป็น `this`',
+      'ฟังก์ชันใหม่ที่ `this` ถูก set เป็น `obj` อย่างถาวร',
+      'ฟังก์ชัน `fn` เดิมที่ `this` ถูก mutate เป็น `obj`',
+      'Error หาก `obj` เป็น null',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม arrow functions จึงทำงานได้ดีเป็น callbacks ภายใน class methods?',
+    options: [
+      'รันได้เร็วกว่า regular functions',
+      'Bind `this` เป็น `globalThis` อัตโนมัติ',
+      'Inherit `this` จาก scope รอบนอก ทำให้ context ของ method ภายนอกถูกเก็บรักษาไว้',
+      'เข้าถึง prototype chain ได้โดยตรง',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="js-essentials/this-context" questions={thisQuiz} />
+
+<ProgressTracker client:visible id="js-essentials/this-context" />

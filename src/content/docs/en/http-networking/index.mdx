@@ -1,0 +1,88 @@
+---
+title: 'HTTP & Networking'
+description: 'Build HTTP servers and make outbound requests with Node.js built-in modules — no framework needed.'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Node.js as a networking platform
+
+One of Node.js's defining strengths is its first-class networking support baked directly into the runtime. Before frameworks like Express or Fastify existed, developers wrote HTTP servers using nothing but the built-in `node:http` module — and that module is still the engine under every framework today.
+
+This module teaches you to work with HTTP at the level that matters: the request/response cycle, routing, headers, status codes, and outbound fetching. By the end you will understand what every framework does under the hood.
+
+## What this module covers
+
+| Lesson | Topic |
+|--------|-------|
+| HTTP Server | `http.createServer`, status codes, headers, `res.end` |
+| Routing | Manual routing on `req.method` and `req.url` |
+| Outbound Requests | Global `fetch`, JSON, error handling |
+| JSON API | Parse body, route, respond with JSON |
+
+## A minimal server — right now
+
+No `npm install`, no framework, no config files. This is a complete Node.js HTTP server:
+
+export const minimalServerCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Hello from Node.js!\\n');
+});
+
+server.listen(3000, function() {
+  console.log('Server listening on http://localhost:3000');
+});
+`;
+
+<NodeRunner client:visible code={minimalServerCode} node />
+
+Three lines of logic — that is all it takes. The rest of this module unpacks each part.
+
+<Callout title="The http module ships with Node.js">
+You never need to install `node:http`. It is part of the Node.js standard library. Import it with `require('node:http')` (CommonJS) or `import http from 'node:http'` (ESM). The `node:` prefix is the modern convention — it makes clear you are importing a built-in, not an npm package.
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'Which module do you use to create an HTTP server in Node.js without any npm packages?',
+    options: [
+      'express',
+      'node:http',
+      'node:net',
+      'node:fetch',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does the `node:` prefix in `require("node:http")` indicate?',
+    options: [
+      'A third-party package from npm',
+      'A deprecated legacy module',
+      'A built-in Node.js standard library module',
+      'An ES module that requires a flag to enable',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which frameworks use `node:http` under the hood?',
+    options: [
+      'Only Express',
+      'Only Fastify',
+      'Express, Fastify, and most other Node.js HTTP frameworks',
+      'None — they use native C++ bindings directly',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="http-networking/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="http-networking/index" />

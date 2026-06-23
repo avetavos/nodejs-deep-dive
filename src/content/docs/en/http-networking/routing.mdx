@@ -1,0 +1,166 @@
+---
+title: 'Routing'
+description: 'Route requests manually using req.method and req.url, and build a tiny router from scratch.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is routing?
+
+Routing is the process of deciding which piece of code handles a given HTTP request. The decision is based on two properties of the request:
+
+- `req.method` — the HTTP verb: `GET`, `POST`, `PUT`, `DELETE`, etc.
+- `req.url` — the path (and optional query string): `/users`, `/users/42`, `/search?q=node`
+
+Node's built-in server gives you both. You write the logic that maps them to handlers.
+
+## Manual routing with if/else
+
+The simplest router is a chain of `if` statements:
+
+export const basicRoutingCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  const method = req.method;
+  const url = req.url;
+
+  if (method === 'GET' && url === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('GET / - Home');
+  } else if (method === 'GET' && url === '/about') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('GET /about - About page');
+  } else if (method === 'POST' && url === '/users') {
+    res.writeHead(201, { 'Content-Type': 'text/plain' });
+    res.end('POST /users - Created a user');
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found');
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Router running at http://localhost:3000');
+});
+`;
+
+<NodeRunner client:visible code={basicRoutingCode} node />
+
+## Parsing the URL with the URL class
+
+When URLs contain path parameters or query strings, use Node's global `URL` constructor to parse them cleanly. Pass `req.url` as the first argument and a fake base as the second:
+
+export const urlParsingCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  // Use the global URL class to parse the request URL
+  const parsed = new URL(req.url, 'http://localhost:3000');
+  const pathname = parsed.pathname;   // e.g. '/search'
+  const query = parsed.searchParams;  // URLSearchParams
+
+  if (req.method === 'GET' && pathname === '/search') {
+    const term = query.get('q') || '(none)';
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Search term: ' + term);
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found');
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Try: http://localhost:3000/search?q=nodejs');
+});
+`;
+
+<NodeRunner client:visible code={urlParsingCode} node />
+
+## A tiny router object
+
+Once you have more than a few routes, extract them into a router map. This is exactly the pattern that Express uses internally:
+
+export const tinyRouterCode = `
+const http = require('node:http');
+
+// Route map: keys are "METHOD /path"
+const routes = {
+  'GET /': function(req, res) {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Home');
+  },
+  'GET /users': function(req, res) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([{ id: 1, name: 'Alice' }]));
+  },
+  'POST /users': function(req, res) {
+    res.writeHead(201, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ created: true }));
+  },
+};
+
+const server = http.createServer(function(req, res) {
+  const key = req.method + ' ' + new URL(req.url, 'http://x').pathname;
+  const handler = routes[key];
+
+  if (handler) {
+    handler(req, res);
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found: ' + key);
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Tiny router running at http://localhost:3000');
+});
+`;
+
+<NodeRunner client:visible code={tinyRouterCode} node />
+
+<Callout title="Real apps use a framework — but it is the same model">
+Express, Fastify, Hono, and every other Node.js web framework build on exactly this pattern. Their `app.get('/path', handler)` calls are just a clean API on top of the same `req.method` + `req.url` check. Understanding the raw model means you are never confused by what any framework does.
+</Callout>
+
+export const routingQuiz = [
+  {
+    q: 'Which two properties of the request object are used for routing decisions?',
+    options: [
+      'req.path and req.verb',
+      'req.method and req.url',
+      'req.route and req.headers',
+      'req.endpoint and req.action',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `new URL(req.url, "http://localhost")` give you?',
+    options: [
+      'A fetch request to the URL',
+      'The raw URL string unchanged',
+      'A parsed URL object with pathname and searchParams',
+      'An HTTP client configured for localhost',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What HTTP status code should a router return when no route matches?',
+    options: [
+      '200 OK',
+      '204 No Content',
+      '400 Bad Request',
+      '404 Not Found',
+    ],
+    answer: 3,
+  },
+];
+
+<Quiz client:visible id="http-networking/routing" questions={routingQuiz} />
+
+<ProgressTracker client:visible id="http-networking/routing" />

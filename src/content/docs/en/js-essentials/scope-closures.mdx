@@ -1,0 +1,170 @@
+---
+title: 'Scope and Closures'
+description: 'var/let/const, function vs block scope, hoisting, lexical scope, and closures in JavaScript.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## var, let, and const
+
+JavaScript has three declaration keywords, each with different scoping rules:
+
+| Keyword | Scope | Hoisted | Reassignable | Re-declarable |
+|---------|-------|---------|--------------|---------------|
+| `var` | Function | Yes (as `undefined`) | Yes | Yes |
+| `let` | Block | Yes (TDZ) | Yes | No |
+| `const` | Block | Yes (TDZ) | No | No |
+
+**Block scope** means the variable only exists between the nearest `{}` braces. **Function scope** means the variable lives for the entire function body, regardless of any inner blocks.
+
+```js
+function example() {
+  if (true) {
+    var x = 1;   // function-scoped — leaks outside the if
+    let y = 2;   // block-scoped — stays inside the if
+    const z = 3; // block-scoped
+  }
+  console.log(x); // 1  — visible here
+  console.log(y); // ReferenceError: y is not defined
+}
+```
+
+## Hoisting
+
+Declarations are **hoisted** — moved to the top of their scope by the engine before execution.
+
+`var` hoisting initialises the variable as `undefined` immediately. `let`/`const` are hoisted but stay in a **Temporal Dead Zone (TDZ)** — any access before the declaration line throws a `ReferenceError`.
+
+```js
+console.log(a); // undefined — var is hoisted and initialised
+var a = 5;
+
+console.log(b); // ReferenceError — let is in TDZ
+let b = 10;
+```
+
+Function **declarations** are also fully hoisted — you can call them before the line where they are written. Function **expressions** (assigned to variables) are not.
+
+## Lexical scope
+
+Scope in JavaScript is **lexical** (also called static): a function's scope is determined by where it is written in the source, not where it is called from. An inner function can always read variables from its surrounding outer scopes.
+
+```js
+const prefix = 'LOG';
+
+function outer() {
+  const level = 'INFO';
+
+  function inner(msg) {
+    // inner can read both prefix (module scope) and level (outer scope)
+    console.log('[' + prefix + ':' + level + '] ' + msg);
+  }
+
+  inner('started');
+}
+
+outer(); // [LOG:INFO] started
+```
+
+## Closures
+
+A **closure** is a function that retains access to the variables of its enclosing scope even after that outer function has returned. The inner function does not copy the values — it holds a live reference to the variables themselves.
+
+A classic use case is a **counter factory**:
+
+```js
+function makeCounter(start) {
+  let count = start;
+
+  return {
+    increment: function() { count += 1; },
+    decrement: function() { count -= 1; },
+    value:     function() { return count; },
+  };
+}
+
+const counter = makeCounter(0);
+counter.increment();
+counter.increment();
+counter.increment();
+counter.decrement();
+console.log(counter.value()); // 2
+```
+
+`count` lives in `makeCounter`'s scope. Every function returned from `makeCounter` holds a reference to that same `count` variable.
+
+## Runnable closure demo
+
+export const closureCode = `
+function makeCounter(start) {
+  let count = start;
+
+  return {
+    increment: function() { count += 1; },
+    decrement: function() { count -= 1; },
+    value:     function() { return count; },
+  };
+}
+
+const c1 = makeCounter(0);
+const c2 = makeCounter(100);
+
+c1.increment();
+c1.increment();
+c1.increment();
+c2.decrement();
+
+console.log('c1:', c1.value()); // 3
+console.log('c2:', c2.value()); // 99
+console.log('counters are independent:', c1.value() !== c2.value());
+`;
+
+<NodeRunner client:visible code={closureCode} />
+
+Note that `c1` and `c2` are completely independent — each call to `makeCounter` creates a fresh `count` variable in a new scope, and each returned object closes over its own copy.
+
+<Callout title="Closures capture variables, not values">
+An inner function holds a live reference to the outer variable. If that variable changes after the closure is created, the closure sees the new value. This is why the classic `var` loop bug produces unexpected results — all callbacks close over the same `i` variable, which has already incremented to its final value by the time any callback runs. Use `let` in loops to create a new binding per iteration.
+</Callout>
+
+export const scopeQuiz = [
+  {
+    q: 'What is the key difference between `let` and `var` regarding scope?',
+    options: [
+      '`let` is function-scoped; `var` is block-scoped',
+      '`let` is block-scoped; `var` is function-scoped',
+      'Both are block-scoped but `var` allows reassignment',
+      'There is no difference — both behave identically inside a function',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is a closure?',
+    options: [
+      'A way to make variables private by wrapping them in an IIFE',
+      'A function that captures and retains access to variables from its enclosing scope',
+      'A method that closes a file descriptor after use',
+      'A pattern for preventing memory leaks in loops',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What happens when you access a `let` variable before its declaration line?',
+    options: [
+      'You get `undefined` — same as `var`',
+      'You get `null`',
+      'A ReferenceError is thrown — `let` is in the Temporal Dead Zone',
+      'The engine hoists it and initialises it to `0`',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="js-essentials/scope-closures" questions={scopeQuiz} />
+
+<ProgressTracker client:visible id="js-essentials/scope-closures" />

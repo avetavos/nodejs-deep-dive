@@ -1,0 +1,143 @@
+---
+title: 'process & env'
+description: 'การใช้งาน process.argv, process.env, process.cwd(), process.exit() และ process.platform ใน Node.js'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## object process
+
+`process` คือ global object ที่ให้โปรแกรมของคุณเข้าถึง Node.js process ที่กำลังทำงาน ใช้งานได้ทุกที่ — ไม่ต้อง import
+
+property และ method ที่ใช้บ่อยที่สุด:
+
+| Property / Method | สิ่งที่ให้ |
+|---|---|
+| `process.argv` | Array ของ command-line arguments |
+| `process.env` | Object ของ environment variables |
+| `process.cwd()` | string ของ current working directory |
+| `process.exit(code)` | ยุติ process ด้วย exit code |
+| `process.platform` | string ของ OS platform (`'linux'`, `'darwin'`, `'win32'`) |
+| `process.version` | string ของ Node.js version (เช่น `'v20.11.0'`) |
+
+## process.argv — command-line arguments
+
+`process.argv` คือ array เสมอ สองตัวแรกมีค่าตายตัว:
+
+- `argv[0]` — path ไปยัง `node` binary
+- `argv[1]` — path ไปยัง script ที่กำลังรัน
+- `argv[2]` เป็นต้นไป — arguments ที่คุณระบุจริงๆ
+
+export const argvCode = `
+// Run as: node index.js hello world
+// argv[0] = node binary path
+// argv[1] = script path
+// argv[2+] = your arguments
+
+var args = process.argv.slice(2);
+console.log('All argv:', process.argv);
+console.log('User args only:', args);
+console.log('Arg count:', args.length);
+`;
+
+<NodeRunner client:visible code={argvCode} node />
+
+## process.env — environment variables
+
+`process.env` คือ plain object ที่มี keys และ values เป็น strings ถูก populate จาก shell environment ตอนเริ่ม process
+
+export const envCode = `
+// Read a variable (returns undefined if not set)
+var nodeEnv = process.env.NODE_ENV;
+console.log('NODE_ENV:', nodeEnv);
+
+// Provide a default with the || operator
+var port = process.env.PORT || '3000';
+console.log('PORT:', port);
+
+// All env keys
+var keys = Object.keys(process.env);
+console.log('Total env vars:', keys.length);
+`;
+
+<NodeRunner client:visible code={envCode} node />
+
+<Callout title="อ่าน config จาก process.env ไม่ใช่ hardcode">
+อย่า hardcode secrets, ports หรือ host names ใน source code อ่านจาก `process.env` ตอนเริ่มต้น นี่คือหลักการ 12-Factor App ที่ทำให้ deploy code เดียวกันไปยัง development, staging และ production ได้โดยเปลี่ยนแค่ environment variables — ไม่ต้องแก้ code
+</Callout>
+
+## process.cwd() และ process.platform
+
+export const cwdPlatformCode = `
+// Current working directory — where the process was started from
+console.log('cwd:', process.cwd());
+
+// Platform — useful for platform-specific path handling
+console.log('platform:', process.platform);
+
+// Node.js version
+console.log('version:', process.version);
+
+// Architecture
+console.log('arch:', process.arch);
+`;
+
+<NodeRunner client:visible code={cwdPlatformCode} node />
+
+## process.exit()
+
+`process.exit(code)` ยุติ process ทันที ตามแบบแผน:
+- Exit code `0` หมายถึงสำเร็จ
+- code ที่ไม่ใช่ศูนย์ (มักเป็น `1`) หมายถึงล้มเหลว
+
+```js
+// Example: exit with error if a required env var is missing
+if (!process.env.DATABASE_URL) {
+  console.error('ERROR: DATABASE_URL is required');
+  process.exit(1);
+}
+```
+
+การเรียก `process.exit()` คือการหยุดแบบทันที — `finally` blocks ยังทำงาน แต่ async callbacks ที่ค้างอยู่จะไม่ทำงาน สำหรับการปิดตัวแบบ graceful ควร drain server ก่อน (เช่น `server.close()`) แล้วปล่อยให้ event loop ออกเอง
+
+export const processQuiz = [
+  {
+    q: 'process.argv[0] มีค่าอะไรเมื่อรัน `node script.js`?',
+    options: [
+      'argument แรกที่ผู้ใช้ระบุ',
+      'path ไปยัง script file',
+      'path ไปยัง node binary',
+      'current working directory',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'values ที่เก็บใน process.env มี type อะไร?',
+    options: [
+      'mixed — ตัวเลขจะถูก parse อัตโนมัติ',
+      'strings เสมอ',
+      'Booleans สำหรับค่า true/false',
+      'ขึ้นอยู่กับ shell',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'exit code ใดที่บ่งบอกตามแบบแผนว่าทำงานสำเร็จ?',
+    options: [
+      '1',
+      '-1',
+      '0',
+      '200',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="core-apis/process-env" questions={processQuiz} />
+
+<ProgressTracker client:visible id="core-apis/process-env" />

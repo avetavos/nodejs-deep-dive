@@ -1,0 +1,198 @@
+---
+title: 'Performance & perf_hooks'
+description: 'Measuring execution time with perf_hooks, performance.now(), PerformanceObserver, simple profiling, and keeping the event loop unblocked.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Why measure?
+
+> "Premature optimization is the root of all evil." — Donald Knuth
+
+Before you optimize anything, **measure first**. Node's `perf_hooks` module gives you sub-millisecond timing via the High Resolution Time API — the same `performance.now()` you know from browsers, but available natively in Node without any import in newer versions (global since Node 16), and as `perf_hooks` for `PerformanceObserver`.
+
+## performance.now()
+
+`performance.now()` returns a float in **milliseconds** with microsecond precision. It is monotonic — it never goes backwards, even across system clock adjustments:
+
+```js
+import { performance } from 'node:perf_hooks';
+
+const start = performance.now();
+
+// --- work to measure ---
+let sum = 0;
+for (let i = 0; i < 1_000_000; i++) {
+  sum += i;
+}
+// ----------------------
+
+const elapsed = performance.now() - start;
+console.log('Sum loop took: ' + elapsed.toFixed(3) + ' ms');
+```
+
+## performance.mark() and performance.measure()
+
+For named measurements that show up in DevTools timelines:
+
+```js
+import { performance, PerformanceObserver } from 'node:perf_hooks';
+
+performance.mark('db-start');
+// ... simulate a DB query ...
+await new Promise(function(resolve) { setTimeout(resolve, 50); });
+performance.mark('db-end');
+
+performance.measure('database-query', 'db-start', 'db-end');
+
+const entries = performance.getEntriesByName('database-query');
+console.log(entries[0].duration.toFixed(2) + ' ms');
+```
+
+## PerformanceObserver — async collection
+
+`PerformanceObserver` fires a callback whenever a new performance entry is created. This is useful for instrumenting library code that you do not control:
+
+```js
+import { PerformanceObserver, performance } from 'node:perf_hooks';
+
+const obs = new PerformanceObserver(function(list) {
+  for (const entry of list.getEntries()) {
+    console.log(entry.name + ': ' + entry.duration.toFixed(2) + ' ms');
+  }
+});
+
+obs.observe({ entryTypes: ['measure'] });
+
+performance.mark('a');
+// ... work ...
+performance.mark('b');
+performance.measure('my-operation', 'a', 'b');
+
+// Always disconnect when done to avoid memory leaks
+obs.disconnect();
+```
+
+## Live demo — timing a CPU-bound loop
+
+export const perfCode = `
+import { performance } from 'node:perf_hooks';
+
+function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+const iterations = [10, 20, 30, 35];
+
+for (const n of iterations) {
+  const t0 = performance.now();
+  const result = fibonacci(n);
+  const elapsed = performance.now() - t0;
+  console.log('fib(' + n + ') = ' + result + '  [' + elapsed.toFixed(3) + ' ms]');
+}
+`;
+
+<NodeRunner client:visible code={perfCode} node />
+
+## Keeping the event loop unblocked
+
+A CPU-bound loop that runs for more than ~50 ms will **block the event loop** — no I/O, no timers, no other requests can be processed while it runs.
+
+```js
+// BAD — blocks the event loop for the entire duration
+function blockingWork(data) {
+  const result = [];
+  for (const item of data) {
+    result.push(expensiveTransform(item)); // each call takes ~1ms, 10000 items = 10s block
+  }
+  return result;
+}
+
+// BETTER — yield control periodically with setImmediate
+async function nonBlockingWork(data) {
+  const result = [];
+  for (let i = 0; i < data.length; i++) {
+    result.push(expensiveTransform(data[i]));
+    if (i % 100 === 0) {
+      // Yield to the event loop every 100 items
+      await new Promise(function(resolve) { setImmediate(resolve); });
+    }
+  }
+  return result;
+}
+
+// BEST for CPU-heavy work — offload to a Worker Thread
+import { Worker } from 'node:worker_threads';
+// (see the Streams & Worker Threads module for full coverage)
+```
+
+## CPU profiling with `--prof`
+
+For deeper CPU profiling, Node ships a built-in V8 profiler:
+
+```bash
+# Run with profiling enabled
+node --prof src/app.js
+
+# Process the isolate log into a readable report
+node --prof-process isolate-*.log > profile.txt
+```
+
+The output shows which functions consumed the most CPU time (ticks). Look for hot paths in the "Bottom up (heavy) profile" section.
+
+<Callout title="Measure before optimizing — keep the event loop unblocked">
+Always measure with `performance.now()` or `--prof` before deciding what to optimize. The most common Node.js performance problem is a CPU-bound synchronous loop blocking the event loop. Identify the hot path first, then choose between algorithm improvement, chunking with `setImmediate`, or offloading to Worker Threads.
+</Callout>
+
+export const performanceQuiz = [
+  {
+    q: 'What unit does `performance.now()` return?',
+    options: [
+      'Seconds',
+      'Microseconds',
+      'Milliseconds (with sub-ms precision)',
+      'Nanoseconds',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Why is `performance.now()` preferred over `Date.now()` for benchmarking?',
+    options: [
+      'It is faster to call',
+      'It is monotonic and not affected by system clock adjustments',
+      'It returns integer values which are easier to compare',
+      'It automatically logs to the console',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What problem does a long-running CPU-bound loop cause in Node.js?',
+    options: [
+      'It uses more memory than necessary',
+      'It blocks the event loop, preventing I/O callbacks and timers from running',
+      'It causes the process to restart automatically',
+      'It triggers garbage collection',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which technique yields control back to the event loop periodically during a large loop?',
+    options: [
+      'Using process.exit() between iterations',
+      'Calling setImmediate (wrapped in a Promise) every N iterations',
+      'Using synchronous fs.readFileSync at each step',
+      'Adding console.log inside the loop',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="testing-tooling/performance" questions={performanceQuiz} />
+
+<ProgressTracker client:visible id="testing-tooling/performance" />

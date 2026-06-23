@@ -1,0 +1,160 @@
+---
+title: 'Making Outbound Requests'
+description: 'Fetch data from external APIs using the global fetch built into Node 18+, handle JSON, and manage errors.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Global fetch in Node.js
+
+Since Node.js 18, the `fetch` API is available globally — no import, no `npm install`. It is the same Web Fetch API you use in the browser:
+
+```js
+// No import needed in Node 18+
+const response = await fetch('https://api.example.com/data');
+const data = await response.json();
+```
+
+This is a huge improvement over the older `http.request` approach which required manually assembling chunks from a readable stream.
+
+## Fetching JSON from a public API
+
+The `fetch` function returns a Promise that resolves to a `Response` object. Call `.json()` on the response to parse the body as JSON — this also returns a Promise, so you await it too.
+
+export const fetchJsonCode = `
+const http = require('node:http');
+
+// Demonstrate fetch inside a Node server
+const server = http.createServer(async function(req, res) {
+  if (req.method === 'GET' && req.url === '/post') {
+    try {
+      // Built-in fetch — no npm package needed (Node 18+)
+      const response = await fetch('https://jsonplaceholder.typicode.com/posts/1');
+
+      if (!response.ok) {
+        throw new Error('API error: ' + response.status);
+      }
+
+      const post = await response.json();
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ title: post.title, userId: post.userId }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Try GET /post');
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Server at http://localhost:3000 - try /post');
+});
+`;
+
+<NodeRunner client:visible code={fetchJsonCode} node />
+
+## Error handling with fetch
+
+`fetch` does **not** throw on non-2xx HTTP status codes. You must check `response.ok` (a boolean that is `true` for status codes 200–299) yourself:
+
+export const fetchErrorCode = `
+const http = require('node:http');
+
+const server = http.createServer(async function(req, res) {
+  try {
+    // Fetch a non-existent resource — returns 404
+    const response = await fetch('https://jsonplaceholder.typicode.com/posts/99999');
+
+    // fetch only throws for network errors, not HTTP errors
+    if (!response.ok) {
+      res.writeHead(response.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'Upstream error',
+        status: response.status,
+        statusText: response.statusText
+      }));
+      return;
+    }
+
+    const data = await response.json();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(data));
+  } catch (networkErr) {
+    // Only thrown on DNS failure, connection refused, etc.
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Network error: ' + networkErr.message }));
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Error-handling demo at http://localhost:3000');
+});
+`;
+
+<NodeRunner client:visible code={fetchErrorCode} node />
+
+## A note on http.request
+
+Before `fetch`, outbound HTTP requests in Node.js used `http.request()` from the `node:http` module. It is a lower-level API based on streams. You may encounter it in older codebases:
+
+```js
+// Older pattern — collecting chunks manually
+const http = require('node:http');
+
+http.get('http://example.com', function(res) {
+  let body = '';
+  res.on('data', function(chunk) { body += chunk; });
+  res.on('end', function() { console.log(body); });
+});
+```
+
+For new code, prefer the global `fetch` — it is cleaner, Promise-based, and isomorphic with browser code.
+
+<Callout title="fetch is built in since Node 18 — no axios needed for basics">
+Node.js 18 added the global `fetch` API so you no longer need `axios`, `node-fetch`, or `got` for straightforward JSON fetching. For production use you may still want `axios` for features like request interceptors, automatic retry, or CancelToken — but for learning and simple integrations, the built-in `fetch` is all you need.
+</Callout>
+
+export const requestsQuiz = [
+  {
+    q: 'Since which Node.js version is `fetch` available globally without any import?',
+    options: [
+      'Node.js 14',
+      'Node.js 16',
+      'Node.js 18',
+      'Node.js 20',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What does `response.ok` return when the HTTP status is 404?',
+    options: [
+      'true — any response that comes back is "OK"',
+      'false — ok is only true for 200-299 status codes',
+      'It throws an error',
+      'undefined',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When does `fetch` throw a rejection (catch block triggers)?',
+    options: [
+      'When the server responds with a 4xx status code',
+      'When the server responds with a 5xx status code',
+      'Only for network-level failures like DNS errors or connection refused',
+      'Whenever the response body is not valid JSON',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="http-networking/requests" questions={requestsQuiz} />
+
+<ProgressTracker client:visible id="http-networking/requests" />

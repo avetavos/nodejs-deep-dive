@@ -1,0 +1,158 @@
+---
+title: 'การค้นหาโมดูล (Module Resolution)'
+description: 'วิธีที่ Node.js ค้นหา import และ require — การค้นหา node_modules, นามสกุลไฟล์, การทำงานร่วมกันของ ESM กับ CJS, และ exports map'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+เมื่อคุณเขียน `import 'express'` หรือ `require('express')` Node จะทำตามอัลกอริทึมการค้นหาที่กำหนดตายตัวเพื่อหาไฟล์จริงบนดิสก์ การเข้าใจอัลกอริทึมนี้ช่วยให้คุณ debug ข้อผิดพลาด missing-module เข้าใจว่าทำไม subpath imports ถึงใช้งานได้ และให้เหตุผลเกี่ยวกับวิธีที่ ESM กับ CJS package ทำงานร่วมกัน
+
+## Bare specifiers
+
+**bare specifier** คือชื่อโมดูลที่ไม่ได้ขึ้นต้นด้วย `./`, `../`, หรือ `/` — เช่น `'express'` หรือ `'lodash/fp'` Node ค้นหา bare specifiers โดยการเดินขึ้นไปตามโครงสร้าง directory จากไฟล์ที่ import โดยตรวจสอบแต่ละโฟลเดอร์ `node_modules/` ไปเรื่อยๆ จนกว่าจะพบหรือถึง root ของ filesystem
+
+```bash
+# Given a file at /project/src/app.js importing 'express',
+# Node checks these locations in order:
+/project/src/node_modules/express
+/project/node_modules/express        ← found here
+/node_modules/express
+```
+
+การค้นหาแบบนี้ทำให้ package ที่ซ้อนกันสามารถพกพาเวอร์ชัน dependency ของตัวเองได้โดยไม่ขัดแย้งกับ sibling
+
+## นามสกุลไฟล์
+
+Node ค้นหา specifier ไปยังไฟล์จริงโดยใช้กฎเหล่านี้:
+
+- **`.js`** — ถือเป็น CJS โดยค่าเริ่มต้น หรือ ESM เมื่อ `package.json` ที่ใกล้ที่สุดมี `"type": "module"`
+- **`.mjs`** — เป็น ESM เสมอ โดยไม่คำนึงถึง `package.json`
+- **`.cjs`** — เป็น CJS เสมอ โดยไม่คำนึงถึง `package.json`
+
+ESM บังคับให้ใช้ **นามสกุลที่ชัดเจน** ใน specifier ต่างจาก CJS คุณไม่สามารถละเว้นนามสกุลและให้ Node เดาได้:
+
+```js
+// CJS — extension optional (Node tries .js, .json, index.js …)
+const utils = require('./utils');
+
+// ESM — extension required
+import utils from './utils.js';
+```
+
+## การทำงานร่วมกันของ ESM กับ CJS
+
+ระบบโมดูลทั้งสองสามารถอยู่ร่วมกันได้ แต่มีข้อจำกัด:
+
+```js
+// ── CJS file (utils.cjs) ─────────────────────────────────────
+// CJS can require other CJS modules normally.
+const fs = require('fs');
+module.exports = { readConfig: () => fs.readFileSync('.env', 'utf8') };
+
+// CJS CANNOT require() an ESM module — this throws ERR_REQUIRE_ESM:
+// const esm = require('./modern.mjs'); // ❌
+
+// ── ESM file (app.mjs) ──────────────────────────────────────
+// ESM CAN import a CJS module; it receives module.exports as the default.
+import cjsUtils from './utils.cjs'; // ✅ default = module.exports object
+
+// ESM can also import another ESM module normally.
+import { helper } from './helpers.mjs'; // ✅
+```
+
+ความไม่สมมาตรนี้มีอยู่เพราะ ESM loading เป็นแบบ static และ asynchronous ในขณะที่ CJS loading เป็นแบบ synchronous การเรียก `require()` แบบ synchronous ไม่สามารถรอการประมวลผล ESM แบบ async ได้
+
+## exports map
+
+ฟิลด์ `"exports"` ใน `package.json` เป็นวิธีที่ authoritative สำหรับ package ในการประกาศ public API surface path ใดก็ตามที่ไม่ได้ระบุใน `"exports"` เป็น private — ผู้ใช้ไม่สามารถ import โดยตรงได้
+
+```json
+{
+  "name": "my-lib",
+  "version": "1.0.0",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./utils": {
+      "import": "./dist/utils.mjs",
+      "require": "./dist/utils.cjs"
+    }
+  }
+}
+```
+
+ด้วย map นี้:
+- `import 'my-lib'` จะค้นหาไปที่ `dist/index.mjs`
+- `require('my-lib')` จะค้นหาไปที่ `dist/index.cjs`
+- `import 'my-lib/utils'` จะค้นหาไปที่ `dist/utils.mjs`
+- `import 'my-lib/internal/secret'` จะ throw — `"./internal/secret"` ไม่ได้ถูก export
+
+## การรัน ESM แบบ inline ด้วย `--input-type`
+
+คุณสามารถ pipe ESM source โดยตรงไปยัง Node โดยไม่ต้องมีไฟล์บนดิสก์:
+
+```bash
+echo "import os from 'node:os'; console.log(os.platform());" | node --input-type=module
+```
+
+วิธีนี้มีประโยชน์สำหรับการทดลองอย่างรวดเร็วหรือ CI one-liner ที่ต้องการ ESM semantics โดยไม่ต้องแตะต้อง `package.json` ของโปรเจกต์
+
+## การ import built-in module
+
+export const resolutionDemoCode = `
+import os from 'node:os';
+
+console.log('Platform:', os.platform());
+console.log('Architecture:', os.arch());
+console.log('CPUs:', os.cpus().length);
+`;
+
+<NodeRunner client:visible code={resolutionDemoCode} node />
+
+<Callout title="ESM เป็น static และ async; CJS เป็น dynamic และ sync">
+เนื่องจาก ESM imports ถูก resolve แบบ static (ก่อนที่โค้ดใดๆ จะทำงาน) bundler และ runtime สามารถทำ **tree-shaking** ได้ — กำจัด export ที่ไม่เคยถูก import ออก การเรียก CJS `require()` สามารถปรากฏภายใน conditional หรือ loop ทำให้การวิเคราะห์แบบ static เป็นไปไม่ได้และป้องกันการกำจัด dead-code
+</Callout>
+
+export const resolutionQuiz = [
+  {
+    q: 'เมื่อ Node ค้นหา bare specifier เช่น `"express"` จะมองที่ไหนก่อน?',
+    options: [
+      'global node_modules ที่ root ของ filesystem',
+      'โฟลเดอร์ node_modules ที่ใกล้ที่สุดกับไฟล์ที่ import',
+      'โฟลเดอร์ node_modules ที่ root ของโปรเจกต์',
+      'โฟลเดอร์ที่มี Node.js binary อยู่',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม ESM specifiers ต้องระบุนามสกุลไฟล์อย่างชัดเจน?',
+    options: [
+      'ESM ไม่รองรับไฟล์ index.js',
+      'ESM เป็นแบบ static และไม่สามารถเดานามสกุลไฟล์ได้ตอน runtime',
+      'Node.js รองรับเฉพาะนามสกุล .mjs ใน ESM',
+      'exports map ต้องการ full path',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ข้อใดถูกต้องเกี่ยวกับการทำงานร่วมกันของ ESM/CJS?',
+    options: [
+      'CJS สามารถ require() โมดูล ESM ได้โดยใช้นามสกุล .mjs',
+      'ESM ไม่สามารถ import โมดูล CJS ได้ในทุกกรณี',
+      'ESM สามารถ import โมดูล CJS ได้; CJS ไม่สามารถ require() โมดูล ESM ได้',
+      'ทั้งสองระบบทำงานร่วมกันได้อย่างสมบูรณ์ในทุกทิศทาง',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="modules-npm/resolution" questions={resolutionQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/resolution" />

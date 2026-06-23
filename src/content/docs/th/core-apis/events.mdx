@@ -1,0 +1,170 @@
+---
+title: EventEmitter
+description: 'Node.js EventEmitter: on, emit, once, removeListener และการสร้าง custom event-driven classes'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## แกนหลักของ event-driven model ของ Node
+
+`EventEmitter` (จาก `node:events`) คือ class ที่ขับเคลื่อน I/O object เกือบทุกตัวใน Node.js HTTP server, TCP sockets, file streams, child processes และ library ของ third-party หลายตัวล้วน extend `EventEmitter` การเข้าใจมันหมายถึงการเข้าใจวิธีที่ Node สื่อสารระหว่าง components
+
+<Callout title="EventEmitter คือแกนหลักของ Node's streams, HTTP และอื่นๆ">
+`http.Server`, `net.Socket`, `fs.ReadStream` — ทั้งหมดนี้ extend `EventEmitter` เมื่อ request มาถึง server จะ emit `'request'` เมื่อ socket หลุดการเชื่อมต่อ มัน emit `'close'` การเรียนรู้ `EventEmitter` คือการเรียนรู้ communication contract พื้นฐานของ Node.js
+</Callout>
+
+## การใช้งานพื้นฐาน: on, emit, removeListener
+
+export const eeBasicCode = `
+import { EventEmitter } from 'node:events';
+
+var emitter = new EventEmitter();
+
+// Register a listener
+emitter.on('greet', function(name) {
+  console.log('Hello, ' + name + '!');
+});
+
+// Emit the event — listener runs synchronously
+emitter.emit('greet', 'Alice');
+emitter.emit('greet', 'Bob');
+
+// Remove the listener
+var handler = function(msg) {
+  console.log('message:', msg);
+};
+emitter.on('message', handler);
+emitter.emit('message', 'first');
+emitter.removeListener('message', handler);
+emitter.emit('message', 'second'); // no output — listener removed
+`;
+
+<NodeRunner client:visible code={eeBasicCode} node />
+
+## once — ยิงแค่ครั้งเดียว
+
+`once` ลงทะเบียน listener ที่ลบตัวเองออกอัตโนมัติหลังจาก emission ครั้งแรก
+
+export const eeOnceCode = `
+import { EventEmitter } from 'node:events';
+
+var emitter = new EventEmitter();
+
+emitter.once('connect', function() {
+  console.log('Connected! (fires once only)');
+});
+
+emitter.emit('connect'); // prints "Connected!"
+emitter.emit('connect'); // nothing — listener already removed
+emitter.emit('connect'); // nothing
+
+console.log('listener count:', emitter.listenerCount('connect')); // 0
+`;
+
+<NodeRunner client:visible code={eeOnceCode} node />
+
+## การสร้าง custom EventEmitter class
+
+Extend `EventEmitter` เพื่อให้ class ของคุณมีความสามารถ event-driven
+
+export const eeCustomCode = `
+import { EventEmitter } from 'node:events';
+
+class DataLoader extends EventEmitter {
+  constructor() {
+    super();
+    this._items = [];
+  }
+
+  load(item) {
+    this._items.push(item);
+    this.emit('data', item);
+    if (this._items.length >= 3) {
+      this.emit('done', this._items);
+    }
+  }
+}
+
+var loader = new DataLoader();
+
+loader.on('data', function(item) {
+  console.log('loaded item:', item);
+});
+
+loader.once('done', function(all) {
+  console.log('all done! total:', all.length, 'items');
+  console.log('items:', all.join(', '));
+});
+
+loader.load('alpha');
+loader.load('beta');
+loader.load('gamma');
+`;
+
+<NodeRunner client:visible code={eeCustomCode} node />
+
+## Listener count และ off()
+
+`off` คือ alias ของ `removeListener` ที่เพิ่มมาใน Node 10 `listenerCount` ให้คุณตรวจสอบว่ามี listeners กี่ตัวที่ลงทะเบียนสำหรับ event หนึ่งๆ — มีประโยชน์สำหรับตรวจจับ memory leaks ที่อาจเกิดขึ้น
+
+export const eeCountCode = `
+import { EventEmitter } from 'node:events';
+
+var ee = new EventEmitter();
+
+var handler1 = function() { console.log('handler1'); };
+var handler2 = function() { console.log('handler2'); };
+
+ee.on('event', handler1);
+ee.on('event', handler2);
+console.log('count before off:', ee.listenerCount('event')); // 2
+
+ee.off('event', handler1);
+console.log('count after off:', ee.listenerCount('event'));  // 1
+
+ee.emit('event'); // only handler2 runs
+`;
+
+<NodeRunner client:visible code={eeCountCode} node />
+
+export const eventsQuiz = [
+  {
+    q: 'ความแตกต่างหลักระหว่าง emitter.on() และ emitter.once() คืออะไร?',
+    options: [
+      'on() เป็น synchronous; once() เป็น asynchronous',
+      'once() ลงทะเบียน listener ที่ถูกลบออกอัตโนมัติหลัง emission ครั้งแรก',
+      'on() รับฟัง built-in events เท่านั้น; once() ใช้กับ custom events ได้',
+      'once() ยิง listener ทันทีโดยไม่รอ emit()',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'EventEmitter listener ทำงานเมื่อไหร่เทียบกับ emitter.emit()?',
+    options: [
+      'แบบ asynchronous — หลังจาก call stack ปัจจุบันเคลียร์',
+      'ใน microtask ถัดไป',
+      'แบบ synchronous — ก่อนที่ emit() จะ return',
+      'ใน setTimeout callback ถัดไป',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Node.js built-in class ใดบ้างที่ extend EventEmitter?',
+    options: [
+      'เฉพาะ third-party libraries เท่านั้นที่ extend EventEmitter',
+      'Buffer และ process เท่านั้น',
+      'http.Server, net.Socket, fs.ReadStream และอื่นๆ อีกมาก',
+      'เฉพาะ http.Server เท่านั้น',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="core-apis/events" questions={eventsQuiz} />
+
+<ProgressTracker client:visible id="core-apis/events" />

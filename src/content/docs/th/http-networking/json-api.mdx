@@ -1,0 +1,184 @@
+---
+title: 'การสร้าง JSON API'
+description: 'Parse request body, route ตาม method และ path และตอบกลับด้วย JSON headers และ status codes ที่ถูกต้อง'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การอ่าน request body
+
+ต่างจาก URL และ headers ที่มีพร้อมทันที **body** ของ request มาเป็น stream ของ chunk คุณต้องเก็บรวบรวมด้วย event `data` และ `end`:
+
+```js
+function readBody(req) {
+  return new Promise(function(resolve, reject) {
+    let raw = '';
+    req.on('data', function(chunk) { raw += chunk; });
+    req.on('end', function() { resolve(raw); });
+    req.on('error', reject);
+  });
+}
+```
+
+เมื่อได้ string ดิบแล้ว ให้ parse ด้วย `JSON.parse()` ใน try/catch เพื่อจัดการ input ที่รูปแบบผิดพลาดอย่างสง่างาม
+
+## JSON API ขนาดเล็กที่เก็บข้อมูลใน memory
+
+server ด้านล่างจัดการ list ของ item ใน memory โดยรองรับ:
+
+- `GET /items` — แสดง item ทั้งหมด
+- `POST /items` — เพิ่ม item (อ่าน JSON body)
+- `GET /items/:id` — ดึง item เดียว (คืน 404 ถ้าไม่มี)
+
+export const jsonApiCode = `
+const http = require('node:http');
+
+// In-memory store
+const items = [
+  { id: 1, name: 'Node.js' },
+  { id: 2, name: 'JavaScript' },
+];
+let nextId = 3;
+
+// Helper: อ่านและ parse JSON request body
+function readBody(req) {
+  return new Promise(function(resolve, reject) {
+    let raw = '';
+    req.on('data', function(chunk) { raw += chunk; });
+    req.on('end', function() {
+      try { resolve(JSON.parse(raw || '{}')); }
+      catch (e) { reject(e); }
+    });
+    req.on('error', reject);
+  });
+}
+
+// Helper: ส่ง JSON response
+function sendJson(res, status, data) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+const server = http.createServer(async function(req, res) {
+  const parsed = new URL(req.url, 'http://localhost:3000');
+  const pathname = parsed.pathname;
+  const method = req.method;
+
+  // GET /items
+  if (method === 'GET' && pathname === '/items') {
+    sendJson(res, 200, items);
+    return;
+  }
+
+  // POST /items
+  if (method === 'POST' && pathname === '/items') {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+
+    if (!body.name || typeof body.name !== 'string') {
+      sendJson(res, 400, { error: 'name is required and must be a string' });
+      return;
+    }
+
+    const item = { id: nextId++, name: body.name };
+    items.push(item);
+    sendJson(res, 201, item);
+    return;
+  }
+
+  // GET /items/:id
+  const match = pathname.match(/^\\/items\\/(\\d+)$/);
+  if (method === 'GET' && match) {
+    const id = parseInt(match[1], 10);
+    const item = items.find(function(i) { return i.id === id; });
+    if (!item) {
+      sendJson(res, 404, { error: 'Item ' + id + ' not found' });
+      return;
+    }
+    sendJson(res, 200, item);
+    return;
+  }
+
+  // Fallback
+  sendJson(res, 404, { error: 'Route not found' });
+});
+
+server.listen(3000, function() {
+  console.log('JSON API at http://localhost:3000');
+  console.log('GET  /items');
+  console.log('POST /items  { "name": "..." }');
+  console.log('GET  /items/1');
+});
+`;
+
+<NodeRunner client:visible code={jsonApiCode} node />
+
+เปิดใน StackBlitz แล้วทดสอบ API ด้วย built-in HTTP client หรือ `curl`:
+
+```bash
+curl http://localhost:3000/items
+curl -X POST http://localhost:3000/items -H 'Content-Type: application/json' -d '{"name":"TypeScript"}'
+curl http://localhost:3000/items/3
+curl http://localhost:3000/items/99
+```
+
+## สรุป status codes สำหรับ REST API
+
+| สถานการณ์ | Status Code |
+|-----------|-------------|
+| อ่านข้อมูลสำเร็จ | 200 OK |
+| สร้าง resource สำเร็จ | 201 Created |
+| field หายหรือ body ผิดรูปแบบ | 400 Bad Request |
+| ไม่พบ resource | 404 Not Found |
+| server error | 500 Internal Server Error |
+
+<Callout title="ตรวจสอบ input และใช้ status codes ที่ถูกต้อง">
+สองกฎที่กำหนด JSON API แบบมืออาชีพ: (1) **ตรวจสอบ input เสมอ** — ตรวจว่า field ที่จำเป็นมีอยู่และมี type ที่ถูกต้องก่อนแตะ data store ใด ๆ คืน `400 Bad Request` พร้อมข้อความ error ที่ชัดเจนเมื่อ validation ล้มเหลว (2) **ใช้ status codes ที่แม่นยำ** — `201` สำหรับ POST ที่สร้าง resource สำเร็จ, `404` เมื่อไม่พบ resource เฉพาะ ไม่ใช่แค่ใช้ `200` ทุกอย่าง นิสัยทั้งสองนี้ทำให้ API ของคุณ predictable และ debug ง่าย
+</Callout>
+
+export const jsonApiQuiz = [
+  {
+    q: 'ทำไมต้องเก็บ request body ด้วย event `data` และ `end` แทนการอ่านแบบ synchronous?',
+    options: [
+      'เพราะ body ถูก encrypt และต้อง decode ก่อน',
+      'เพราะ body มาเป็น stream ของ chunk ไม่ใช่ string เดียว',
+      'เพราะ JSON parsing เป็น asynchronous',
+      'เพราะ Node.js buffer ข้อมูล request ทั้งหมดไว้ก่อนเสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'HTTP status code ใดที่ POST endpoint ควรคืนเมื่อสร้าง resource ใหม่สำเร็จ?',
+    options: [
+      '200 OK',
+      '201 Created',
+      '204 No Content',
+      '202 Accepted',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'client ส่ง JSON body ที่ invalid มา status code ตอบกลับที่ถูกต้องคืออะไร?',
+    options: [
+      '500 Internal Server Error',
+      '200 OK พร้อม error field ใน body',
+      '400 Bad Request',
+      '422 Unprocessable Entity',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="http-networking/json-api" questions={jsonApiQuiz} />
+
+<ProgressTracker client:visible id="http-networking/json-api" />

@@ -1,0 +1,188 @@
+---
+title: 'การดีบัก Node.js'
+description: 'การใช้ node --inspect กับ Chrome DevTools, คำสั่ง debugger, breakpoints, และเมธอดต่าง ๆ ของ console สำหรับการดีบักที่มีประสิทธิภาพ'
+sidebar:
+  order: 3
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Node.js Inspector
+
+Node มี inspector ในตัวที่อิงจาก Chrome DevTools Protocol เริ่มใช้งานด้วย flag `--inspect` แล้วเชื่อมต่อด้วย debugger ที่รองรับ CDP ได้ทุกตัว — Chrome DevTools, VS Code, หรือ WebStorm
+
+```bash
+# เริ่มพร้อม inspector (process ยังทำงานต่อ เชื่อมต่อได้ตามต้องการ)
+node --inspect src/app.js
+
+# เริ่มและหยุด (pause) ที่บรรทัดแรกของโค้ด
+node --inspect-brk src/app.js
+```
+
+หลังจาก launch แล้ว เปิด **chrome://inspect** ใน Chrome คลิก **"Open dedicated DevTools for Node"** จากนั้นคุณจะได้ breakpoints แบบเต็มรูปแบบ, call stacks, การตรวจสอบ scope, heap snapshots, และ CPU profiling — เหมือนกับ panel สำหรับ browser debugging ทุกประการ
+
+## การเชื่อมต่อกับ VS Code
+
+VS Code ตรวจจับ Node inspector อัตโนมัติ เพิ่ม `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug App",
+      "program": "${workspaceFolder}/src/app.js",
+      "runtimeArgs": ["--inspect-brk"]
+    },
+    {
+      "type": "node",
+      "request": "attach",
+      "name": "Attach to running node",
+      "port": 9229
+    }
+  ]
+}
+```
+
+กด **F5** เพื่อ launch หรือ **Ctrl+Shift+P → "Attach to Node Process"** เพื่อเชื่อมต่อกับ `--inspect` server ที่กำลังทำงานอยู่
+
+## คำสั่ง `debugger`
+
+ใส่ `debugger;` ที่ไหนก็ได้ใน JavaScript เมื่อ inspector เชื่อมต่ออยู่ การทำงานจะหยุด (pause) ที่บรรทัดนั้น — เหมือนการตั้ง breakpoint ในโค้ด:
+
+```js
+function calculateTotal(items) {
+  let total = 0;
+  for (const item of items) {
+    debugger; // execution pauses here when inspector is open
+    total += item.price * item.qty;
+  }
+  return total;
+}
+```
+
+เมื่อไม่มี inspector เชื่อมต่ออยู่ `debugger` จะถูก ignore อย่างเงียบ ๆ **ลบหรือปิดใช้งาน `debugger` ก่อน deploy ขึ้น production เสมอ**
+
+## เมธอด console ที่มีมากกว่า console.log
+
+object `console` มีเมธอดมากกว่าที่นักพัฒนาส่วนใหญ่รู้จัก:
+
+```js
+// แสดงข้อมูลเป็นตาราง — เหมาะมากสำหรับ arrays ของ objects
+const users = [
+  { name: 'Alice', age: 30, role: 'admin' },
+  { name: 'Bob',   age: 25, role: 'user'  },
+];
+console.table(users);
+// แสดงตาราง ASCII ที่ formatted พร้อมคอลัมน์: name, age, role
+
+// ตรวจสอบเชิงลึก — แสดง non-enumerable properties และ prototype chain
+const map = new Map([['key', 'value']]);
+console.dir(map, { depth: 3, colors: true });
+
+// จับเวลา code block
+console.time('database-query');
+// ... รัน operation ที่ใช้เวลานาน ...
+console.timeEnd('database-query');
+// แสดง: database-query: 42.183ms
+
+// นับจำนวนครั้งที่ถูกเรียก
+function hit() {
+  console.count('hit');
+}
+hit(); // hit: 1
+hit(); // hit: 2
+hit(); // hit: 3
+
+// จัดกลุ่ม output ที่เกี่ยวข้องกัน
+console.group('User details');
+console.log('name: Alice');
+console.log('role: admin');
+console.groupEnd();
+
+// Assertion แบบมีเงื่อนไข
+console.assert(1 === 2, 'Math is broken'); // แสดง assertion error
+console.assert(1 === 1, 'This never prints');
+```
+
+## ขั้นตอนการดีบักที่ใช้งานจริง
+
+```bash
+# 1. เพิ่ม --inspect-brk เพื่อหยุดก่อนที่โค้ดจะรัน
+node --inspect-brk src/server.js
+
+# 2. เปิด chrome://inspect → คลิก target ของคุณ
+
+# 3. ตั้ง breakpoints ใน Sources panel หรือรอที่ debugger statement
+
+# 4. Step through: F10 (step over), F11 (step into), F8 (resume)
+
+# 5. ตรวจสอบตัวแปรใน Scope panel หรือ hover ดู
+
+# 6. ใช้ Console panel เพื่อรัน expression ใน scope ปัจจุบัน
+```
+
+## การดีบักกับ nodemon (watch + inspect)
+
+```bash
+# Auto-restart และเปิด inspector ไว้เมื่อไฟล์เปลี่ยน
+npx nodemon --inspect src/app.js
+
+# กับ ts-node สำหรับ TypeScript
+npx nodemon --exec "node --inspect --loader ts-node/esm" src/app.ts
+```
+
+<Callout title="--inspect-brk หยุดที่บรรทัดแรก">
+`node --inspect` ให้ process เริ่มและทำงานตามปกติ — inspector แค่รอการเชื่อมต่อ ใช้ `node --inspect-brk` เมื่อคุณต้องการหยุดก่อนที่โค้ดใด ๆ จะทำงาน เพื่อให้มีเวลาเปิด DevTools และตั้ง breakpoints ก่อนที่ startup logic จะรัน
+</Callout>
+
+export const debuggingQuiz = [
+  {
+    q: '`node --inspect` และ `node --inspect-brk` ต่างกันอย่างไร?',
+    options: [
+      'เหมือนกันทุกประการ — ทั้งคู่หยุดที่บรรทัดแรก',
+      '--inspect รันปกติและรอการเชื่อมต่อ; --inspect-brk หยุดก่อนที่โค้ดจะรัน',
+      '--inspect-brk ใช้ได้เฉพาะใน Node 22+',
+      '--inspect รันโค้ด; --inspect-brk ปิดใช้งาน inspector',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะเกิดอะไรขึ้นกับ `debugger;` เมื่อไม่มี inspector เชื่อมต่ออยู่?',
+    options: [
+      'มันโยน ReferenceError',
+      'มันทำให้ process หยุดทำงานไม่สิ้นสุด',
+      'มันถูก ignore อย่างเงียบ ๆ',
+      'มันแสดง warning ไปที่ stderr',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'เมธอด `console` ใดที่แสดง array ของ objects เป็นตารางที่ formatted?',
+    options: [
+      'console.dir',
+      'console.log',
+      'console.table',
+      'console.group',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Node.js inspector ฟังที่ port ใดโดยค่าเริ่มต้น?',
+    options: [
+      '3000',
+      '8080',
+      '9229',
+      '4000',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="testing-tooling/debugging" questions={debuggingQuiz} />
+
+<ProgressTracker client:visible id="testing-tooling/debugging" />

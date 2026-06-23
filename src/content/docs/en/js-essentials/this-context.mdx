@@ -1,0 +1,167 @@
+---
+title: 'this and Context'
+description: 'How this is determined in functions vs methods, call/apply/bind, and why arrow functions have no own this.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is this?
+
+`this` is a special keyword that refers to the **execution context** — the object that is considered the receiver of the current function call. Unlike most languages, `this` in JavaScript is not bound at definition time; it is determined at **call time** by how the function is invoked.
+
+## this in different call patterns
+
+```js
+// 1. Method call — this is the object before the dot
+const user = {
+  name: 'Alice',
+  greet: function() {
+    return 'Hi, I am ' + this.name;
+  },
+};
+console.log(user.greet()); // 'Hi, I am Alice'
+
+// 2. Plain function call — this is undefined (strict mode) or globalThis
+function whoAmI() {
+  return typeof this; // 'undefined' in strict mode
+}
+
+// 3. Constructor call — this is the newly created object
+function Person(name) {
+  this.name = name;
+}
+const p = new Person('Bob');
+console.log(p.name); // 'Bob'
+```
+
+## Losing this
+
+The most common pitfall: extracting a method from an object loses the binding.
+
+```js
+const timer = {
+  label: 'tick',
+  start: function() {
+    // After 0 ms, fn is called as a plain function — this.label is undefined
+    setTimeout(function() {
+      console.log(this.label); // undefined — 'this' is not timer
+    }, 0);
+  },
+};
+```
+
+## call, apply, and bind
+
+These three methods let you **explicitly set** `this`.
+
+```js
+function introduce(greeting, punctuation) {
+  return greeting + ', I am ' + this.name + punctuation;
+}
+
+const obj = { name: 'Carol' };
+
+// call — pass arguments individually
+introduce.call(obj, 'Hello', '!');     // 'Hello, I am Carol!'
+
+// apply — pass arguments as an array
+introduce.apply(obj, ['Hey', '.']);    // 'Hey, I am Carol.'
+
+// bind — returns a NEW function with this permanently bound
+const boundIntroduce = introduce.bind(obj);
+boundIntroduce('Hi', '?');            // 'Hi, I am Carol?'
+```
+
+## Arrow functions and this
+
+Arrow functions do **not** have their own `this`. They inherit `this` from the **lexical enclosing scope** — the surrounding regular function or module scope at the point where they are written.
+
+```js
+const timer2 = {
+  label: 'tick',
+  start: function() {
+    // Arrow function inherits 'this' from start() — which is timer2
+    setTimeout(() => {
+      console.log(this.label); // 'tick' — correctly bound
+    }, 0);
+  },
+};
+```
+
+This makes arrow functions the natural choice for callbacks inside methods.
+
+## Runnable demo
+
+export const thisCode = `
+const counter = {
+  count: 0,
+  // Regular function — 'this' is counter when called as counter.method()
+  incrementRegular: function() {
+    this.count += 1;
+    return this.count;
+  },
+};
+
+console.log('after increment:', counter.incrementRegular()); // 1
+console.log('after increment:', counter.incrementRegular()); // 2
+
+// Detach the method — 'this' is lost
+const detached = counter.incrementRegular;
+try {
+  detached(); // TypeError in strict mode
+} catch (e) {
+  console.log('detached call error:', e.message);
+}
+
+// Fix with bind
+const bound = counter.incrementRegular.bind(counter);
+console.log('bound call:', bound()); // 3
+`;
+
+<NodeRunner client:visible code={thisCode} />
+
+<Callout title="Arrow functions inherit this from the enclosing scope">
+Arrow functions do not create their own `this` binding. This makes them ideal for callbacks and nested functions inside class methods or object methods, where you want to keep the outer `this`. However, never use an arrow function as an object method itself — there is no outer `this` to inherit from there, so `this` will be `undefined` or `globalThis`.
+</Callout>
+
+export const thisQuiz = [
+  {
+    q: 'When is `this` determined for a regular (non-arrow) JavaScript function?',
+    options: [
+      'At definition time — where the function is written in the source',
+      'At call time — how the function is invoked',
+      'At module load time — based on the file it is in',
+      'It is always `globalThis`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `fn.bind(obj)` return?',
+    options: [
+      'The result of calling `fn` with `obj` as `this`',
+      'A new function with `this` permanently set to `obj`',
+      'The same function `fn` with `this` mutated to `obj`',
+      'An error if `obj` is null',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why do arrow functions work well as callbacks inside class methods?',
+    options: [
+      'They run faster than regular functions',
+      'They bind `this` to `globalThis` automatically',
+      'They inherit `this` from the enclosing scope, so the outer method context is preserved',
+      'They have access to the prototype chain directly',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="js-essentials/this-context" questions={thisQuiz} />
+
+<ProgressTracker client:visible id="js-essentials/this-context" />

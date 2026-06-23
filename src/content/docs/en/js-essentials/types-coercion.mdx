@@ -1,0 +1,153 @@
+---
+title: 'Types and Coercion'
+description: 'Primitives vs objects, typeof, == vs ===, truthy/falsy values, and coercion gotchas in JavaScript.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Primitives vs objects
+
+JavaScript has two categories of values:
+
+**Primitives** — immutable, stored by value:
+- `string`, `number`, `bigint`, `boolean`, `undefined`, `null`, `symbol`
+
+**Objects** — mutable, stored by reference:
+- Plain objects `{}`, arrays `[]`, functions, `Map`, `Set`, `Date`, etc.
+
+```js
+// Primitives: each variable holds an independent copy
+let a = 42;
+let b = a;
+b = 99;
+console.log(a); // 42 — unchanged
+
+// Objects: both variables point to the same object
+const x = { count: 0 };
+const y = x;
+y.count = 5;
+console.log(x.count); // 5 — same object
+```
+
+## typeof
+
+`typeof` returns a string describing the type of a value. A few results are surprising:
+
+```js
+typeof 42            // 'number'
+typeof 'hello'       // 'string'
+typeof true          // 'boolean'
+typeof undefined     // 'undefined'
+typeof null          // 'object'  ← historical bug, not fixable
+typeof {}            // 'object'
+typeof []            // 'object'  ← arrays are objects
+typeof function(){}  // 'function'
+typeof Symbol()      // 'symbol'
+typeof 9007n         // 'bigint'
+```
+
+The `typeof null === 'object'` quirk has been in the spec since JavaScript 1.0. To check for null specifically, use `value === null`.
+
+## == vs ===
+
+`==` performs **type coercion** before comparing. `===` does not — it checks both value and type.
+
+```js
+0 == false     // true  — false coerces to 0
+0 === false    // false — number vs boolean
+
+'' == false    // true  — both coerce to 0
+'' === false   // false
+
+null == undefined  // true  — special rule
+null === undefined // false
+
+1 == '1'   // true  — '1' coerces to 1
+1 === '1'  // false
+```
+
+## Truthy and falsy
+
+Every value is either **truthy** or **falsy** when used in a boolean context.
+
+**Falsy values** — only these six:
+- `false`, `0`, `''` (empty string), `null`, `undefined`, `NaN`
+
+Everything else is truthy — including `[]`, `{}`, `'0'`, and `'false'`.
+
+```js
+if ([]) console.log('empty array is truthy');   // prints
+if ({}) console.log('empty object is truthy');  // prints
+if (0)  console.log('zero is truthy');          // does NOT print
+```
+
+## Runnable coercion demo
+
+```js
+// Spot the coercion surprises
+console.log(0 == false);      // true
+console.log(0 === false);     // false
+console.log(null == undefined); // true
+console.log(null === undefined); // false
+console.log([] == false);     // true  — [] coerces to '' coerces to 0
+console.log(Boolean([]));     // true  — [] is truthy!
+console.log(typeof null);     // object
+```
+
+export const coercionCode = `
+console.log('0 == false:', 0 == false);
+console.log('0 === false:', 0 === false);
+console.log('null == undefined:', null == undefined);
+console.log('null === undefined:', null === undefined);
+console.log('[] == false:', [] == false);
+console.log('Boolean([]):', Boolean([]));
+console.log('typeof null:', typeof null);
+`;
+
+<NodeRunner client:visible code={coercionCode} />
+
+<Callout title="Always use === to avoid coercion surprises">
+The `===` operator never coerces types, so comparisons behave exactly as written. Reserve `==` for the one deliberate use case: checking both `null` and `undefined` at once with `value == null`.
+</Callout>
+
+export const coercionQuiz = [
+  {
+    q: 'What does `typeof null` return in JavaScript?',
+    options: [
+      '"null"',
+      '"undefined"',
+      '"object"',
+      '"boolean"',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which of these values is falsy?',
+    options: [
+      'An empty array `[]`',
+      'An empty object `{}`',
+      'The string `"0"`',
+      'The number `0`',
+    ],
+    answer: 3,
+  },
+  {
+    q: 'What is the result of `null == undefined`?',
+    options: [
+      'false — they are different types',
+      'true — the == operator has a special rule for this pair',
+      'A TypeError',
+      'true — both coerce to 0',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="js-essentials/types-coercion" questions={coercionQuiz} />
+
+<ProgressTracker client:visible id="js-essentials/types-coercion" />

@@ -1,0 +1,166 @@
+---
+title: 'Routing'
+description: 'Route request ด้วย req.method และ req.url แบบ manual และสร้าง tiny router ขึ้นเอง'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Routing คืออะไร?
+
+Routing คือกระบวนการตัดสินใจว่า code ส่วนใดจะจัดการ HTTP request ที่เข้ามา โดยพิจารณาจากสอง property ของ request:
+
+- `req.method` — HTTP verb เช่น `GET`, `POST`, `PUT`, `DELETE`
+- `req.url` — path (และ query string ถ้ามี) เช่น `/users`, `/users/42`, `/search?q=node`
+
+server ของ Node.js มีทั้งสองอย่างให้พร้อม คุณเพียงแค่เขียน logic ที่ map ทั้งสองไปยัง handler
+
+## Manual routing ด้วย if/else
+
+router ที่ง่ายที่สุดคือ chain ของ `if` statement:
+
+export const basicRoutingCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  const method = req.method;
+  const url = req.url;
+
+  if (method === 'GET' && url === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('GET / - Home');
+  } else if (method === 'GET' && url === '/about') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('GET /about - About page');
+  } else if (method === 'POST' && url === '/users') {
+    res.writeHead(201, { 'Content-Type': 'text/plain' });
+    res.end('POST /users - Created a user');
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found');
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Router running at http://localhost:3000');
+});
+`;
+
+<NodeRunner client:visible code={basicRoutingCode} node />
+
+## Parse URL ด้วย URL class
+
+เมื่อ URL มี path parameter หรือ query string ให้ใช้ global `URL` constructor ของ Node เพื่อ parse อย่างสะอาดสะอ้าน ส่ง `req.url` เป็น argument แรกและ base ปลอมเป็น argument ที่สอง:
+
+export const urlParsingCode = `
+const http = require('node:http');
+
+const server = http.createServer(function(req, res) {
+  // ใช้ global URL class เพื่อ parse request URL
+  const parsed = new URL(req.url, 'http://localhost:3000');
+  const pathname = parsed.pathname;   // เช่น '/search'
+  const query = parsed.searchParams;  // URLSearchParams
+
+  if (req.method === 'GET' && pathname === '/search') {
+    const term = query.get('q') || '(none)';
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Search term: ' + term);
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found');
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Try: http://localhost:3000/search?q=nodejs');
+});
+`;
+
+<NodeRunner client:visible code={urlParsingCode} node />
+
+## Tiny router object
+
+เมื่อมี route มากกว่าสองสามอัน ควร extract ออกมาเป็น router map pattern นี้คือสิ่งที่ Express ใช้ภายใน:
+
+export const tinyRouterCode = `
+const http = require('node:http');
+
+// Route map: key คือ "METHOD /path"
+const routes = {
+  'GET /': function(req, res) {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Home');
+  },
+  'GET /users': function(req, res) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify([{ id: 1, name: 'Alice' }]));
+  },
+  'POST /users': function(req, res) {
+    res.writeHead(201, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ created: true }));
+  },
+};
+
+const server = http.createServer(function(req, res) {
+  const key = req.method + ' ' + new URL(req.url, 'http://x').pathname;
+  const handler = routes[key];
+
+  if (handler) {
+    handler(req, res);
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found: ' + key);
+  }
+});
+
+server.listen(3000, function() {
+  console.log('Tiny router running at http://localhost:3000');
+});
+`;
+
+<NodeRunner client:visible code={tinyRouterCode} node />
+
+<Callout title="แอปจริงใช้ framework — แต่เป็น model เดียวกัน">
+Express, Fastify, Hono และ web framework ของ Node.js ทุกตัวสร้างบน pattern นี้พอดี การ `app.get('/path', handler)` ของพวกเขาเป็นแค่ API ที่สวยงามกว่าบนพื้นฐานของการ check `req.method` + `req.url` แบบเดียวกัน การเข้าใจ model ดิบนี้หมายความว่าคุณจะไม่สับสนกับสิ่งที่ framework ใดทำ
+</Callout>
+
+export const routingQuiz = [
+  {
+    q: 'สอง property ของ request object ที่ใช้ตัดสินใจ routing คืออะไร?',
+    options: [
+      'req.path และ req.verb',
+      'req.method และ req.url',
+      'req.route และ req.headers',
+      'req.endpoint และ req.action',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`new URL(req.url, "http://localhost")` ให้อะไรคุณ?',
+    options: [
+      'ส่ง fetch request ไปยัง URL นั้น',
+      'คืน URL string เดิมที่ไม่เปลี่ยนแปลง',
+      'parsed URL object ที่มี pathname และ searchParams',
+      'HTTP client ที่ configured สำหรับ localhost',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'router ควรคืน HTTP status code ใดเมื่อไม่มี route ตรงกัน?',
+    options: [
+      '200 OK',
+      '204 No Content',
+      '400 Bad Request',
+      '404 Not Found',
+    ],
+    answer: 3,
+  },
+];
+
+<Quiz client:visible id="http-networking/routing" questions={routingQuiz} />
+
+<ProgressTracker client:visible id="http-networking/routing" />

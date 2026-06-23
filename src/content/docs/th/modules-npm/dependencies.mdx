@@ -1,0 +1,138 @@
+---
+title: 'การจัดการ Dependencies'
+description: 'ทำความเข้าใจ dependencies, devDependencies, peerDependencies, lockfiles, และความแตกต่างระหว่าง npm install กับ npm ci'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+`package.json` แยก dependency ออกเป็นหลายส่วนตามจุดประสงค์การใช้งาน การเข้าใจความแตกต่างช่วยให้ production bundle มีขนาดเล็กลง ป้องกัน peer conflict และทำให้ CI builds มีความน่าเชื่อถือ
+
+## dependencies
+
+`dependencies` คือ package ที่โค้ดของคุณต้องการเมื่อ **ทำงานจริง** เมื่อผู้ใช้ติดตั้ง package ของคุณ npm จะ install `dependencies` เหล่านี้ไปด้วย
+
+```json
+{
+  "dependencies": {
+    "express": "^4.18.2",
+    "zod": "^3.22.0"
+  }
+}
+```
+
+ติดตั้ง dependency ใหม่:
+
+```bash
+npm install express
+```
+
+## devDependencies
+
+`devDependencies` คือ package ที่ต้องใช้เฉพาะระหว่าง **การพัฒนา** เช่น test runner, linter, bundler หรือ type definitions ไม่ถูก install เมื่อผู้ใช้ติดตั้ง package ของคุณ และไม่ถูก install ใน environment production เมื่อรัน `npm ci --omit=dev`
+
+```json
+{
+  "devDependencies": {
+    "vitest": "^1.2.0",
+    "eslint": "^8.57.0",
+    "@types/node": "^20.11.0"
+  }
+}
+```
+
+ติดตั้ง dev dependency:
+
+```bash
+npm install --save-dev vitest
+```
+
+## peerDependencies
+
+`peerDependencies` ระบุ package ที่ **ผู้ใช้ต้องจัดหาเอง** วิธีนี้ป้องกันไม่ให้มี instance ซ้ำซ้อนของ library ที่ใช้ state ร่วมกัน เช่น React หรือ webpack
+
+```json
+{
+  "peerDependencies": {
+    "react": ">=17.0.0"
+  }
+}
+```
+
+npm 7 ขึ้นไปจะ install peer dependencies โดยอัตโนมัติ แต่จะแจ้งเตือนหาก version ไม่ตรงกัน
+
+## Lockfiles
+
+npm สร้าง `package-lock.json` เมื่อรัน `npm install` ครั้งแรก lockfile นี้ระบุ version ที่แน่นอนของทุก dependency (รวมถึง dependency ลำดับที่สอง) เพื่อให้ทุกคนในทีมและ CI ได้รับ dependency tree ที่เหมือนกันทุกประการ
+
+```json
+{
+  "name": "my-app",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "node_modules/express": {
+      "version": "4.18.2",
+      "resolved": "https://registry.npmjs.org/express/-/express-4.18.2.tgz",
+      "integrity": "sha512-..."
+    }
+  }
+}
+```
+
+## npm install เทียบกับ npm ci
+
+```bash
+# npm install — อัปเดต lockfile หากไม่ตรงกับ package.json
+npm install
+
+# npm ci — ใช้ lockfile ทุกอย่างตามตัวอักษร; ล้ม node_modules เก่าก่อนเสมอ
+# จะ fail หาก package-lock.json ไม่ sync กับ package.json
+npm ci
+```
+
+ใช้ `npm install` ระหว่างพัฒนาเมื่อต้องการอัปเดต dependency ใช้ `npm ci` ใน CI/CD และ Docker build เพื่อให้ได้ reproducible install ที่เร็วและปลอดภัย
+
+<Callout title="Commit lockfile ของคุณ และใช้ npm ci ใน CI">
+`package-lock.json` ควร commit เข้า version control เสมอ — ไม่ใช่แค่ `package.json` เพียงอย่างเดียว lockfile รับประกันว่า CI, Docker build และเครื่องของเพื่อนร่วมทีมทุกคนได้รับ dependency tree ที่เหมือนกันทุกประการ ใช้ `npm ci` แทน `npm install` ใน automated environment เพื่อให้ build fail อย่างชัดเจนเมื่อ lockfile ไม่ sync
+</Callout>
+
+export const dependenciesQuiz = [
+  {
+    q: 'ควรระบุ test framework อย่าง Vitest ไว้ในส่วนใดของ package.json?',
+    options: [
+      'dependencies',
+      'devDependencies',
+      'peerDependencies',
+      'optionalDependencies',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จุดประสงค์หลักของ peerDependencies คืออะไร?',
+    options: [
+      'ระบุ package ที่ถูกติดตั้งโดยอัตโนมัติเมื่อรัน npm install',
+      'ประกาศ package ที่โปรเจกต์ผู้ใช้ต้องจัดหาเอง',
+      'กำหนด version ที่แน่นอนของ transitive dependencies',
+      'ระบุ package ที่ใช้เฉพาะใน test environment',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะเกิดอะไรขึ้นเมื่อรัน npm ci แล้ว package.json ไม่ sync กับ package-lock.json?',
+    options: [
+      'npm ci อัปเดต lockfile ให้ตรงกับ package.json',
+      'npm ci ข้ามความแตกต่างและติดตั้งตามปกติ',
+      'npm ci fail พร้อม error',
+      'npm ci ถามให้เลือกว่าจะเชื่อไฟล์ไหน',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="modules-npm/dependencies" questions={dependenciesQuiz} />
+
+<ProgressTracker client:visible id="modules-npm/dependencies" />
