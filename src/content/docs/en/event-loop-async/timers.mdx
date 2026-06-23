@@ -1,0 +1,116 @@
+---
+title: 'Timers'
+description: 'setTimeout, setInterval, clearTimeout, and timer behavior in the event loop.'
+sidebar:
+  order: 7
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## setTimeout
+
+`setTimeout(fn, delay)` schedules `fn` to run as a **macrotask** after at least `delay` milliseconds. The delay is a **minimum** — not a guarantee. If the call stack is busy when the timer fires, the callback waits until the stack is clear.
+
+```js
+var id = setTimeout(function() {
+  console.log('Runs after at least 100 ms');
+}, 100);
+
+// Cancel before it fires:
+clearTimeout(id);
+```
+
+## setInterval
+
+`setInterval(fn, delay)` repeatedly schedules `fn` every `delay` ms. Use `clearInterval` to stop it.
+
+```js
+var count = 0;
+var id = setInterval(function() {
+  count++;
+  console.log('tick', count);
+  if (count >= 3) clearInterval(id);
+}, 500);
+```
+
+## setTimeout with delay 0
+
+`setTimeout(fn, 0)` does **not** mean "run immediately." It queues `fn` as a macrotask. Any pending microtasks (Promise callbacks, `queueMicrotask`) will run first.
+
+```js
+setTimeout(function() { console.log('Timer'); }, 0);
+Promise.resolve().then(function() { console.log('Promise'); });
+// Output: Promise, then Timer
+```
+
+## queueMicrotask
+
+To schedule a callback before the next macrotask, use `queueMicrotask`:
+
+```js
+queueMicrotask(function() {
+  console.log('This runs in the microtask queue, before any timer');
+});
+```
+
+## Runnable demo
+
+This demo shows that `setTimeout(fn, 0)` still runs **after** a resolved Promise `.then`, because the timer callback is a macrotask and microtasks drain first.
+
+export const timersCode = `
+setTimeout(function() {
+  console.log('Timer ran second');
+}, 0);
+
+Promise.resolve().then(function() {
+  console.log('Promise ran first');
+});
+`;
+
+<NodeRunner client:visible code={timersCode} />
+
+Output is always: `Promise ran first`, then `Timer ran second`.
+
+<Callout title="Delay is a minimum, not a guarantee">
+`setTimeout(fn, 100)` means the callback runs no sooner than 100 ms, but if the call stack is busy or other microtasks are running, it may run later. Never rely on exact timer precision for correctness.
+</Callout>
+
+export const timersQuiz = [
+  {
+    q: 'Is setTimeout(fn, 0) guaranteed to run fn immediately after the current synchronous code?',
+    options: [
+      'Yes — delay 0 means run as soon as possible, before anything else',
+      'No — it queues fn as a macrotask; pending microtasks run first',
+      'Yes — but only if there are no other pending timers',
+      'No — setTimeout always waits at least 4 ms regardless of the delay argument',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you stop a setInterval from firing again?',
+    options: [
+      'Call clearTimeout with the interval ID',
+      'Set the interval variable to null',
+      'Call clearInterval with the interval ID',
+      'Return false from inside the interval callback',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which function schedules a callback in the microtask queue (not a timer queue)?',
+    options: [
+      'setTimeout(fn, 0)',
+      'setImmediate(fn)',
+      'setInterval(fn, 0)',
+      'queueMicrotask(fn)',
+    ],
+    answer: 3,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/timers" questions={timersQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/timers" />

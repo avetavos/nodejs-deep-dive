@@ -1,0 +1,139 @@
+---
+title: 'Microtasks & Macrotasks'
+description: 'How the microtask queue and macrotask queue interact with the event loop.'
+sidebar:
+  order: 6
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Two queues, one loop
+
+The event loop processes async callbacks from two distinct queues with different priorities:
+
+**Microtask queue** — processed after every task, before the next macrotask. Sources:
+- Promise `.then` / `.catch` / `.finally` callbacks
+- `queueMicrotask(fn)`
+
+**Macrotask queue** (also called the task queue) — one task is processed per event loop turn. Sources:
+- `setTimeout` callbacks
+- `setInterval` callbacks
+- I/O callbacks (network, file system)
+
+The rule is simple: after each macrotask completes, the engine drains the **entire** microtask queue before picking up the next macrotask.
+
+## The drain order
+
+```
+┌─────────────────────────────┐
+│  Execute one macrotask      │
+│  (or the initial script)    │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│  Drain all microtasks       │◄──┐
+│  (including newly added)    │   │ new microtasks
+└──────────────┬──────────────┘───┘
+               │
+               ▼
+┌─────────────────────────────┐
+│  Pick next macrotask        │
+└─────────────────────────────┘
+```
+
+## Node-specific: process.nextTick and setImmediate
+
+Node.js adds two more scheduling APIs that require the Node runtime:
+
+```js
+// These only work in Node.js — not in browsers
+process.nextTick(function() {
+  console.log('nextTick fires before other microtasks');
+});
+
+setImmediate(function() {
+  console.log('setImmediate fires after I/O callbacks in the current loop iteration');
+});
+```
+
+`process.nextTick` callbacks are drained before the microtask queue. `setImmediate` fires in the check phase of Node's event loop. Because these require the Node runtime, they are not available in the in-browser runner below — run them locally or in StackBlitz.
+
+## Runnable ordering demo
+
+This demo prints four lines. Predict the order before running:
+
+1. The synchronous `console.log` runs immediately on the call stack.
+2. `setTimeout(..., 0)` queues a **macrotask**.
+3. `Promise.resolve().then(...)` queues a **microtask** (the Promise is already resolved, so the reaction is queued synchronously).
+4. `queueMicrotask(...)` queues another **microtask** — after the Promise reaction already queued above.
+
+After the synchronous script finishes, all microtasks drain in order, then the macrotask fires.
+
+export const microMacroCode = `
+console.log('1 sync');
+
+setTimeout(function() {
+  console.log('4 macrotask');
+}, 0);
+
+Promise.resolve().then(function() {
+  console.log('2 microtask (Promise)');
+});
+
+queueMicrotask(function() {
+  console.log('3 microtask (queueMicrotask)');
+});
+`;
+
+<NodeRunner client:visible code={microMacroCode} />
+
+The output is always in this order:
+- `1 sync` — call stack
+- `2 microtask (Promise)` — first microtask queued
+- `3 microtask (queueMicrotask)` — second microtask queued
+- `4 macrotask` — runs only after the microtask queue is empty
+
+<Callout title="Microtasks drain before the next macrotask">
+After each task completes, the engine drains the entire microtask queue — including any new microtasks added during draining — before it picks up the next macrotask.
+</Callout>
+
+export const microMacroQuiz = [
+  {
+    q: 'Given this code — what prints first: the Promise .then callback or the setTimeout callback?',
+    options: [
+      'setTimeout callback — it was registered first',
+      'Promise .then callback — microtasks run before the next macrotask',
+      'They run simultaneously',
+      'It depends on the timer delay value',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does queueMicrotask(fn) do?',
+    options: [
+      'Schedules fn as a macrotask via the timer queue',
+      'Runs fn synchronously on the call stack immediately',
+      'Queues fn as a microtask to run after the current task, before the next macrotask',
+      'Schedules fn after all pending setTimeout callbacks',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'If a microtask callback itself calls queueMicrotask, when does the new microtask run?',
+    options: [
+      'In the next event loop iteration, after the next macrotask',
+      'During the current microtask drain — before the next macrotask',
+      'Immediately, interrupting the current microtask',
+      'It is silently dropped',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/microtasks-macrotasks" questions={microMacroQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/microtasks-macrotasks" />

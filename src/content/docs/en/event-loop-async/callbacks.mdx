@@ -1,0 +1,132 @@
+---
+title: 'Callbacks'
+description: 'The callback pattern, error-first convention, and callback nesting.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The callback pattern
+
+A **callback** is a function you pass to another function, to be called later when an operation completes. This was JavaScript's original approach to async work — pass a function, and the runtime will call it when the result is ready.
+
+```js
+setTimeout(function() {
+  console.log('This runs after 1 second');
+}, 1000);
+```
+
+The second argument to `setTimeout` is a callback. You hand control to the runtime and your function is called back when the timer fires.
+
+## The error-first convention
+
+Node's built-in APIs use a consistent signature for callbacks:
+
+```js
+fs.readFile('data.txt', 'utf8', function(err, data) {
+  if (err) {
+    console.error('Read failed:', err.message);
+    return;
+  }
+  console.log('File contents:', data);
+});
+```
+
+The pattern is `(err, data)` — error always first, result second. If the operation succeeded, `err` is `null`. If it failed, `err` is an `Error` object and `data` is undefined.
+
+**Always check `err` before using `data`.** If you ignore a non-null `err` and try to use `data`, you will get confusing errors.
+
+## Callback nesting
+
+When one async operation depends on the result of another, you nest callbacks:
+
+```js
+step1(function(err, resultA) {
+  if (err) return handleError(err);
+  step2(resultA, function(err, resultB) {
+    if (err) return handleError(err);
+    step3(resultB, function(err, resultC) {
+      if (err) return handleError(err);
+      console.log('Final:', resultC);
+    });
+  });
+});
+```
+
+This deep nesting — sometimes called **callback hell** or the **pyramid of doom** — is hard to read and error-prone. Promises and async/await (covered in the next lessons) solve this.
+
+## Runnable demo
+
+The snippet below simulates two async steps using `setTimeout`. Each step uses the error-first callback pattern. Run it to see the output order.
+
+export const callbacksCode = `
+function step1(callback) {
+  setTimeout(function() {
+    callback(null, 'result-A');
+  }, 0);
+}
+
+function step2(input, callback) {
+  setTimeout(function() {
+    callback(null, 'result-B');
+  }, 0);
+}
+
+step1(function(err, dataA) {
+  if (err) { console.log('Error in step 1:', err); return; }
+  console.log('Step 1 done: ' + dataA);
+  step2(dataA, function(err, dataB) {
+    if (err) { console.log('Error in step 2:', err); return; }
+    console.log('Step 2 done: ' + dataB);
+  });
+});
+`;
+
+<NodeRunner client:visible code={callbacksCode} />
+
+The output is always `Step 1 done: result-A` then `Step 2 done: result-B` — each step fires only after the previous one completes.
+
+<Callout title="Error-first is the Node convention">
+Node's built-in APIs pass errors as the first callback argument. Always check `err` before using `data` — if `err` is truthy, handle it and return early.
+</Callout>
+
+export const callbacksQuiz = [
+  {
+    q: 'What is the correct signature for a Node.js error-first callback?',
+    options: [
+      'function(data, err)',
+      'function(err, data)',
+      'function(result)',
+      'function(status, data, err)',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In the error-first callback pattern, what value does err hold on success?',
+    options: [
+      'undefined',
+      'false',
+      'null',
+      '0',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What is "callback hell"?',
+    options: [
+      'Callbacks that throw exceptions instead of passing errors',
+      'Deeply nested callbacks that form a rightward-growing pyramid of indentation',
+      'Using callbacks inside Promises',
+      'Calling the same callback more than once',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/callbacks" questions={callbacksQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/callbacks" />

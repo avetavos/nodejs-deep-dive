@@ -1,0 +1,114 @@
+---
+title: 'Promises'
+description: 'Promise states, chaining, and the Promise combinators.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is a Promise?
+
+A **Promise** is an object representing a value that will be available in the future. It has three states:
+
+- **Pending** — the operation is still in progress.
+- **Fulfilled** — the operation completed successfully; the Promise holds a value.
+- **Rejected** — the operation failed; the Promise holds an error.
+
+A Promise transitions from pending to either fulfilled or rejected — never back. Once settled, it stays that way.
+
+```js
+var p = new Promise(function(resolve, reject) {
+  // Call resolve(value) to fulfill, or reject(error) to reject
+  resolve('hello');
+});
+```
+
+## Chaining with .then / .catch / .finally
+
+`.then(onFulfilled)` returns a new Promise, allowing you to chain steps. `.catch(onRejected)` handles rejections. `.finally(fn)` runs regardless of outcome — useful for cleanup.
+
+```js
+fetchData()
+  .then(function(data) { return process(data); })
+  .then(function(result) { console.log('Done:', result); })
+  .catch(function(err) { console.error('Failed:', err.message); })
+  .finally(function() { console.log('Cleanup'); });
+```
+
+## Promise combinators
+
+| Combinator | Behavior |
+|------------|----------|
+| `Promise.all(arr)` | Resolves when all resolve; rejects on the first rejection |
+| `Promise.race(arr)` | Settles with the first Promise to settle (fulfilled or rejected) |
+| `Promise.allSettled(arr)` | Resolves when all settle; gives each outcome (never rejects) |
+| `Promise.any(arr)` | Resolves with the first fulfilled; rejects only if all reject |
+
+## Runnable demo
+
+The snippet creates two Promises that resolve immediately with fixed values, chains `.then`, uses `Promise.all`, and adds `.finally` for cleanup.
+
+export const promisesCode = `
+var p1 = Promise.resolve('data-A');
+var p2 = Promise.resolve('data-B');
+
+p1.then(function(data) {
+  console.log('Fetched: ' + data);
+  return Promise.all([p1, p2]);
+}).then(function(results) {
+  console.log('All done: ' + results[0] + ' and ' + results[1]);
+}).catch(function(err) {
+  console.log('Error: ' + err.message);
+}).finally(function() {
+  console.log('Finally: cleanup');
+});
+`;
+
+<NodeRunner client:visible code={promisesCode} />
+
+The output is always: `Fetched: data-A`, then `All done: data-A and data-B`, then `Finally: cleanup`.
+
+<Callout title="Always attach a catch">
+An unhandled promise rejection can crash a Node process (or log a warning in newer versions). Always chain `.catch()` or use try/catch with async/await.
+</Callout>
+
+export const promisesQuiz = [
+  {
+    q: 'Which Promise state means the operation completed successfully?',
+    options: [
+      'Pending',
+      'Resolved',
+      'Fulfilled',
+      'Settled',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What does Promise.all do when one of the input Promises rejects?',
+    options: [
+      'It ignores the rejection and waits for the rest',
+      'It immediately rejects with that error',
+      'It resolves with undefined for that slot',
+      'It retries the rejected Promise',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which combinator resolves when ALL input Promises settle, and never rejects?',
+    options: [
+      'Promise.all',
+      'Promise.race',
+      'Promise.any',
+      'Promise.allSettled',
+    ],
+    answer: 3,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/promises" questions={promisesQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/promises" />

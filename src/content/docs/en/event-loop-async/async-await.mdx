@@ -1,0 +1,140 @@
+---
+title: 'Async / Await'
+description: 'Writing async code that reads like synchronous code with async/await.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## async functions
+
+The `async` keyword before a function declaration makes it an **async function**. Async functions always return a Promise — even if you `return` a plain value, it is automatically wrapped in `Promise.resolve(value)`.
+
+```js
+async function greet() {
+  return 'hello';
+}
+
+greet().then(function(v) { console.log(v); }); // hello
+```
+
+## await
+
+Inside an async function, `await` pauses execution until the Promise settles, then resumes with the resolved value. The rest of the program keeps running while awaiting.
+
+```js
+async function loadUser() {
+  var user = await fetchUser(42);   // pauses here until fetchUser resolves
+  var posts = await fetchPosts(user.id);
+  return posts;
+}
+```
+
+## Error handling
+
+Wrap `await` expressions in `try/catch` to handle rejections:
+
+```js
+async function run() {
+  try {
+    var data = await fetchData();
+    console.log(data);
+  } catch (err) {
+    console.error('Failed:', err.message);
+  }
+}
+```
+
+## Sequential vs concurrent
+
+Two sequential `await` calls run one after the other — the second starts only after the first completes:
+
+```js
+var a = await fetchA();  // waits
+var b = await fetchB();  // then waits again
+```
+
+To run both concurrently, start the Promises first and await them together:
+
+```js
+var [a, b] = await Promise.all([fetchA(), fetchB()]);
+```
+
+## Runnable demo
+
+The snippet below uses a `fakeFetch` helper (setTimeout-based) to simulate async calls. It first fetches sequentially, then fetches both in parallel with `Promise.all`.
+
+export const asyncAwaitCode = `
+function fakeFetch(label) {
+  return new Promise(function(resolve) {
+    setTimeout(function() { resolve(label); }, 0);
+  });
+}
+
+async function runSequential() {
+  var a = await fakeFetch('A');
+  var b = await fakeFetch('B');
+  console.log('Sequential: ' + a + ' then ' + b);
+}
+
+async function runParallel() {
+  var results = await Promise.all([fakeFetch('A'), fakeFetch('B')]);
+  console.log('Parallel: ' + results[0] + ' and ' + results[1]);
+}
+
+async function main() {
+  await runSequential();
+  await runParallel();
+}
+
+main();
+`;
+
+<NodeRunner client:visible code={asyncAwaitCode} />
+
+Output: `Sequential: A then B`, then `Parallel: A and B`.
+
+<Callout title="Awaiting in a loop serializes">
+Using `await` inside a `for` loop runs each iteration one after another. To run operations concurrently, collect the Promises in an array and pass them to `Promise.all`.
+</Callout>
+
+export const asyncAwaitQuiz = [
+  {
+    q: 'What does an async function always return?',
+    options: [
+      'The raw value you passed to return',
+      'A Promise',
+      'A callback function',
+      'undefined',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the correct way to handle a rejection from an awaited Promise?',
+    options: [
+      'Check the return value for null',
+      'Attach .catch() after the await expression',
+      'Wrap the await in a try/catch block',
+      'Use an if/else after the await',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'Which pattern runs two async operations concurrently rather than sequentially?',
+    options: [
+      'var a = await fetchA(); var b = await fetchB();',
+      'var [a, b] = await Promise.all([fetchA(), fetchB()]);',
+      'await fetchA(); await fetchB();',
+      'fetchA().then(function() { return fetchB(); });',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/async-await" questions={asyncAwaitQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/async-await" />

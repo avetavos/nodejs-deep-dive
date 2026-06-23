@@ -1,5 +1,88 @@
 ---
-title: Event Loop & Async
-description: The event loop, callbacks, promises, and async/await in Node.js.
+title: 'Event Loop & Async'
+description: 'An overview of the event loop, async patterns, and what this module covers.'
+sidebar:
+  order: 1
 ---
-Coming soon.
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is the Event Loop?
+
+JavaScript in Node.js runs on a **single thread**. Yet it can handle thousands of simultaneous connections without blocking. The secret is the **event loop** — a mechanism that delegates slow work (file reads, network calls) to the operating system, then processes the results when they arrive.
+
+At its core, the runtime has three key structures:
+
+- **Call stack** — where synchronous code executes, one frame at a time.
+- **Microtask queue** — holds Promise callbacks and `queueMicrotask` callbacks. Drains completely after every task.
+- **Macrotask queue** (task queue) — holds `setTimeout`/`setInterval` callbacks. One macrotask is processed per event loop iteration.
+
+The loop runs continuously: pick a macrotask → execute it → drain all microtasks → pick the next macrotask.
+
+## What this module covers
+
+| Lesson | Topic |
+|--------|-------|
+| Call Stack | Synchronous execution and why blocking matters |
+| Callbacks | The original async pattern and Node's error-first convention |
+| Promises | States, chaining, and combinators |
+| Async/Await | Reading async code like synchronous code |
+| Microtasks & Macrotasks | Queue priorities and drain order |
+| Timers | `setTimeout`, `setInterval`, and timer precision |
+
+## A first async demo
+
+The snippet below runs three pieces of code. Notice they do **not** execute top-to-bottom in the order written — the synchronous log fires first, the Promise callback fires next (microtask), and the `setTimeout` callback fires last (macrotask).
+
+```js
+// What runs first?
+console.log('A — sync');
+Promise.resolve().then(() => console.log('B — microtask (Promise)'));
+setTimeout(() => console.log('C — macrotask (setTimeout)'), 0);
+```
+
+Run it to confirm the order:
+
+export const indexDemoCode = `
+console.log('A — sync');
+Promise.resolve().then(function() { console.log('B — microtask (Promise)'); });
+setTimeout(function() { console.log('C — macrotask (setTimeout)'); }, 0);
+`;
+
+<NodeRunner client:visible code={indexDemoCode} />
+
+The output is always `A`, then `B`, then `C` — the event loop guarantees this ordering.
+
+<Callout title="Single thread, non-blocking">
+Node.js runs your JavaScript on a single thread. It stays responsive by delegating I/O to the OS and processing results asynchronously.
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: 'In what order does the event loop process queues after executing a task?',
+    options: [
+      'Macrotasks first, then microtasks',
+      'Microtasks first, then the next macrotask',
+      'Both queues are processed simultaneously',
+      'Microtasks and macrotasks alternate one by one',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which of the following is placed in the microtask queue?',
+    options: [
+      'A setTimeout callback',
+      'A setInterval callback',
+      'A Promise .then callback',
+      'A DOM click event handler',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/index" />

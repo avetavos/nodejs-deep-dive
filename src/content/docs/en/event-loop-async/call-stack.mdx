@@ -1,0 +1,125 @@
+---
+title: 'The Call Stack'
+description: 'How synchronous code executes on the call stack and why blocking it matters.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## What is the call stack?
+
+The **call stack** is a LIFO (Last In, First Out) data structure that tracks the currently executing functions. Every time a function is called, a new **frame** is pushed onto the stack. When the function returns, its frame is popped off.
+
+```js
+function greet(name) {
+  return 'Hello, ' + name;
+}
+
+function main() {
+  var msg = greet('Node');
+  console.log(msg);
+}
+
+main();
+// Stack at peak: [main] → [main, greet]
+// After greet returns: [main]
+// After main returns: []
+```
+
+The engine can only execute **one frame at a time**. While a frame is executing, nothing else can run — no I/O callbacks, no timer callbacks, nothing.
+
+## Synchronous execution
+
+All synchronous code runs to completion before anything in the async queues can execute. Consider a countdown:
+
+```js
+function countdown(n) {
+  if (n <= 0) {
+    console.log('done');
+    return;
+  }
+  console.log(n);
+  countdown(n - 1);
+}
+
+countdown(5);
+```
+
+Each recursive call pushes a new frame. The output is completely deterministic: `5, 4, 3, 2, 1, done`.
+
+Run it:
+
+export const callStackCode = `
+function countdown(n) {
+  if (n <= 0) {
+    console.log('done');
+    return;
+  }
+  console.log(n);
+  countdown(n - 1);
+}
+
+countdown(5);
+`;
+
+<NodeRunner client:visible code={callStackCode} />
+
+## Why blocking matters
+
+If you run a long synchronous operation — a heavy computation, a large loop, a synchronous file read — the call stack is occupied for the entire duration. No other code can run until the stack clears.
+
+```js
+// This blocks for ~200ms — nothing else can happen during this time
+var start = Date.now();
+while (Date.now() - start < 200) {
+  // spinning
+}
+console.log('Finally unblocked');
+```
+
+In a server, this means every incoming request waits during that block. Keep synchronous work short.
+
+<Callout title="Blocking freezes everything">
+A long synchronous operation on the call stack prevents any I/O callbacks, timers, or other events from being processed. Keep synchronous handlers short.
+</Callout>
+
+export const callStackQuiz = [
+  {
+    q: 'What data structure describes how the call stack processes function calls?',
+    options: [
+      'FIFO — first in, first out',
+      'LIFO — last in, first out',
+      'Priority queue — highest priority first',
+      'Circular buffer',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What happens to a setTimeout callback while a long synchronous loop is running?',
+    options: [
+      'It runs in a separate thread and fires on time',
+      'It is cancelled automatically',
+      'It waits until the call stack is empty, then fires — possibly late',
+      'It fires immediately after the loop starts',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'When does a function frame get removed from the call stack?',
+    options: [
+      'After the first line of the function executes',
+      'When the function returns (or throws)',
+      'When the next function is called',
+      'At the end of each event loop iteration',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="event-loop-async/call-stack" questions={callStackQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/call-stack" />
