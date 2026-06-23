@@ -1,4 +1,4 @@
-:root { --sl-color-accent: #BC52EE; --sl-color-accent-low: #2a1140; --sl-color-accent-high: #ecd7fb; }
+:root { --sl-color-accent: #339933; --sl-color-accent-low: #0e2a0e; --sl-color-accent-high: #d6f5d6; }
 
 .tsgo { display: grid; gap: 1rem; grid-template-columns: 1fr; margin: 1rem 0; }
 .tsgo__col header { display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:.85rem; padding:.25rem .5rem; background:var(--sl-color-gray-6); border-radius:6px 6px 0 0; }
@@ -7,7 +7,7 @@
 .pg__bar { display:flex; gap:.5rem; margin-bottom:.25rem; }
 .pg pre { white-space:pre; overflow:auto; }
 .pg__hint { font-size:.8rem; opacity:.7; margin:.25rem 0; }
-.pg__out { border-left:3px solid #BC52EE; } .pg__err { border-left:3px solid var(--sl-color-red); color:var(--sl-color-red-high); }
+.pg__out { border-left:3px solid #339933; } .pg__err { border-left:3px solid var(--sl-color-red); color:var(--sl-color-red-high); }
 .quiz__q { border:1px solid var(--sl-color-gray-5); border-radius:6px; margin:.5rem 0; padding:.25rem .75rem; }
 .quiz label { display:block; padding:.15rem .25rem; cursor:pointer; } .quiz label.ok { color:var(--sl-color-green-high); font-weight:600; } .quiz label.bad { color:var(--sl-color-red-high); }
 .quiz__score { font-weight:700; }
@@ -20,11 +20,6 @@
 .dp__label { font-weight:600; opacity:.8; }
 .dp__open { font-size:.78rem; white-space:nowrap; }
 .dp__code { margin:0; border:0; border-radius:0; white-space:pre; overflow:auto; }
-.ap { margin:1rem 0; border:1px solid var(--sl-color-gray-5); border-radius:8px; overflow:hidden; }
-.ap__bar { display:flex; justify-content:space-between; align-items:center; gap:.5rem; padding:.35rem .6rem; background:var(--sl-color-gray-6); font-size:.8rem; }
-.ap__label { font-weight:600; opacity:.8; }
-.ap__open { cursor:pointer; font-size:.78rem; border:1px solid var(--sl-color-accent); border-radius:4px; padding:.15rem .6rem; background:var(--sl-color-accent); color:#fff; white-space:nowrap; }
-.ap__code { margin:0; border:0; border-radius:0; white-space:pre; overflow:auto; }
 .nr { margin:1rem 0; border:1px solid var(--sl-color-gray-5); border-radius:8px; overflow:hidden; }
 .nr__bar { display:flex; justify-content:space-between; align-items:center; gap:.5rem; padding:.35rem .6rem; background:var(--sl-color-gray-6); font-size:.8rem; }
 .nr__label { font-weight:600; opacity:.8; }
