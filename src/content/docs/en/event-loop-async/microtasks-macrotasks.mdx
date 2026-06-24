@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Two queues, one loop
 
@@ -27,23 +28,13 @@ The rule is simple: after each macrotask completes, the engine drains the **enti
 
 ## The drain order
 
-```
-┌─────────────────────────────┐
-│  Execute one macrotask      │
-│  (or the initial script)    │
-└──────────────┬──────────────┘
-               │
-               ▼
-┌─────────────────────────────┐
-│  Drain all microtasks       │◄──┐
-│  (including newly added)    │   │ new microtasks
-└──────────────┬──────────────┘───┘
-               │
-               ▼
-┌─────────────────────────────┐
-│  Pick next macrotask        │
-└─────────────────────────────┘
-```
+export const drainOrderDiagram = `flowchart TD
+  A["Execute one macrotask<br/>(or the initial script)"] --> B["Drain all microtasks<br/>(including newly added)"]
+  B -->|new microtasks| B
+  B --> C["Pick next macrotask"]
+  C --> A`;
+
+<Mermaid code={drainOrderDiagram} title="Macrotask / microtask drain order" />
 
 ## Node-specific: process.nextTick and setImmediate
 

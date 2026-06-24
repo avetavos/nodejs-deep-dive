@@ -13,6 +13,9 @@ export default defineConfig({
   output: 'static',
   integrations: [starlight({
       title: 'Node.js Deep Dive',
+      head: [
+        { tag: 'script', attrs: { type: 'module', src: '/nodejs-deep-dive/enhance.js' } },
+      ],
       defaultLocale: 'en',
       locales: {
         en: { label: 'English', lang: 'en' },

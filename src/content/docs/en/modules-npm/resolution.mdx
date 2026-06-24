@@ -49,7 +49,7 @@ import utils from './utils.js';
 The two module systems can coexist, but with constraints:
 
 ```js
-// ── CJS file (utils.cjs) ─────────────────────────────────────
+// ---- CJS file (utils.cjs) ----
 // CJS can require other CJS modules normally.
 const fs = require('fs');
 module.exports = { readConfig: () => fs.readFileSync('.env', 'utf8') };
@@ -57,7 +57,7 @@ module.exports = { readConfig: () => fs.readFileSync('.env', 'utf8') };
 // CJS CANNOT require() an ESM module — this throws ERR_REQUIRE_ESM:
 // const esm = require('./modern.mjs'); // ❌
 
-// ── ESM file (app.mjs) ──────────────────────────────────────
+// ---- ESM file (app.mjs) ----
 // ESM CAN import a CJS module; it receives module.exports as the default.
 import cjsUtils from './utils.cjs'; // ✅ default = module.exports object
 

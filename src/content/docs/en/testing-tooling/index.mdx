@@ -8,6 +8,7 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Why tooling matters
 
@@ -26,34 +27,19 @@ Node 18+ ships a built-in test runner, a powerful inspector protocol, and `perf_
 
 ## The toolchain at a glance
 
-```
-┌─────────────────────────────────────────────────┐
-│  Your Node.js Project                           │
-│                                                 │
-│  Source code (.ts / .js / .mjs)                 │
-│       │                                         │
-│       ▼                                         │
-│  Linter / Formatter  ──►  ESLint, Prettier,     │
-│                            Biome                │
-│       │                                         │
-│       ▼                                         │
-│  TypeScript runner   ──►  tsx, ts-node,         │
-│                            --experimental-      │
-│                            strip-types          │
-│       │                                         │
-│       ▼                                         │
-│  Test runner         ──►  node:test (built-in)  │
-│                            or Vitest / Jest      │
-│       │                                         │
-│       ▼                                         │
-│  Debugger            ──►  node --inspect +      │
-│                            Chrome DevTools       │
-│       │                                         │
-│       ▼                                         │
-│  Performance         ──►  perf_hooks,           │
-│                            PerformanceObserver   │
-└─────────────────────────────────────────────────┘
-```
+export const toolchainDiagram = `flowchart TD
+  S["Source code (.ts / .js / .mjs)"] --> L["Linter / Formatter"]
+  L --> T["TypeScript runner"]
+  T --> R["Test runner"]
+  R --> D["Debugger"]
+  D --> P["Performance"]
+  L -.-> Lt["ESLint, Prettier, Biome"]
+  T -.-> Tt["tsx, ts-node,<br/>--experimental-strip-types"]
+  R -.-> Rt["node:test (built-in)<br/>or Vitest / Jest"]
+  D -.-> Dt["node --inspect +<br/>Chrome DevTools"]
+  P -.-> Pt["perf_hooks,<br/>PerformanceObserver"]`;
+
+<Mermaid code={toolchainDiagram} title="The Node.js project toolchain" />
 
 ## Choosing what to install
 
