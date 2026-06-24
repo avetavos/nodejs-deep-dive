@@ -25,7 +25,6 @@
 .nr__label { font-weight:600; opacity:.8; }
 .nr__actions { display:flex; gap:.4rem; }
 .nr__run, .nr__open { cursor:pointer; font-size:.78rem; border:1px solid var(--sl-color-accent); border-radius:4px; padding:.15rem .6rem; background:var(--sl-color-accent); color:#fff; white-space:nowrap; }
-.nr__open { background:transparent; color:var(--sl-color-accent); }
 .nr__code { width:100%; min-height:150px; font-family:ui-monospace,monospace; font-size:.85rem; padding:.5rem; border:0; border-top:1px solid var(--sl-color-gray-5); background:var(--sl-color-bg); color:var(--sl-color-text); resize:vertical; }
 .nr__out { width:100%; min-height:90px; border:0; border-top:1px solid var(--sl-color-gray-5); background:#fff; }
 .nr__hint { margin:0; padding:.4rem .6rem; font-size:.78rem; opacity:.75; border-top:1px solid var(--sl-color-gray-5); }
