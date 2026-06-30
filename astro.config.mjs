@@ -8,22 +8,22 @@ import preact from '@astrojs/preact';
 export default defineConfig({
   // GitHub Pages project site. Update `site` to your GitHub username and `base`
   // to your repo name if they differ.
-  site: 'https://avetavos.github.io',
-  base: '/nodejs-deep-dive',
+  site: 'https://nodejs-deep-dive.avetavos.com',
+  base: '/',
   output: 'static',
   integrations: [starlight({
       title: 'Node.js Deep Dive',
       head: [
-        { tag: 'script', attrs: { type: 'module', src: '/nodejs-deep-dive/enhance.js' } },
-        { tag: 'link', attrs: { rel: 'manifest', href: '/nodejs-deep-dive/manifest.webmanifest' } },
-        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/nodejs-deep-dive/apple-touch-icon.png' } },
-        { tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '192x192', href: '/nodejs-deep-dive/icon-192.png' } },
+        { tag: 'script', attrs: { type: 'module', src: '/enhance.js' } },
+        { tag: 'link', attrs: { rel: 'manifest', href: '/manifest.webmanifest' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' } },
+        { tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '192x192', href: '/icon-192.png' } },
         { tag: 'meta', attrs: { name: 'theme-color', content: '#83CD29' } },
         { tag: 'meta', attrs: { name: 'mobile-web-app-capable', content: 'yes' } },
         { tag: 'meta', attrs: { name: 'apple-mobile-web-app-capable', content: 'yes' } },
         { tag: 'meta', attrs: { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' } },
         { tag: 'meta', attrs: { name: 'apple-mobile-web-app-title', content: "Node.js Deep Dive" } },
-        { tag: 'script', content: "if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/nodejs-deep-dive/sw.js',{scope:'/nodejs-deep-dive/'}).catch(function(){})})}" },
+        { tag: 'script', content: "if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(function(){})})}" },
       ],
       defaultLocale: 'en',
       locales: {
