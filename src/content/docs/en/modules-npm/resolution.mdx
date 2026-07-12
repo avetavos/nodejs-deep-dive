@@ -54,8 +54,8 @@ The two module systems can coexist, but with constraints:
 const fs = require('fs');
 module.exports = { readConfig: () => fs.readFileSync('.env', 'utf8') };
 
-// CJS CANNOT require() an ESM module — this throws ERR_REQUIRE_ESM:
-// const esm = require('./modern.mjs'); // ❌
+// Since Node 22.12 (and 20.19 LTS), CJS CAN require() an ESM module:
+// const esm = require('./modern.mjs'); // ✅ (throws ERR_REQUIRE_ASYNC_MODULE only if it uses top-level await)
 
 // ── ESM file (app.mjs) ──────────────────────────────────────
 // ESM CAN import a CJS module; it receives module.exports as the default.
@@ -65,7 +65,7 @@ import cjsUtils from './utils.cjs'; // ✅ default = module.exports object
 import { helper } from './helpers.mjs'; // ✅
 ```
 
-The asymmetry exists because ESM loading is static and asynchronous while CJS loading is synchronous. A synchronous `require()` call cannot wait for an async ESM evaluation.
+Historically CJS could not `require()` an ESM module — it threw `ERR_REQUIRE_ESM` — because ESM loading is static and asynchronous while CJS loading is synchronous. Since Node 22.12 (and 20.19 LTS), `require()` of an ESM module works by default, as long as that module has no top-level `await`. A module that uses top-level `await` still throws `ERR_REQUIRE_ASYNC_MODULE`, because a synchronous `require()` call cannot wait for an async evaluation.
 
 ## The `exports` map
 
@@ -144,9 +144,9 @@ export const resolutionQuiz = [
   {
     q: 'Which statement about ESM/CJS interop is correct?',
     options: [
-      'CJS can require() an ESM module by using .mjs extension',
+      'CJS can require() an ESM module even if that module uses top-level await',
       'ESM cannot import CJS modules under any circumstances',
-      'ESM can import a CJS module; CJS cannot require() an ESM module',
+      'ESM can import a CJS module, and since Node 22.12 CJS can require() an ESM module that has no top-level await',
       'Both systems are fully interoperable in both directions',
     ],
     answer: 2,

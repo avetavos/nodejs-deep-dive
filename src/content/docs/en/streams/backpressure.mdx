@@ -20,7 +20,7 @@ Imagine a fire hose attached to a garden sprinkler. If water arrives faster than
 
 The Writable stream's `write()` method is the key signal:
 
-- Returns `true` — the internal buffer is below the **high-water mark** (default: 16 KB for object streams, 64 KB for byte streams). The producer can keep sending.
+- Returns `true` — the internal buffer is below the **high-water mark** (default: 16 KB (16384 bytes) for byte streams, or 16 objects for object-mode streams; `fs.createReadStream` is the exception at 64 KB). The producer can keep sending.
 - Returns `false` — the buffer is at or above the high-water mark. The producer must **pause** and wait for the `drain` event before writing more.
 
 The high-water mark is not a hard limit; it is a soft advisory. Node buffers chunks beyond it, but doing so costs memory. Respecting the signal keeps memory usage flat.

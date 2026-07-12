@@ -20,7 +20,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 Method `write()` ของ Writable Stream เป็นสัญญาณสำคัญ:
 
-- คืนค่า `true` — internal buffer ต่ำกว่า **high-water mark** (ค่าเริ่มต้น: 16 KB สำหรับ object stream, 64 KB สำหรับ byte stream) producer ส่งข้อมูลต่อได้
+- คืนค่า `true` — internal buffer ต่ำกว่า **high-water mark** (ค่าเริ่มต้น: 16 KB (16384 bytes) สำหรับ byte stream หรือ 16 objects สำหรับ object-mode stream โดย `fs.createReadStream` เป็นข้อยกเว้นที่ใช้ 64 KB) producer ส่งข้อมูลต่อได้
 - คืนค่า `false` — buffer อยู่ที่หรือเกิน high-water mark producer ต้อง **pause** และรอ event `drain` ก่อนเขียนต่อ
 
 high-water mark ไม่ใช่ขีดจำกัดแบบ hard — เป็นเพียง soft advisory Node ยัง Buffer chunk เกินขีดนั้นได้แต่ต้องเสียค่า Memory การเคารพสัญญาณนี้ทำให้การใช้ Memory คงที่

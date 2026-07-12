@@ -54,8 +54,8 @@ import utils from './utils.js';
 const fs = require('fs');
 module.exports = { readConfig: () => fs.readFileSync('.env', 'utf8') };
 
-// CJS CANNOT require() an ESM module — this throws ERR_REQUIRE_ESM:
-// const esm = require('./modern.mjs'); // ❌
+// Since Node 22.12 (and 20.19 LTS), CJS CAN require() an ESM module:
+// const esm = require('./modern.mjs'); // ✅ (throws ERR_REQUIRE_ASYNC_MODULE only if it uses top-level await)
 
 // ── ESM file (app.mjs) ──────────────────────────────────────
 // ESM CAN import a CJS module; it receives module.exports as the default.
@@ -65,7 +65,7 @@ import cjsUtils from './utils.cjs'; // ✅ default = module.exports object
 import { helper } from './helpers.mjs'; // ✅
 ```
 
-ความไม่สมมาตรนี้มีอยู่เพราะ ESM loading เป็นแบบ static และ asynchronous ในขณะที่ CJS loading เป็นแบบ synchronous การเรียก `require()` แบบ synchronous ไม่สามารถรอการประมวลผล ESM แบบ async ได้
+เดิมที CJS ไม่สามารถ `require()` โมดูล ESM ได้ — จะ throw `ERR_REQUIRE_ESM` — เพราะ ESM loading เป็นแบบ static และ asynchronous ในขณะที่ CJS loading เป็นแบบ synchronous แต่ตั้งแต่ Node 22.12 (และ 20.19 LTS) เป็นต้นมา `require()` โมดูล ESM ทำงานได้เป็นค่าเริ่มต้น ตราบใดที่โมดูลนั้นไม่มี top-level `await` ส่วนโมดูลที่ใช้ top-level `await` ยังคง throw `ERR_REQUIRE_ASYNC_MODULE` เพราะการเรียก `require()` แบบ synchronous ไม่สามารถรอการประมวลผลแบบ async ได้
 
 ## exports map
 
@@ -144,9 +144,9 @@ export const resolutionQuiz = [
   {
     q: 'ข้อใดถูกต้องเกี่ยวกับการทำงานร่วมกันของ ESM/CJS?',
     options: [
-      'CJS สามารถ require() โมดูล ESM ได้โดยใช้นามสกุล .mjs',
+      'CJS สามารถ require() โมดูล ESM ได้แม้โมดูลนั้นจะใช้ top-level await',
       'ESM ไม่สามารถ import โมดูล CJS ได้ในทุกกรณี',
-      'ESM สามารถ import โมดูล CJS ได้; CJS ไม่สามารถ require() โมดูล ESM ได้',
+      'ESM สามารถ import โมดูล CJS ได้ และตั้งแต่ Node 22.12 CJS ก็สามารถ require() โมดูล ESM ที่ไม่มี top-level await ได้',
       'ทั้งสองระบบทำงานร่วมกันได้อย่างสมบูรณ์ในทุกทิศทาง',
     ],
     answer: 2,
