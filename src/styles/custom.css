@@ -29,3 +29,110 @@
 .nr__code { width:100%; min-height:150px; font-family:ui-monospace,monospace; font-size:.85rem; padding:.5rem; border:0; border-top:1px solid var(--sl-color-gray-5); background:var(--sl-color-bg); color:var(--sl-color-text); resize:vertical; }
 .nr__out { width:100%; min-height:90px; border:0; border-top:1px solid var(--sl-color-gray-5); background:#fff; }
 .nr__hint { margin:0; padding:.4rem .6rem; font-size:.78rem; opacity:.75; border-top:1px solid var(--sl-color-gray-5); }
+
+/* ---- Read mode base (layout) ---- */
+.readmode-toggle { position: fixed; right: 1rem; bottom: 1rem; z-index: 100; font-size: .8rem; font-weight: 600; cursor: pointer; padding: .45rem .8rem; border-radius: 999px; border: 1px solid var(--sl-color-gray-5); background: var(--sl-color-bg-nav, var(--sl-color-black)); color: var(--sl-color-text); box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+.readmode-toggle:hover { border-color: var(--sl-color-accent); color: var(--sl-color-accent-high); }
+html.read-mode .sidebar, html.read-mode .sidebar-pane, html.read-mode .right-sidebar-container, html.read-mode .right-sidebar, html.read-mode starlight-toc, html.read-mode mobile-starlight-toc { display: none !important; }
+html.read-mode .main-frame { padding-inline-start: 0 !important; padding-top: 0 !important; }
+html.read-mode .main-pane { width: 100%; }
+html.read-mode .sl-container, html.read-mode .sl-markdown-content { max-width: 50rem; margin-inline: auto; }
+
+/* ---- Collapsible sidebar (whole-sidebar toggle) ---- */
+.sidebar-collapse-toggle { display: none; }
+@media (min-width: 50rem) {
+  .sidebar-collapse-toggle {
+    position: fixed; top: 50%; left: var(--sl-sidebar-width, 18.75rem);
+    transform: translate(-50%, -50%); z-index: 90;
+    width: 1.85rem; height: 1.85rem; padding: 0; border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; line-height: 1; cursor: pointer;
+    border: 1px solid var(--sl-color-gray-5);
+    background: var(--sl-color-bg-nav, var(--sl-color-bg));
+    color: var(--sl-color-text);
+    box-shadow: 0 2px 10px rgba(0,0,0,.28);
+    transition: left .16s ease, color .16s ease, border-color .16s ease;
+  }
+  .sidebar-collapse-toggle:hover { border-color: var(--sl-color-accent); color: var(--sl-color-accent-high); }
+  html.sidebar-collapsed .sidebar-collapse-toggle { left: 0.6rem; transform: translateY(-50%); }
+  html.sidebar-collapsed .sidebar,
+  html.sidebar-collapsed .sidebar-pane { display: none !important; }
+  html.sidebar-collapsed .main-frame { padding-inline-start: 0 !important; }
+}
+html.read-mode .sidebar-collapse-toggle { display: none !important; }
+@media (min-width: 50rem) {
+  mobile-starlight-toc { display: none !important; }
+}
+
+/* ---- Paper read mode ---- */
+/* Adaptive paper: cream day / candlelight night. Scoped under html.read-mode
+   so normal mode is untouched. Starlight resolves data-theme to light|dark. */
+html.read-mode[data-theme='light'] {
+  --sl-color-bg: #f2e7d0;
+  --sl-color-bg-nav: #ecdfc2;
+  --sl-color-bg-inline-code: #e7d9bc;
+  --sl-color-text: #43382a;
+  --sl-color-white: #332a1e;
+  --sl-color-black: #f2e7d0;
+  --sl-color-gray-1: #3a3023;
+  --sl-color-gray-2: #4a3f30;
+  --sl-color-gray-3: #6b5d48;
+  --sl-color-gray-4: #8a7a60;
+  --sl-color-gray-5: #c9b990;
+  --sl-color-gray-6: #eadfc6;
+  --sl-color-gray-7: #eee3cc;
+  --sl-color-hairline-light: #dccda8;
+  --sl-color-hairline: #dccda8;
+  --sl-color-hairline-shade: #d4c49c;
+  --sl-color-accent-low: #e7d9bc;
+  --sl-color-accent: #7a4f1d;
+  --sl-color-accent-high: #5c3a12;
+  --sl-color-text-accent: #7a4f1d;
+  --paper-code-bg: #eadfc6;
+  --paper-code-border: #dccda8;
+}
+html.read-mode[data-theme='dark'] {
+  --sl-color-bg: #252019;
+  --sl-color-bg-nav: #2b251d;
+  --sl-color-bg-inline-code: #322b22;
+  --sl-color-text: #d8ccb4;
+  --sl-color-white: #e6dcc6;
+  --sl-color-black: #252019;
+  --sl-color-gray-1: #e2d7c0;
+  --sl-color-gray-2: #cfc3aa;
+  --sl-color-gray-3: #a89a7e;
+  --sl-color-gray-4: #7d715c;
+  --sl-color-gray-5: #4a4234;
+  --sl-color-gray-6: #2f2921;
+  --sl-color-gray-7: #2b251d;
+  --sl-color-hairline-light: #3a3328;
+  --sl-color-hairline: #3a3328;
+  --sl-color-hairline-shade: #201b15;
+  --sl-color-accent-low: #3a2f1d;
+  --sl-color-accent: #d0a35c;
+  --sl-color-accent-high: #e2bd7f;
+  --sl-color-text-accent: #d0a35c;
+  --paper-code-bg: #2f2921;
+  --paper-code-border: #3a3328;
+}
+/* Serif reading type; Thai text falls back to the system Thai font. */
+html.read-mode .sl-markdown-content,
+html.read-mode .sl-markdown-content :is(h1, h2, h3, h4, h5, h6),
+html.read-mode .content-panel h1 {
+  font-family: 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+}
+html.read-mode .sl-markdown-content {
+  font-size: 1.0625rem;
+  line-height: 1.75;
+}
+/* Code blocks sit on paper-tinted panels (beats Expressive Code theme bg). */
+html.read-mode .sl-markdown-content pre {
+  background: var(--paper-code-bg) !important;
+  border: 1px solid var(--paper-code-border);
+}
+/* Toggle button matches the paper */
+html.read-mode .readmode-toggle {
+  background: var(--sl-color-bg-nav);
+  color: var(--sl-color-text);
+  border-color: var(--paper-code-border);
+}

@@ -8,8 +8,8 @@ import preact from '@astrojs/preact';
 export default defineConfig({
   // GitHub Pages project site. Update `site` to your GitHub username and `base`
   // to your repo name if they differ.
-  site: 'https://avetavos.github.io',
-  base: '/nodejs-deep-dive',
+  site: 'https://deep-dive.avetavos.com',
+  base: '/nodejs',
   output: 'static',
   integrations: [starlight({
       title: 'Node.js Deep Dive',
@@ -19,6 +19,9 @@ export default defineConfig({
         th: { label: 'ไทย', lang: 'th' },
       },
       customCss: ['./src/styles/custom.css'],
+      head: [
+        { tag: 'script', attrs: { type: 'module', src: '/nodejs/enhance.js' } },
+      ],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/avetavos/nodejs-deep-dive' }],
       sidebar: [
         { label: 'JavaScript Essentials', items: [{ autogenerate: { directory: 'js-essentials' } }] },
