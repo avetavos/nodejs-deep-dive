@@ -12,10 +12,10 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## แกนหลักของ event-driven model ของ Node
 
-`EventEmitter` (จาก `node:events`) คือ class ที่ขับเคลื่อน I/O object เกือบทุกตัวใน Node.js HTTP server, TCP sockets, file streams, child processes และ library ของ third-party หลายตัวล้วน extend `EventEmitter` การเข้าใจมันหมายถึงการเข้าใจวิธีที่ Node สื่อสารระหว่าง components
+`EventEmitter` (จาก `node:events`) คือ class ที่ขับเคลื่อน I/O object เกือบทุกตัวใน Node.js HTTP server, TCP sockets, file streams, child processes และ library ของ third-party หลายตัวล้วน extend `EventEmitter` การเข้าใจ class นี้หมายถึงการเข้าใจวิธีที่ Node สื่อสารระหว่าง components
 
 <Callout title="EventEmitter คือแกนหลักของ Node's streams, HTTP และอื่นๆ">
-`http.Server`, `net.Socket`, `fs.ReadStream` — ทั้งหมดนี้ extend `EventEmitter` เมื่อ request มาถึง server จะ emit `'request'` เมื่อ socket หลุดการเชื่อมต่อ มัน emit `'close'` การเรียนรู้ `EventEmitter` คือการเรียนรู้ communication contract พื้นฐานของ Node.js
+`http.Server`, `net.Socket`, `fs.ReadStream` — ทั้งหมดนี้ extend `EventEmitter` เมื่อ request มาถึง server จะ emit `'request'` เมื่อ socket หลุดการเชื่อมต่อ ก็ emit `'close'` การเรียนรู้ `EventEmitter` คือการเรียนรู้ communication contract พื้นฐานของ Node.js
 </Callout>
 
 ## การใช้งานพื้นฐาน: on, emit, removeListener

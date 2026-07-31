@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## async function
 
-คีย์เวิร์ด `async` หน้าการประกาศฟังก์ชันทำให้มันเป็น **async function** ฟังก์ชัน async คืน Promise เสมอ — แม้คุณจะ `return` ค่าธรรมดา มันจะถูกห่อด้วย `Promise.resolve(value)` โดยอัตโนมัติ
+คีย์เวิร์ด `async` หน้าการประกาศฟังก์ชันทำให้กลายเป็น **async function** ฟังก์ชัน async คืน Promise เสมอ — แม้คุณจะ `return` ค่าธรรมดา ค่านั้นจะถูกห่อด้วย `Promise.resolve(value)` โดยอัตโนมัติ
 
 ```js
 async function greet() {
@@ -58,7 +58,7 @@ var a = await fetchA();  // รอ
 var b = await fetchB();  // แล้วรออีกครั้ง
 ```
 
-หากต้องการรันทั้งสองพร้อมกัน ให้เริ่ม Promise ก่อนแล้ว await มันพร้อมกัน:
+หากต้องการรันทั้งสองพร้อมกัน ให้เริ่ม Promise ก่อนแล้ว await พร้อมกัน:
 
 ```js
 var [a, b] = await Promise.all([fetchA(), fetchB()]);
@@ -66,7 +66,7 @@ var [a, b] = await Promise.all([fetchA(), fetchB()]);
 
 ## เดโมที่รันได้
 
-สนิปเป็ตด้านล่างใช้ตัวช่วย `fakeFetch` (อิง setTimeout) เพื่อจำลองการเรียก async มันเรียกแบบเรียงลำดับก่อน แล้วเรียกทั้งสองแบบขนานด้วย `Promise.all`
+สนิปเป็ตด้านล่างใช้ตัวช่วย `fakeFetch` (อิง setTimeout) เพื่อจำลองการเรียก async โดยเรียกแบบเรียงลำดับก่อน แล้วเรียกทั้งสองแบบขนานด้วย `Promise.all`
 
 export const asyncAwaitCode = `
 function fakeFetch(label) {

@@ -11,7 +11,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## package.json คืออะไร?
 
-`package.json` คือไฟล์ manifest ที่อยู่ที่ root ของทุกโปรเจกต์ Node.js มันเก็บข้อมูลสำคัญเกี่ยวกับโปรเจกต์ของคุณ: ชื่อ, เวอร์ชัน, dependencies, scripts, และอีกมากมาย npm ใช้ไฟล์นี้เพื่อติดตั้ง dependencies, รัน scripts, และเผยแพร่แพ็คเกจไปยัง registry
+`package.json` คือไฟล์ manifest ที่อยู่ที่ root ของทุกโปรเจกต์ Node.js ไฟล์นี้เก็บข้อมูลสำคัญเกี่ยวกับโปรเจกต์ของคุณ: ชื่อ, เวอร์ชัน, dependencies, scripts, และอีกมากมาย npm ใช้ไฟล์นี้เพื่อติดตั้ง dependencies, รัน scripts, และเผยแพร่แพ็คเกจไปยัง registry
 
 ## ฟิลด์สำคัญ
 
@@ -60,7 +60,7 @@ npm ใช้ **Semantic Versioning (semver)** สำหรับ version constr
 | `>=4.0.0` | เวอร์ชัน 4.0.0 ขึ้นไป | ไม่มีขีดบน |
 | `*` | เวอร์ชันใดก็ได้ | ไม่แนะนำใน production |
 
-`^` (caret) คือ range ที่ใช้บ่อยที่สุด — มันเลือก patch และ minor releases ที่ใหม่กว่าโดยอัตโนมัติในขณะที่ lock major version เพื่อหลีกเลี่ยง breaking changes
+`^` (caret) คือ range ที่ใช้บ่อยที่สุด — เพราะเลือก patch และ minor releases ที่ใหม่กว่าโดยอัตโนมัติ แต่ lock major version เพื่อหลีกเลี่ยง breaking changes
 
 ## การสร้าง package.json ด้วย npm init
 

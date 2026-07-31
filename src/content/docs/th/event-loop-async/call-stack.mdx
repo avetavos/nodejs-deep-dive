@@ -1,6 +1,6 @@
 ---
 title: 'The Call Stack'
-description: 'โค้ด synchronous ทำงานบน call stack อย่างไร และทำไมการบล็อกมันจึงสำคัญ'
+description: 'โค้ด synchronous ทำงานบน call stack อย่างไร และทำไมการบล็อก stack จึงสำคัญ'
 sidebar:
   order: 2
 ---
@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Call stack คืออะไร?
 
-**Call stack** เป็นโครงสร้างข้อมูลแบบ LIFO (Last In, First Out) ที่ติดตามฟังก์ชันที่กำลังทำงานอยู่ ทุกครั้งที่ฟังก์ชันถูกเรียก จะมี **เฟรม** (frame) ใหม่ถูก push ขึ้น stack เมื่อฟังก์ชัน return เฟรมของมันจะถูก pop ออก
+**Call stack** เป็นโครงสร้างข้อมูลแบบ LIFO (Last In, First Out) ที่ติดตามฟังก์ชันที่กำลังทำงานอยู่ ทุกครั้งที่ฟังก์ชันถูกเรียก จะมี **เฟรม** (frame) ใหม่ถูก push ขึ้น stack เมื่อฟังก์ชัน return เฟรมนั้นจะถูก pop ออก
 
 ```js
 function greet(name) {
@@ -101,10 +101,10 @@ export const callStackQuiz = [
   {
     q: 'callback ของ setTimeout เกิดอะไรขึ้นขณะที่ลูป synchronous ที่ยาวนานกำลังทำงาน?',
     options: [
-      'มันทำงานในเธรดแยกและทำงานตรงเวลา',
-      'มันถูกยกเลิกอัตโนมัติ',
-      'มันรอจนกว่า call stack ว่าง แล้วค่อยทำงาน — อาจล่าช้า',
-      'มันทำงานทันทีหลังลูปเริ่ม',
+      'ทำงานในเธรดแยกและทำงานตรงเวลา',
+      'ถูกยกเลิกอัตโนมัติ',
+      'รอจนกว่า call stack ว่าง แล้วค่อยทำงาน — อาจล่าช้า',
+      'ทำงานทันทีหลังลูปเริ่ม',
     ],
     answer: 2,
   },

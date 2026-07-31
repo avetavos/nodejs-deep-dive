@@ -79,7 +79,7 @@ boundIntroduce('Hi', '?');            // 'Hi, I am Carol?'
 
 ## Arrow functions และ this
 
-Arrow functions **ไม่มี `this` ของตัวเอง** พวกมัน inherit `this` จาก **lexical enclosing scope** — function หรือ module scope รอบนอกที่จุดที่เขียน
+Arrow functions **ไม่มี `this` ของตัวเอง** แต่ inherit `this` จาก **lexical enclosing scope** — function หรือ module scope รอบนอกที่จุดที่เขียน
 
 ```js
 const timer2 = {

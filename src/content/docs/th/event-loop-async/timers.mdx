@@ -19,13 +19,13 @@ var id = setTimeout(function() {
   console.log('Runs after at least 100 ms');
 }, 100);
 
-// ยกเลิกก่อนมันทำงาน:
+// ยกเลิกก่อนที่จะทำงาน:
 clearTimeout(id);
 ```
 
 ## setInterval
 
-`setInterval(fn, delay)` จัดคิวให้ `fn` ซ้ำ ๆ ทุก `delay` ms ใช้ `clearInterval` เพื่อหยุดมัน
+`setInterval(fn, delay)` จัดคิวให้ `fn` ซ้ำ ๆ ทุก `delay` ms ใช้ `clearInterval` เพื่อหยุด
 
 ```js
 var count = 0;
@@ -38,7 +38,7 @@ var id = setInterval(function() {
 
 ## setTimeout ที่มี delay เป็น 0
 
-`setTimeout(fn, 0)` **ไม่ได้** หมายถึง "รันทันที" มันจัดคิว `fn` เป็น macrotask microtask ที่ค้างอยู่ (callback ของ Promise, `queueMicrotask`) จะทำงานก่อน
+`setTimeout(fn, 0)` **ไม่ได้** หมายถึง "รันทันที" แต่จัดคิว `fn` เป็น macrotask microtask ที่ค้างอยู่ (callback ของ Promise, `queueMicrotask`) จะทำงานก่อน
 
 ```js
 setTimeout(function() { console.log('Timer'); }, 0);
@@ -75,7 +75,7 @@ Promise.resolve().then(function() {
 ผลลัพธ์จะเป็นเสมอ: `Promise ran first`, แล้ว `Timer ran second`
 
 <Callout title="delay คือค่าต่ำสุด ไม่ใช่การรับประกัน">
-`setTimeout(fn, 100)` หมายถึง callback ทำงานไม่เร็วกว่า 100 ms แต่ถ้า call stack ไม่ว่างหรือมี microtask อื่นกำลังทำงาน มันอาจทำงานช้ากว่านั้น อย่าพึ่งพาความแม่นยำของ timer แบบเป๊ะ ๆ เพื่อความถูกต้องของโปรแกรม
+`setTimeout(fn, 100)` หมายถึง callback ทำงานไม่เร็วกว่า 100 ms แต่ถ้า call stack ไม่ว่างหรือมี microtask อื่นกำลังทำงาน callback อาจทำงานช้ากว่านั้น อย่าพึ่งพาความแม่นยำของ timer แบบเป๊ะ ๆ เพื่อความถูกต้องของโปรแกรม
 </Callout>
 
 export const timersQuiz = [
@@ -83,7 +83,7 @@ export const timersQuiz = [
     q: 'setTimeout(fn, 0) รับประกันหรือไม่ว่าจะรัน fn ทันทีหลังโค้ด synchronous ปัจจุบัน?',
     options: [
       'ใช่ — delay 0 หมายถึงรันเร็วที่สุดก่อนอย่างอื่น',
-      'ไม่ — มันจัดคิว fn เป็น macrotask; microtask ที่ค้างอยู่ทำงานก่อน',
+      'ไม่ — แต่จัดคิว fn เป็น macrotask; microtask ที่ค้างอยู่ทำงานก่อน',
       'ใช่ — แต่เฉพาะเมื่อไม่มี timer อื่นค้างอยู่',
       'ไม่ — setTimeout รออย่างน้อย 4 ms เสมอไม่ว่าค่า delay จะเป็นเท่าใด',
     ],

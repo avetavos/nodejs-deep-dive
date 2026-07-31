@@ -60,7 +60,7 @@ setImmediate(function() {
 });
 ```
 
-callback ของ `process.nextTick` ถูกระบายก่อน microtask queue ส่วน `setImmediate` ทำงานในเฟส check ของ event loop ของ Node เนื่องจากทั้งสองต้องใช้ Node runtime จึงใช้ไม่ได้ในตัวรันในเบราว์เซอร์ด้านล่าง — ให้รันในเครื่องหรือใน StackBlitz
+callback ของ `process.nextTick` ถูกระบายก่อน microtask queue ส่วน `setImmediate` ทำงานในเฟส check ของ event loop ของ Node เนื่องจากทั้งสองต้องใช้ Node runtime จึงใช้ไม่ได้ในตัวรันใน browser ด้านล่าง — ให้รันในเครื่องหรือใน StackBlitz
 
 ## เดโมจัดลำดับที่รันได้
 
@@ -128,7 +128,7 @@ export const microMacroQuiz = [
       'ในรอบ event loop ถัดไป หลัง macrotask ถัดไป',
       'ระหว่างการระบาย microtask รอบปัจจุบัน — ก่อน macrotask ถัดไป',
       'ทันที โดยขัดจังหวะ microtask ปัจจุบัน',
-      'มันถูกทิ้งเงียบ ๆ',
+      'ถูกทิ้งเงียบ ๆ',
     ],
     answer: 1,
   },

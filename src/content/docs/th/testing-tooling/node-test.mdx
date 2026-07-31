@@ -68,7 +68,7 @@ node --test string-utils.test.js
 
 ## การทดสอบแบบ Async
 
-ส่ง `async` function ให้กับ `test` หรือ `it` ได้เลย runner จะ await มัน — ถ้า promise ถูก reject การทดสอบจะล้มเหลว:
+ส่ง `async` function ให้กับ `test` หรือ `it` ได้เลย runner จะ await ให้ — ถ้า promise ถูก reject การทดสอบจะล้มเหลว:
 
 ```js
 import { test } from 'node:test';

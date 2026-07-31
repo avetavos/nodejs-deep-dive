@@ -15,7 +15,7 @@ TypeScript ไม่ได้รับการรองรับโดยตร
 
 ### ตัวเลือกที่ 1: `--experimental-strip-types` (Node 20.6+ / stable Node 22)
 
-Node สามารถลบ type annotations ของ TypeScript ออกเมื่อ startup โดยไม่ต้องใช้ package เพิ่ม มัน **ไม่ได้ตรวจสอบ type** — แค่ลบ types แล้วรัน JavaScript:
+Node สามารถลบ type annotations ของ TypeScript ออกเมื่อ startup โดยไม่ต้องใช้ package เพิ่ม แต่ **ไม่ได้ตรวจสอบ type** — แค่ลบ types แล้วรัน JavaScript:
 
 ```bash
 # Node 22 — stable

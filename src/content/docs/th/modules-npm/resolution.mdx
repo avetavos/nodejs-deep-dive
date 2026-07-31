@@ -65,7 +65,7 @@ import cjsUtils from './utils.cjs'; // ✅ default = module.exports object
 import { helper } from './helpers.mjs'; // ✅
 ```
 
-เดิมที CJS ไม่สามารถ `require()` โมดูล ESM ได้ — จะ throw `ERR_REQUIRE_ESM` — เพราะ ESM loading เป็นแบบ static และ asynchronous ในขณะที่ CJS loading เป็นแบบ synchronous แต่ตั้งแต่ Node 22.12 (และ 20.19 LTS) เป็นต้นมา `require()` โมดูล ESM ทำงานได้เป็นค่าเริ่มต้น ตราบใดที่โมดูลนั้นไม่มี top-level `await` ส่วนโมดูลที่ใช้ top-level `await` ยังคง throw `ERR_REQUIRE_ASYNC_MODULE` เพราะการเรียก `require()` แบบ synchronous ไม่สามารถรอการประมวลผลแบบ async ได้
+เดิมที CJS ไม่สามารถ `require()` โมดูล ESM ได้ — จะ throw `ERR_REQUIRE_ESM` — เพราะ ESM loading เป็นแบบ static และ asynchronous ส่วน CJS loading เป็นแบบ synchronous แต่ตั้งแต่ Node 22.12 (และ 20.19 LTS) เป็นต้นมา `require()` โมดูล ESM ทำงานได้เป็นค่าเริ่มต้น ตราบใดที่โมดูลนั้นไม่มี top-level `await` ส่วนโมดูลที่ใช้ top-level `await` ยังคง throw `ERR_REQUIRE_ASYNC_MODULE` เพราะการเรียก `require()` แบบ synchronous ไม่สามารถรอการประมวลผลแบบ async ได้
 
 ## exports map
 

@@ -103,7 +103,7 @@ server.listen(3000, function() {
 
 ## หมายเหตุเกี่ยวกับ http.request
 
-ก่อน `fetch` การทำ outbound HTTP request ใน Node.js ใช้ `http.request()` จาก module `node:http` ซึ่งเป็น lower-level API ที่ใช้ stream คุณอาจพบใน codebase เก่า:
+ก่อน `fetch` การทำ outbound HTTP request ใน Node.js ใช้ `http.request()` จาก module `node:http` ที่เป็น lower-level API ใช้ stream คุณอาจพบใน codebase เก่า:
 
 ```js
 // pattern เก่า — เก็บ chunk ด้วยตนเอง
@@ -138,7 +138,7 @@ export const requestsQuiz = [
     options: [
       'true — response ที่กลับมาคือ "OK"',
       'false — ok เป็น true เฉพาะ status 200-299',
-      'มัน throw error',
+      'throw error',
       'undefined',
     ],
     answer: 1,

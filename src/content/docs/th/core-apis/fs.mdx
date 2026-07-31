@@ -21,7 +21,7 @@ Node มาพร้อม filesystem operations เดียวกันใน 
 | Promise (async) | `import fs from 'node:fs/promises'` | server code ทั้งหมดที่เขียนใหม่ |
 
 <Callout title="ใช้ fs/promises ใน servers">
-`fs.readFileSync` และ function เหล่านั้น block event loop ทั้งหมด — ไม่มี request อื่นใดที่จะถูกจัดการได้ขณะที่ OS กำลังอ่านไฟล์ ใน server process ให้ใช้ `node:fs/promises` API (หรือ callback-based streams) เสมอ เพื่อให้ event loop ว่างพอรับ request พร้อมกัน sync APIs ยอมรับได้ใน CLI scripts หรือตอน startup ของ process (ก่อนที่ server จะเริ่มรับ requests)
+`fs.readFileSync` และ function เหล่านั้น block event loop ทั้งหมด — ไม่มี request อื่นได้รับการจัดการเลยขณะที่ OS กำลังอ่านไฟล์ ใน server process ให้ใช้ `node:fs/promises` API (หรือ callback-based streams) เสมอ เพื่อให้ event loop ว่างพอรับ request พร้อมกัน sync APIs ยอมรับได้ใน CLI scripts หรือตอน startup ของ process (ก่อนที่ server จะเริ่มรับ requests)
 </Callout>
 
 ## การอ่านไฟล์
@@ -129,20 +129,20 @@ export const fsQuiz = [
   {
     q: 'ทำไมควรหลีกเลี่ยง fs.readFileSync ใน server request handler?',
     options: [
-      'มันต้องการ callback และไม่สามารถใช้กับ async/await ได้',
-      'มัน block event loop ทำให้ requests อื่นทั้งหมดไม่สามารถจัดการได้',
-      'มัน deprecated ใน Node 20+',
-      'มันทำงานได้เฉพาะบน Linux เท่านั้น',
+      'ต้องการ callback และไม่สามารถใช้กับ async/await ได้',
+      'block event loop ทำให้ requests อื่นทั้งหมดไม่สามารถจัดการได้',
+      'deprecated ใน Node 20+',
+      'ทำงานได้เฉพาะบน Linux เท่านั้น',
     ],
     answer: 1,
   },
   {
     q: 'fs.writeFile ทำอะไรถ้าไฟล์ปลายทางมีอยู่แล้ว?',
     options: [
-      'มัน throw error — ต้องลบไฟล์ก่อน',
-      'มัน append ต่อจากเนื้อหาที่มีอยู่',
-      'มัน replace เนื้อหาไฟล์ทั้งหมด',
-      'มันสร้าง backup และเขียนไปยังไฟล์ใหม่',
+      'throw error — ต้องลบไฟล์ก่อน',
+      'append ต่อจากเนื้อหาที่มีอยู่',
+      'replace เนื้อหาไฟล์ทั้งหมด',
+      'สร้าง backup และเขียนไปยังไฟล์ใหม่',
     ],
     answer: 2,
   },
