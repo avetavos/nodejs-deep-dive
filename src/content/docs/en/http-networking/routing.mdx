@@ -82,6 +82,19 @@ server.listen(3000, function() {
 
 <NodeRunner client:visible code={urlParsingCode} node />
 
+## Matching paths with URLPattern
+
+Hand-written `startsWith` checks break as soon as a route has parameters. Node 24 makes the web-standard `URLPattern` a global, so you can declare routes like `/users/:id` and read the captured groups. (The legacy `url.parse()` is runtime-deprecated since Node 24 — use `URL` and `URLPattern` instead.)
+
+```js
+const userRoute = new URLPattern({ pathname: '/users/:id' });
+
+const match = userRoute.exec('http://localhost:3000/users/42');
+console.log(match.pathname.groups.id);                          // '42'
+
+console.log(userRoute.test('http://localhost:3000/posts/1'));   // false
+```
+
 ## A tiny router object
 
 Once you have more than a few routes, extract them into a router map. This is exactly the pattern that Express uses internally:

@@ -20,7 +20,7 @@ Node.js รองรับสองระบบ module ที่ไม่สา�
 | นามสกุลไฟล์ | `.mjs` หรือ `.js` พร้อม `"type":"module"` | `.cjs` หรือ `.js` ไม่มี `"type":"module"` |
 | การโหลด | Static วิเคราะห์เมื่อ parse | Dynamic รันเมื่อ runtime |
 | Top-level `await` | รองรับ | ไม่รองรับ |
-| Default ใน Node 20+ | ใช่ (opt-in) | Legacy default |
+| Default ใน Node 24+ | ใช่ เมื่อมี `"type": "module"` — และ CJS ก็ `require()` ได้ | Legacy default |
 
 ## CommonJS (CJS)
 

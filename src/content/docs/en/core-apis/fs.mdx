@@ -114,6 +114,26 @@ demo().catch(console.error);
 
 <NodeRunner client:visible code={fsStatCode} node />
 
+## Globbing and cleanup in modern Node
+
+Two newer APIs retire old dependencies. `fs.glob` (stable in Node 22+) replaces the `glob` package, and file handles support `await using` (Node 24+) so they close themselves:
+
+```js
+import { glob, open } from 'node:fs/promises';
+
+// Find files without the `glob` package
+for await (const file of glob('src/**/*.test.js')) {
+  console.log(file);
+}
+
+// The handle is closed when the block exits — even if it throws
+{
+  await using fh = await open('./config.json');
+  const text = await fh.readFile('utf8');
+  console.log(JSON.parse(text).port);
+}
+```
+
 ## Synchronous reads — startup only
 
 ```js
@@ -131,7 +151,7 @@ export const fsQuiz = [
     options: [
       'It requires a callback and cannot be used with async/await',
       'It blocks the event loop, preventing all other requests from being handled',
-      'It is deprecated in Node 20+',
+      'It is deprecated in Node 24+',
       'It only works on Linux systems',
     ],
     answer: 1,

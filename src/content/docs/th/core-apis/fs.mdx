@@ -114,6 +114,26 @@ demo().catch(console.error);
 
 <NodeRunner client:visible code={fsStatCode} node />
 
+## Glob และการเคลียร์ handle ใน Node สมัยใหม่
+
+API ใหม่สองตัวช่วยปลด dependency เก่า: `fs.glob` (stable ใน Node 22+) แทน package `glob` และ file handle รองรับ `await using` (Node 24+) จึงปิดตัวเองได้:
+
+```js
+import { glob, open } from 'node:fs/promises';
+
+// หาไฟล์โดยไม่ต้องใช้ package `glob`
+for await (const file of glob('src/**/*.test.js')) {
+  console.log(file);
+}
+
+// handle ถูกปิดเมื่อออกจาก block — แม้จะ throw
+{
+  await using fh = await open('./config.json');
+  const text = await fh.readFile('utf8');
+  console.log(JSON.parse(text).port);
+}
+```
+
 ## Synchronous reads — เฉพาะตอน startup
 
 ```js
@@ -131,7 +151,7 @@ export const fsQuiz = [
     options: [
       'ต้องการ callback และไม่สามารถใช้กับ async/await ได้',
       'block event loop ทำให้ requests อื่นทั้งหมดไม่สามารถจัดการได้',
-      'deprecated ใน Node 20+',
+      'deprecated ใน Node 24+',
       'ทำงานได้เฉพาะบน Linux เท่านั้น',
     ],
     answer: 1,

@@ -13,7 +13,17 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 Writing code is only half the job. Knowing how to **test**, **debug**, **measure**, and **configure** your Node.js environment turns a working script into a maintainable, production-ready application.
 
-Node 18+ ships a built-in test runner, a powerful inspector protocol, and `perf_hooks` for timing — meaning you can do a lot without installing anything.
+Node 24 (the active LTS) ships a built-in test runner, type stripping for `.ts` files, a powerful inspector protocol, and `perf_hooks` for timing — meaning you can do a lot without installing anything.
+
+## Node release lines in 2026
+
+| Line | Status (Sep 2026) | Use it for |
+|------|-------------------|-----------|
+| Node 22 | Maintenance LTS (until Apr 2027) | Existing production apps — `require(esm)`, type stripping since 22.18 |
+| **Node 24** | **Active LTS** (LTS since Oct 2025) | New production apps — this course targets it |
+| Node 26 | Current (LTS from Oct 2026) | Trying Temporal, `Iterator.concat()`, Undici 8 |
+
+Node 18 and 20 are end-of-life. When a lesson says "Node 22+", the feature exists on every supported line.
 
 ## What this module covers
 
@@ -37,9 +47,9 @@ Node 18+ ships a built-in test runner, a powerful inspector protocol, and `perf_
 │                            Biome                │
 │       │                                         │
 │       ▼                                         │
-│  TypeScript runner   ──►  tsx, ts-node,         │
-│                            --experimental-      │
-│                            strip-types          │
+│  TypeScript runner   ──►  node file.ts (built-  │
+│                            in type stripping);  │
+│                            tsx for enum etc.    │
 │       │                                         │
 │       ▼                                         │
 │  Test runner         ──►  node:test (built-in)  │
@@ -63,8 +73,11 @@ Node's built-ins cover most basic needs. Here is a quick decision guide:
 # Zero dependencies — use the built-in runner
 node --test src/**/*.test.js
 
-# TypeScript without a build step (Node 20.6+)
-node --experimental-strip-types src/app.ts
+# TypeScript without a build step (Node 22.18+ / 24 — type stripping is on by default)
+node src/app.ts
+
+# Run a package.json script without npm (Node 22+)
+node --run dev
 
 # Faster HMR + watch mode
 npx tsx watch src/app.ts
@@ -99,12 +112,12 @@ export const indexQuiz = [
     answer: 1,
   },
   {
-    q: 'What flag lets Node 20.6+ run TypeScript files directly without a build step?',
+    q: 'How do you run a TypeScript file directly on Node 24 without a build step?',
     options: [
-      '--ts-mode',
-      '--allow-typescript',
-      '--experimental-strip-types',
-      '--run-ts',
+      '`node --ts-mode src/app.ts`',
+      '`node --allow-typescript src/app.ts`',
+      '`node src/app.ts` — type stripping is on by default',
+      '`node --run-ts src/app.ts`',
     ],
     answer: 2,
   },

@@ -118,6 +118,19 @@ http.get('http://example.com', function(res) {
 
 สำหรับ code ใหม่ ให้ใช้ global `fetch` — สะอาดกว่า ใช้ Promise และทำงานได้เหมือนกันทั้งใน browser และ Node
 
+## WebSocket ก็เป็น global เช่นกัน
+
+ตั้งแต่ Node 22 client `WebSocket` แบบเดียวกับใน browser ใช้ได้โดยไม่ต้อง import โค้ดฝั่ง client ชุดเดียวจึงรันได้ทั้งใน browser และบน server:
+
+```js
+const ws = new WebSocket('wss://echo.websocket.org');
+ws.addEventListener('open', function() { ws.send('hello'); });
+ws.addEventListener('message', function(event) {
+  console.log(event.data);
+  ws.close();
+});
+```
+
 <Callout title="fetch มีใน Node 18 แล้ว — ไม่ต้องใช้ axios สำหรับงานพื้นฐาน">
 Node.js 18 เพิ่ม global `fetch` API ทำให้คุณไม่จำเป็นต้องใช้ `axios`, `node-fetch` หรือ `got` สำหรับการ fetch JSON ทั่วไป สำหรับ production อาจยังต้องการ `axios` สำหรับฟีเจอร์อย่าง request interceptors, automatic retry หรือ CancelToken — แต่สำหรับการเรียนรู้และการ integration ง่าย ๆ built-in `fetch` เพียงพอแล้ว
 </Callout>

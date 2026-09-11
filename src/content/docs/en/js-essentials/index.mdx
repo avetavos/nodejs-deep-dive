@@ -23,7 +23,7 @@ This module covers the JavaScript fundamentals that trip up developers most in t
 | `this` and Context | Dynamic `this`, `call`/`apply`/`bind`, arrow functions |
 | Modules | ESM `import`/`export` vs CommonJS `require`, when to use each |
 
-Modern JavaScript means **ES2022 and later** throughout — `const`/`let`, arrow functions, destructuring, `async`/`await`, optional chaining, and native ES modules. This module uses Node 20+.
+Modern JavaScript means **ES2022 and later** throughout — `const`/`let`, arrow functions, destructuring, `async`/`await`, optional chaining, and native ES modules. This module targets Node 24 (the active LTS); everything also runs on Node 26.
 
 ## A first runnable demo
 
@@ -55,8 +55,27 @@ for (const lang of languages) {
 
 <NodeRunner client:visible code={indexDemoCode} />
 
+## Newer language features you will meet
+
+Node upgrades V8 with every major release, so the language keeps growing:
+
+- **Node 24** — `using` / `await using` for automatic resource cleanup, `RegExp.escape()`, `Error.isError()`, `Float16Array`.
+- **Node 26** — the **Temporal** date/time API is enabled by default, plus `Map.prototype.getOrInsert()` and `Iterator.concat()`.
+
+```js
+// Node 26: Temporal replaces error-prone Date arithmetic
+const due = Temporal.Now.plainDateISO().add({ days: 30 });
+console.log(due.toString()); // e.g. 2026-10-12
+
+// Node 24: using — the resource is disposed when the block exits
+{
+  using conn = openConnection();   // the object has a [Symbol.dispose]() method
+  conn.query('SELECT 1');
+}                                   // conn[Symbol.dispose]() runs here, even on throw
+```
+
 <Callout title="Modern JS throughout">
-This module uses ES2022+ syntax. If you see a feature you do not recognise, MDN Web Docs is your friend — the spec has not changed since Node 18 stabilised the V8 version that ships it.
+This module uses ES2022+ syntax. If you see a feature you do not recognise, MDN Web Docs is your friend — and the list above tells you which Node line first shipped it.
 </Callout>
 
 export const indexQuiz = [
@@ -75,7 +94,7 @@ export const indexQuiz = [
     options: [
       'ES5 only — for maximum compatibility',
       'ES2015 (ES6) only',
-      'ES2022 and later, running on Node 20+',
+      'ES2022 and later, running on Node 24+',
       'TypeScript — which is compiled down to ES3',
     ],
     answer: 2,

@@ -13,7 +13,17 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 การเขียนโค้ดเป็นเพียงครึ่งหนึ่งของงาน การรู้วิธี**ทดสอบ** **ดีบัก** **วัดผล** และ**ตั้งค่า**สภาพแวดล้อม Node.js จะเปลี่ยนสคริปต์ที่ทำงานได้ให้กลายเป็นแอปพลิเคชันที่ดูแลรักษาง่ายและพร้อม production
 
-Node 18+ มี test runner ในตัว, inspector protocol ที่ทรงพลัง, และ `perf_hooks` สำหรับจับเวลา ซึ่งหมายความว่าคุณทำได้มากโดยไม่ต้องติดตั้งอะไรเพิ่มเติม
+Node 24 (LTS ตัวปัจจุบัน) มี test runner ในตัว, type stripping สำหรับไฟล์ `.ts`, inspector protocol ที่ทรงพลัง, และ `perf_hooks` สำหรับจับเวลา ซึ่งหมายความว่าคุณทำได้มากโดยไม่ต้องติดตั้งอะไรเพิ่มเติม
+
+## สาย release ของ Node ในปี 2026
+
+| สาย | สถานะ (ก.ย. 2026) | ใช้กับอะไร |
+|-----|--------------------|-----------|
+| Node 22 | Maintenance LTS (ถึง เม.ย. 2027) | แอป production ที่มีอยู่แล้ว — `require(esm)`, type stripping ตั้งแต่ 22.18 |
+| **Node 24** | **Active LTS** (เป็น LTS ตั้งแต่ ต.ค. 2025) | แอป production ใหม่ — คอร์สนี้ยึดเวอร์ชันนี้ |
+| Node 26 | Current (เป็น LTS ตั้งแต่ ต.ค. 2026) | ลอง Temporal, `Iterator.concat()`, Undici 8 |
+
+Node 18 และ 20 หมดอายุ (end-of-life) แล้ว เมื่อบทเรียนบอกว่า "Node 22+" หมายถึงฟีเจอร์นั้นมีในทุกสายที่ยังรองรับ
 
 ## สิ่งที่โมดูลนี้ครอบคลุม
 
@@ -37,9 +47,9 @@ Node 18+ มี test runner ในตัว, inspector protocol ที่ทร�
 │                            Biome                │
 │       │                                         │
 │       ▼                                         │
-│  TypeScript runner   ──►  tsx, ts-node,         │
-│                            --experimental-      │
-│                            strip-types          │
+│  TypeScript runner   ──►  node file.ts (built-  │
+│                            in type stripping);  │
+│                            tsx for enum etc.    │
 │       │                                         │
 │       ▼                                         │
 │  Test runner         ──►  node:test (built-in)  │
@@ -63,8 +73,11 @@ Built-in ของ Node ครอบคลุมความต้องกา�
 # ไม่ต้องติดตั้ง dependency — ใช้ built-in runner
 node --test src/**/*.test.js
 
-# TypeScript โดยไม่ต้อง build (Node 20.6+)
-node --experimental-strip-types src/app.ts
+# TypeScript โดยไม่ต้อง build (Node 22.18+ / 24 — type stripping เปิดเป็นค่าเริ่มต้น)
+node src/app.ts
+
+# รัน script ใน package.json โดยไม่ผ่าน npm (Node 22+)
+node --run dev
 
 # HMR + watch mode ที่เร็วกว่า
 npx tsx watch src/app.ts
@@ -99,12 +112,12 @@ export const indexQuiz = [
     answer: 1,
   },
   {
-    q: 'flag ใดที่ทำให้ Node 20.6+ รันไฟล์ TypeScript ได้โดยตรงโดยไม่ต้อง build?',
+    q: 'บน Node 24 รันไฟล์ TypeScript โดยตรงโดยไม่ต้อง build ได้อย่างไร?',
     options: [
-      '--ts-mode',
-      '--allow-typescript',
-      '--experimental-strip-types',
-      '--run-ts',
+      '`node --ts-mode src/app.ts`',
+      '`node --allow-typescript src/app.ts`',
+      '`node src/app.ts` — type stripping เปิดเป็นค่าเริ่มต้น',
+      '`node --run-ts src/app.ts`',
     ],
     answer: 2,
   },

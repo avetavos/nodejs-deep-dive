@@ -118,6 +118,19 @@ http.get('http://example.com', function(res) {
 
 For new code, prefer the global `fetch` — it is cleaner, Promise-based, and isomorphic with browser code.
 
+## WebSocket is global too
+
+Since Node 22 the browser `WebSocket` client is available without an import, so the same client code runs in the browser and on the server:
+
+```js
+const ws = new WebSocket('wss://echo.websocket.org');
+ws.addEventListener('open', function() { ws.send('hello'); });
+ws.addEventListener('message', function(event) {
+  console.log(event.data);
+  ws.close();
+});
+```
+
 <Callout title="fetch is built in since Node 18 — no axios needed for basics">
 Node.js 18 added the global `fetch` API so you no longer need `axios`, `node-fetch`, or `got` for straightforward JSON fetching. For production use you may still want `axios` for features like request interceptors, automatic retry, or CancelToken — but for learning and simple integrations, the built-in `fetch` is all you need.
 </Callout>

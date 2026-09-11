@@ -1,6 +1,6 @@
 ---
 title: 'Built-in Test Runner'
-description: 'โมดูล node:test และ node:assert — การเขียนทดสอบโดยไม่ต้องพึ่ง dependency ภายนอก ด้วย test(), describe/it, และ node --test'
+description: 'โมดูล node:test และ node:assert — การเขียนทดสอบโดยไม่ต้องพึ่ง dependency ภายนอก ด้วย test(), describe/it, node --test รวมถึง mocking และ snapshot ที่มีในตัว'
 sidebar:
   order: 2
 ---
@@ -125,22 +125,51 @@ test('async: resolves to correct value', async function() {
 <NodeRunner client:visible code={nodeTestCode} node />
 
 <Callout title="Node มี built-in test runner มาตั้งแต่ v18 — ไม่ต้องติดตั้ง dependency เพิ่ม">
-คุณไม่จำเป็นต้องใช้ Jest, Mocha, หรือ Vitest เพื่อเขียนทดสอบใน Node.js `node:test` + `node:assert` ครอบคลุม unit tests, async tests, และ grouped suites ได้ครบถ้วนโดยไม่ต้องติดตั้งอะไร เพิ่ม third-party runner เมื่อคุณต้องการฟีเจอร์เฉพาะ เช่น snapshot testing, coverage UI, หรือ browser-environment simulation เท่านั้น
+คุณไม่จำเป็นต้องใช้ Jest, Mocha, หรือ Vitest เพื่อเขียนทดสอบใน Node.js `node:test` + `node:assert` ครอบคลุม unit tests, async tests, และ grouped suites ได้ครบถ้วนโดยไม่ต้องติดตั้งอะไร mocking และ snapshot testing ก็มีในตัวเช่นกัน เพิ่ม third-party runner เฉพาะเมื่อต้องการ coverage UI, browser-environment simulation หรือ ecosystem ของ plugin
 </Callout>
+
+## Mocking และ snapshot — stable และมีในตัว
+
+| ฟีเจอร์ | สถานะใน Node 24 / 26 |
+|---------|----------------------|
+| `mock.fn()`, `mock.method()`, `mock.timers`, `mock.module()` | Stable |
+| Snapshot testing — `t.assert.snapshot(value)` | Stable ตั้งแต่ 23.4 |
+| Code coverage | Experimental — `--experimental-test-coverage` |
+| `--watch` สำหรับ test | Experimental |
+| Test tags — `--experimental-test-tag-filter` | Early development (26.2+) |
+
+fake timers ช่วยให้ทดสอบ logic ของ retry และ timeout ได้โดยไม่ต้องรอจริง:
+
+```js
+import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('retries call the fetcher twice', async function(t) {
+  const fetcher = mock.fn(async function() { throw new Error('flaky'); });
+  mock.timers.enable({ apis: ['setTimeout'] });   // fake setTimeout
+
+  const pending = retry(fetcher, { attempts: 2, delayMs: 1000 }); // helper ของคุณเอง
+  mock.timers.tick(1000);                         // เดินนาฬิกาปลอมทันที
+  await assert.rejects(pending, /flaky/);
+  assert.equal(fetcher.mock.callCount(), 2);
+
+  mock.timers.reset();
+});
+```
 
 ## ฟีเจอร์เพิ่มเติม
 
 ```bash
-# Watch mode — รัน test ใหม่เมื่อไฟล์เปลี่ยน (Node 22+)
-node --test --watch
-
 # รันเฉพาะ test ที่ตรงกับ pattern
 node --test --test-name-pattern "Array"
 
-# รายงาน code coverage (Node 22+)
+# Watch mode — รัน test ใหม่เมื่อไฟล์เปลี่ยน (ยัง experimental ใน Node 26)
+node --test --watch
+
+# Code coverage — flag ยังเป็น --experimental-test-coverage ใน Node 24 / 26
 node --test --experimental-test-coverage
 
-# รัน test files แบบ parallel (ค่าเริ่มต้นใน Node 22+)
+# รัน test files แบบ parallel (ค่าเริ่มต้น); จำกัดจำนวน worker
 node --test --test-concurrency=4
 ```
 
@@ -181,9 +210,19 @@ export const nodeTestQuiz = [
       'ทำงานเร็วกว่า',
       'ใช้ strict equality (===) และหลีกเลี่ยงความผิดพลาดจาก type coercion',
       'รองรับ async assertions',
-      'เป็นเวอร์ชันเดียวที่มีใน Node 20+',
+      'เป็นเวอร์ชันเดียวที่มีใน Node 24+',
     ],
     answer: 1,
+  },
+  {
+    q: 'ฟีเจอร์ใดของ `node:test` ที่ยังต้องใช้ flag `--experimental-` ใน Node 24 และ 26?',
+    options: [
+      'Mocking ด้วย `mock.fn()`',
+      'Snapshot testing',
+      'Code coverage',
+      'การจัดกลุ่มด้วย `describe` / `it`',
+    ],
+    answer: 2,
   },
 ];
 

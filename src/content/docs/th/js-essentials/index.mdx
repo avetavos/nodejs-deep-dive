@@ -23,7 +23,7 @@ Node.js คือ runtime ที่รัน JavaScript นอก browser ทุ
 | `this` และ Context | Dynamic `this`, `call`/`apply`/`bind`, arrow functions |
 | Modules | ESM `import`/`export` vs CommonJS `require`, ใช้เมื่อไหร่ |
 
-JavaScript สมัยใหม่หมายถึง **ES2022 ขึ้นไป** ตลอดทั้งโมดูล — `const`/`let`, arrow functions, destructuring, `async`/`await`, optional chaining และ native ES modules โมดูลนี้ใช้ Node 20+
+JavaScript สมัยใหม่หมายถึง **ES2022 ขึ้นไป** ตลอดทั้งโมดูล — `const`/`let`, arrow functions, destructuring, `async`/`await`, optional chaining และ native ES modules โมดูลนี้ยึด Node 24 (LTS ตัวปัจจุบัน) และทุกอย่างรันบน Node 26 ได้เช่นกัน
 
 ## Demo แรกที่รันได้
 
@@ -55,8 +55,27 @@ for (const lang of languages) {
 
 <NodeRunner client:visible code={indexDemoCode} />
 
+## ฟีเจอร์ภาษาใหม่ ๆ ที่คุณจะได้เจอ
+
+Node อัปเกรด V8 ทุก major release ภาษาจึงโตขึ้นเรื่อย ๆ:
+
+- **Node 24** — `using` / `await using` สำหรับเคลียร์ resource อัตโนมัติ, `RegExp.escape()`, `Error.isError()`, `Float16Array`
+- **Node 26** — API วันเวลา **Temporal** เปิดเป็นค่าเริ่มต้น พร้อม `Map.prototype.getOrInsert()` และ `Iterator.concat()`
+
+```js
+// Node 26: Temporal แทนการคำนวณ Date ที่ผิดพลาดง่าย
+const due = Temporal.Now.plainDateISO().add({ days: 30 });
+console.log(due.toString()); // เช่น 2026-10-12
+
+// Node 24: using — resource ถูก dispose เมื่อออกจาก block
+{
+  using conn = openConnection();   // object นี้มีเมธอด [Symbol.dispose]()
+  conn.query('SELECT 1');
+}                                   // conn[Symbol.dispose]() ทำงานตรงนี้ แม้จะ throw
+```
+
 <Callout title="Modern JS throughout">
-โมดูลนี้ใช้ syntax ES2022+ หากพบฟีเจอร์ที่ไม่คุ้นเคย MDN Web Docs คือแหล่งอ้างอิงที่ดีที่สุด — spec ไม่ได้เปลี่ยนแปลงตั้งแต่ Node 18 ที่ทำให้เวอร์ชัน V8 ที่ส่งมาคงที่
+โมดูลนี้ใช้ syntax ES2022+ หากพบฟีเจอร์ที่ไม่คุ้นเคย MDN Web Docs คือแหล่งอ้างอิงที่ดีที่สุด — และรายการด้านบนบอกว่าฟีเจอร์นั้นมาพร้อม Node สายไหน
 </Callout>
 
 export const indexQuiz = [
@@ -75,7 +94,7 @@ export const indexQuiz = [
     options: [
       'ES5 เท่านั้น — เพื่อความเข้ากันได้สูงสุด',
       'ES2015 (ES6) เท่านั้น',
-      'ES2022 ขึ้นไป บน Node 20+',
+      'ES2022 ขึ้นไป บน Node 24+',
       'TypeScript ที่คอมไพล์ลงเป็น ES3',
     ],
     answer: 2,

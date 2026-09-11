@@ -30,6 +30,28 @@ globals และโมดูลหลักที่โมดูลนี้จ
 | File System | callbacks ของ `fs`, sync APIs และ interface `fs/promises` |
 | EventEmitter | custom events, listeners และ lifecycle ของ `once` / `removeListener` |
 
+## Built-in ใหม่ ๆ ที่ควรรู้จัก
+
+Node ดูดซับ package ยอดนิยมเข้ามาใน runtime เรื่อย ๆ:
+
+- **`node:sqlite`** — ฐานข้อมูล SQLite แบบฝังตัว (ไม่ต้องใส่ flag ตั้งแต่ 22.13, เป็น release candidate ตั้งแต่ 25.7) ใช้เก็บ state ในเครื่อง, test และ CLI โดยไม่มี dependency
+- **`fs.glob`** (22+) — จับคู่ไฟล์โดยไม่ต้องใช้ package `glob`
+- **`node:test`** — test runner ที่จะพูดถึงในโมดูลสุดท้าย
+
+```js
+import { DatabaseSync } from 'node:sqlite';
+
+const db = new DatabaseSync(':memory:');
+db.exec('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT) STRICT');
+
+const insert = db.prepare('INSERT INTO notes (body) VALUES (?)');
+insert.run('first');
+insert.run('second');
+
+console.log(db.prepare('SELECT * FROM notes ORDER BY id').all());
+// [ { id: 1, body: 'first' }, { id: 2, body: 'second' } ]
+```
+
 ## demo globals เบื้องต้น
 
 snippet ด้านล่างอ่าน globals สองตัวที่มีให้ใช้ใน Node.js process ทุกตัวโดยไม่ต้อง `require` หรือ `import`:

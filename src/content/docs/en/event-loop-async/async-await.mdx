@@ -64,6 +64,23 @@ To run both concurrently, start the Promises first and await them together:
 var [a, b] = await Promise.all([fetchA(), fetchB()]);
 ```
 
+## Carrying context across awaits: AsyncLocalStorage
+
+A request ID set at the top of a handler is gone by the time a nested `await` resumes — unless you keep it in `AsyncLocalStorage`. Node 24 rebuilt it on **AsyncContextFrame**, which propagates the store through every `await`, timer, and callback with far less overhead than the old async-hooks implementation:
+
+```js
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+const requestContext = new AsyncLocalStorage();
+
+async function handle(req) {
+  await requestContext.run({ id: req.id }, async function() {
+    await save(req);                        // any depth of awaits…
+    console.log(requestContext.getStore()); // …still sees { id: req.id }
+  });
+}
+```
+
 ## Runnable demo
 
 The snippet below uses a `fakeFetch` helper (setTimeout-based) to simulate async calls. It first fetches sequentially, then fetches both in parallel with `Promise.all`.

@@ -1,6 +1,6 @@
 ---
 title: 'Built-in Test Runner'
-description: 'The node:test module and node:assert — writing tests without any dependencies using test(), describe/it, and node --test.'
+description: 'The node:test module and node:assert — writing tests without any dependencies using test(), describe/it, node --test, and the built-in mocking and snapshot support.'
 sidebar:
   order: 2
 ---
@@ -125,22 +125,51 @@ test('async: resolves to correct value', async function() {
 <NodeRunner client:visible code={nodeTestCode} node />
 
 <Callout title="Node has a built-in test runner since v18 — no dependency needed">
-You do not need Jest, Mocha, or Vitest to write tests in Node.js. `node:test` + `node:assert` cover unit tests, async tests, and grouped suites out of the box. Add a third-party runner only when you need features like snapshot testing, coverage UI, or browser-environment simulation.
+You do not need Jest, Mocha, or Vitest to write tests in Node.js. `node:test` + `node:assert` cover unit tests, async tests, and grouped suites out of the box. Mocking and snapshot testing are built in too; add a third-party runner only when you need a coverage UI, browser-environment simulation, or a plugin ecosystem.
 </Callout>
+
+## Mocking and snapshots — stable, built in
+
+| Feature | Status in Node 24 / 26 |
+|---------|------------------------|
+| `mock.fn()`, `mock.method()`, `mock.timers`, `mock.module()` | Stable |
+| Snapshot testing — `t.assert.snapshot(value)` | Stable since 23.4 |
+| Code coverage | Experimental — `--experimental-test-coverage` |
+| `--watch` for tests | Experimental |
+| Test tags — `--experimental-test-tag-filter` | Early development (26.2+) |
+
+Fake timers let you test retry and timeout logic without waiting:
+
+```js
+import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('retries call the fetcher twice', async function(t) {
+  const fetcher = mock.fn(async function() { throw new Error('flaky'); });
+  mock.timers.enable({ apis: ['setTimeout'] });   // fake setTimeout
+
+  const pending = retry(fetcher, { attempts: 2, delayMs: 1000 }); // your helper
+  mock.timers.tick(1000);                         // advance the fake clock instantly
+  await assert.rejects(pending, /flaky/);
+  assert.equal(fetcher.mock.callCount(), 2);
+
+  mock.timers.reset();
+});
+```
 
 ## Beyond the basics
 
 ```bash
-# Watch mode — re-runs on file change (Node 22+)
-node --test --watch
-
 # Only run tests matching a pattern
 node --test --test-name-pattern "Array"
 
-# Code coverage report (Node 22+)
+# Watch mode — re-runs on file change (still experimental in Node 26)
+node --test --watch
+
+# Code coverage — the flag is still --experimental-test-coverage in Node 24 / 26
 node --test --experimental-test-coverage
 
-# Parallel test files (default in Node 22+)
+# Parallel test files (the default); cap the workers
 node --test --test-concurrency=4
 ```
 
@@ -181,9 +210,19 @@ export const nodeTestQuiz = [
       'It runs faster',
       'It uses strict equality (===) and avoids type coercion surprises',
       'It supports async assertions',
-      'It is the only version available in Node 20+',
+      'It is the only version available in Node 24+',
     ],
     answer: 1,
+  },
+  {
+    q: 'Which `node:test` feature still needs an `--experimental-` flag in Node 24 and 26?',
+    options: [
+      'Mocking with `mock.fn()`',
+      'Snapshot testing',
+      'Code coverage',
+      '`describe` / `it` grouping',
+    ],
+    answer: 2,
   },
 ];
 

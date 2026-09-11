@@ -1,6 +1,6 @@
 ---
 title: 'Ecosystem & Toolchain'
-description: 'Running TypeScript with tsx/ts-node and --experimental-strip-types, linters and formatters (ESLint/Prettier/Biome), nodemon/watch mode, and env file management.'
+description: 'Running TypeScript natively with Node type stripping (or tsx), linters and formatters (ESLint/Prettier/Biome), watch mode, env files, node --run, and the permission model.'
 sidebar:
   order: 5
 ---
@@ -11,21 +11,24 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Running TypeScript in Node.js
 
-TypeScript is not natively understood by Node.js — it must be stripped or compiled first. You have three main options in the modern ecosystem:
+Since Node 22.18 — and on every Node 24 and 26 release — Node strips TypeScript types itself. You only need a tool when your code uses syntax that must be *transformed*, not just erased. You have three main options:
 
-### Option 1: `--experimental-strip-types` (Node 20.6+ / stable Node 22)
+### Option 1: built-in type stripping (Node 22.18+ / 24 — no flag)
 
-Node can strip TypeScript type annotations at startup without any extra package. It does **not** type-check — it just removes the types and runs the JavaScript:
+Node removes type annotations at load time and runs the remaining JavaScript. Nothing to install, nothing to configure — but it does **not** type-check and it ignores `tsconfig.json`:
 
 ```bash
-# Node 22 — stable
+# Node 22.18+ / 24 / 26 — just run the file
+node src/app.ts
+
+# Older 22.x releases needed the flag
 node --experimental-strip-types src/app.ts
 
-# Node 20.6+
-node --experimental-strip-types --input-type=module src/app.ts
+# Keep type-checking as a separate step (CI, pre-commit)
+npx tsc --noEmit
 ```
 
-Limitations: no `enum`, no `namespace`, no `experimentalDecorators`. For those, use tsx or ts-node.
+Only *erasable* syntax is supported: type annotations, interfaces, type aliases, `import type`. Syntax that needs generated JavaScript — `enum`, a `namespace` with runtime code, parameter properties such as `constructor(private x: number)`, `import =` — is rejected. Node 24 transforms those too if you pass `--experimental-transform-types`; in Node 26 the transform is built in and the flag is gone. TypeScript's own `--erasableSyntaxOnly` option (5.8+) makes `tsc` reject the same constructs, so your editor warns before Node does.
 
 ### Option 2: tsx — fast TypeScript runner
 
@@ -113,7 +116,7 @@ npx biome check --apply src/
 
 ## Watch Mode and nodemon
 
-### Node built-in watch (Node 18+)
+### Node built-in watch (stable since Node 22)
 
 ```bash
 # Restart on any file change — no install required
@@ -147,7 +150,7 @@ npx nodemon --exec "npx tsx" src/app.ts
 
 ## Environment Variables and .env Files
 
-### Native .env loading (Node 20.6+)
+### Native .env loading (stable since Node 22)
 
 ```bash
 # Load a .env file without dotenv
@@ -155,6 +158,14 @@ node --env-file=.env src/app.js
 
 # Load multiple env files (later files override earlier)
 node --env-file=.env --env-file=.env.local src/app.js
+```
+
+Inside a program, `process.loadEnvFile()` does the same without a flag:
+
+```js
+import { loadEnvFile } from 'node:process';
+
+loadEnvFile('.env'); // populates process.env; throws if the file is missing
 ```
 
 ### dotenv — the classic
@@ -189,6 +200,21 @@ SECRET_KEY=
 
 Always add `.env.local` and `.env*.local` to `.gitignore`. Never commit real secrets.
 
+## node --run and the permission model
+
+`node --run <script>` runs a `package.json` script without going through npm — it starts faster and does not inject npm's environment:
+
+```bash
+node --run dev        # same as `npm run dev`, minus npm's startup cost
+node --run test
+```
+
+For scripts that execute code you do not fully trust, Node 24 stabilised the flag name of the **permission model**. It denies file-system, child-process, and worker access unless you grant it explicitly:
+
+```bash
+node --permission --allow-fs-read=./data --allow-fs-write=./tmp src/app.js
+```
+
 ## package.json scripts — the glue
 
 ```json
@@ -204,18 +230,18 @@ Always add `.env.local` and `.env*.local` to `.gitignore`. Never commit real sec
 }
 ```
 
-<Callout title="Node 20+ can run TypeScript directly with a flag — tooling keeps evolving">
-The Node.js toolchain moves fast. `--experimental-strip-types` in Node 22 means you can ship TypeScript with zero extra build tools for many projects. Start simple, add complexity only when you need features like decorators, bundling, or multi-environment targeting.
+<Callout title="Node runs TypeScript directly — reach for a runner only when you need transforms">
+Since Node 22.18 (and every 24+ release) `node src/app.ts` just works for erasable syntax, so most projects need no build step to run. Keep `tsc --noEmit` for type-checking, and add tsx only when you rely on `enum`, decorators, bundling, or multi-environment targeting.
 </Callout>
 
 export const ecosystemQuiz = [
   {
-    q: 'What does `node --experimental-strip-types` do?',
+    q: 'What happens when you run `node src/app.ts` on Node 24?',
     options: [
-      'Fully type-checks TypeScript before running',
-      'Compiles TypeScript to JavaScript and writes output files',
-      'Strips TypeScript type annotations and runs the JavaScript directly',
-      'Enables experimental TypeScript features like decorators',
+      'Node fully type-checks the file before running it',
+      'Node compiles it to JavaScript and writes output files',
+      'Node strips the type annotations and runs the JavaScript directly — no type-checking',
+      'It fails — Node needs a flag or tsx to run TypeScript',
     ],
     answer: 2,
   },
@@ -240,7 +266,7 @@ export const ecosystemQuiz = [
     answer: 2,
   },
   {
-    q: 'Which Node 20.6+ flag loads a `.env` file without the `dotenv` package?',
+    q: 'Which Node flag loads a `.env` file without the `dotenv` package?',
     options: [
       '--dotenv=.env',
       '--load-env=.env',

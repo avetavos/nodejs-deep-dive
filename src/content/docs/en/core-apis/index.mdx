@@ -30,6 +30,28 @@ Key globals and modules covered in this module:
 | File System | `fs` callbacks, sync APIs, and the `fs/promises` interface |
 | EventEmitter | Custom events, listeners, and the `once` / `removeListener` lifecycle |
 
+## Newer built-ins worth knowing
+
+Node keeps absorbing popular packages into the runtime:
+
+- **`node:sqlite`** — an embedded SQLite database (unflagged since 22.13, release candidate from 25.7). Zero dependencies for local state, tests, and CLIs.
+- **`fs.glob`** (22+) — file matching without the `glob` package.
+- **`node:test`** — the test runner covered in the last module.
+
+```js
+import { DatabaseSync } from 'node:sqlite';
+
+const db = new DatabaseSync(':memory:');
+db.exec('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT) STRICT');
+
+const insert = db.prepare('INSERT INTO notes (body) VALUES (?)');
+insert.run('first');
+insert.run('second');
+
+console.log(db.prepare('SELECT * FROM notes ORDER BY id').all());
+// [ { id: 1, body: 'first' }, { id: 2, body: 'second' } ]
+```
+
 ## A first globals demo
 
 The snippet below reads two globals that are available in every Node.js process without any `require` or `import`:

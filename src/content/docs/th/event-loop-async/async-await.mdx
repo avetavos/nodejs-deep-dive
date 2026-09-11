@@ -64,6 +64,23 @@ var b = await fetchB();  // แล้วรออีกครั้ง
 var [a, b] = await Promise.all([fetchA(), fetchB()]);
 ```
 
+## ส่ง context ข้าม await: AsyncLocalStorage
+
+request ID ที่ตั้งไว้ตอนต้น handler จะหายไปเมื่อ `await` ชั้นในกลับมาทำงานต่อ — เว้นแต่คุณเก็บมันไว้ใน `AsyncLocalStorage` Node 24 สร้างมันใหม่บน **AsyncContextFrame** ซึ่งส่ง store ต่อผ่านทุก `await`, timer และ callback โดยมี overhead น้อยกว่า implementation แบบ async-hooks เดิมมาก:
+
+```js
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+const requestContext = new AsyncLocalStorage();
+
+async function handle(req) {
+  await requestContext.run({ id: req.id }, async function() {
+    await save(req);                        // await ซ้อนกี่ชั้นก็ได้…
+    console.log(requestContext.getStore()); // …ยังเห็น { id: req.id }
+  });
+}
+```
+
 ## เดโมที่รันได้
 
 สนิปเป็ตด้านล่างใช้ตัวช่วย `fakeFetch` (อิง setTimeout) เพื่อจำลองการเรียก async โดยเรียกแบบเรียงลำดับก่อน แล้วเรียกทั้งสองแบบขนานด้วย `Promise.all`

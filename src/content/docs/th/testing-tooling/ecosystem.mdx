@@ -1,6 +1,6 @@
 ---
 title: 'Ecosystem และ Toolchain'
-description: 'การรัน TypeScript ด้วย tsx/ts-node และ --experimental-strip-types, linters และ formatters (ESLint/Prettier/Biome), nodemon/watch mode, และการจัดการ env files'
+description: 'การรัน TypeScript แบบ native ด้วย type stripping ของ Node (หรือ tsx), linters และ formatters (ESLint/Prettier/Biome), watch mode, env files, node --run และ permission model'
 sidebar:
   order: 5
 ---
@@ -11,21 +11,24 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## การรัน TypeScript ใน Node.js
 
-TypeScript ไม่ได้รับการรองรับโดยตรงจาก Node.js — ต้องถูก strip หรือ compile ก่อน คุณมีตัวเลือกหลักสามตัวใน ecosystem สมัยใหม่:
+ตั้งแต่ Node 22.18 — และทุก release ของ Node 24 และ 26 — Node ลบ type ของ TypeScript ให้เอง คุณจะต้องใช้เครื่องมือเพิ่มก็ต่อเมื่อโค้ดใช้ syntax ที่ต้อง *แปลง* (transform) ไม่ใช่แค่ลบทิ้ง คุณมีตัวเลือกหลักสามตัว:
 
-### ตัวเลือกที่ 1: `--experimental-strip-types` (Node 20.6+ / stable Node 22)
+### ตัวเลือกที่ 1: type stripping ในตัว (Node 22.18+ / 24 — ไม่ต้องใส่ flag)
 
-Node สามารถลบ type annotations ของ TypeScript ออกเมื่อ startup โดยไม่ต้องใช้ package เพิ่ม แต่ **ไม่ได้ตรวจสอบ type** — แค่ลบ types แล้วรัน JavaScript:
+Node ลบ type annotations ตอนโหลดไฟล์แล้วรัน JavaScript ที่เหลือ ไม่ต้องติดตั้ง ไม่ต้องตั้งค่า — แต่ **ไม่ได้ตรวจสอบ type** และไม่อ่าน `tsconfig.json`:
 
 ```bash
-# Node 22 — stable
+# Node 22.18+ / 24 / 26 — รันไฟล์ได้เลย
+node src/app.ts
+
+# Node 22.x รุ่นเก่ากว่านั้นต้องใส่ flag
 node --experimental-strip-types src/app.ts
 
-# Node 20.6+
-node --experimental-strip-types --input-type=module src/app.ts
+# แยกการตรวจ type ไว้เป็นอีกขั้น (CI, pre-commit)
+npx tsc --noEmit
 ```
 
-ข้อจำกัด: ไม่รองรับ `enum`, `namespace`, `experimentalDecorators` สำหรับฟีเจอร์เหล่านั้นให้ใช้ tsx หรือ ts-node
+รองรับเฉพาะ syntax ที่ *ลบทิ้งได้* (erasable): type annotations, interface, type alias, `import type` ส่วน syntax ที่ต้อง generate JavaScript — `enum`, `namespace` ที่มีโค้ด runtime, parameter properties อย่าง `constructor(private x: number)`, `import =` — จะถูกปฏิเสธ Node 24 แปลงพวกนี้ให้ได้ถ้าใส่ `--experimental-transform-types` ส่วนใน Node 26 การแปลงถูกรวมเข้ามาในตัวและ flag นี้ถูกถอดออกแล้ว option `--erasableSyntaxOnly` ของ TypeScript (5.8+) ทำให้ `tsc` ปฏิเสธ syntax ชุดเดียวกัน editor ของคุณจึงเตือนก่อนที่ Node จะเตือน
 
 ### ตัวเลือกที่ 2: tsx — TypeScript runner ที่เร็ว
 
@@ -113,7 +116,7 @@ npx biome check --apply src/
 
 ## Watch Mode และ nodemon
 
-### Node built-in watch (Node 18+)
+### Node built-in watch (stable ตั้งแต่ Node 22)
 
 ```bash
 # Restart เมื่อไฟล์เปลี่ยน — ไม่ต้องติดตั้งอะไร
@@ -147,7 +150,7 @@ npx nodemon --exec "npx tsx" src/app.ts
 
 ## Environment Variables และ .env Files
 
-### Native .env loading (Node 20.6+)
+### Native .env loading (stable ตั้งแต่ Node 22)
 
 ```bash
 # โหลด .env โดยไม่ต้องใช้ dotenv
@@ -155,6 +158,14 @@ node --env-file=.env src/app.js
 
 # โหลด env files หลายไฟล์ (ไฟล์หลังจะ override ไฟล์ก่อน)
 node --env-file=.env --env-file=.env.local src/app.js
+```
+
+ภายในโปรแกรม `process.loadEnvFile()` ทำแบบเดียวกันโดยไม่ต้องใส่ flag:
+
+```js
+import { loadEnvFile } from 'node:process';
+
+loadEnvFile('.env'); // เติมค่าลง process.env; throw ถ้าไม่มีไฟล์
 ```
 
 ### dotenv — วิธีคลาสสิก
@@ -189,6 +200,21 @@ SECRET_KEY=
 
 เพิ่ม `.env.local` และ `.env*.local` ใน `.gitignore` เสมอ ห้าม commit secrets จริง ๆ
 
+## node --run และ permission model
+
+`node --run <script>` รัน script ใน `package.json` โดยไม่ผ่าน npm — เริ่มเร็วกว่าและไม่ inject environment ของ npm เข้ามา:
+
+```bash
+node --run dev        # เหมือน `npm run dev` แต่ไม่เสียเวลา startup ของ npm
+node --run test
+```
+
+สำหรับ script ที่รันโค้ดที่คุณไม่ไว้ใจเต็มที่ Node 24 ทำให้ชื่อ flag ของ **permission model** นิ่งแล้ว มันปฏิเสธการเข้าถึง file system, child process และ worker ทั้งหมด จนกว่าคุณจะอนุญาตอย่างชัดเจน:
+
+```bash
+node --permission --allow-fs-read=./data --allow-fs-write=./tmp src/app.js
+```
+
 ## package.json scripts — ตัวเชื่อมทุกอย่าง
 
 ```json
@@ -204,18 +230,18 @@ SECRET_KEY=
 }
 ```
 
-<Callout title="Node 20+ รัน TypeScript ได้โดยตรงด้วย flag — tooling ยังคงพัฒนาต่อไปเรื่อย ๆ">
-Node.js toolchain เปลี่ยนแปลงเร็ว `--experimental-strip-types` ใน Node 22 หมายความว่าคุณสามารถใช้งาน TypeScript โดยไม่ต้องมี build tools เพิ่มเติมสำหรับหลายโปรเจกต์ เริ่มแบบเรียบง่าย เพิ่มความซับซ้อนเมื่อคุณต้องการฟีเจอร์เช่น decorators, bundling, หรือการ targeting หลาย environment เท่านั้น
+<Callout title="Node รัน TypeScript ได้โดยตรง — ใช้ runner เพิ่มเฉพาะเมื่อต้อง transform">
+ตั้งแต่ Node 22.18 (และทุก release ของ 24+) `node src/app.ts` ใช้งานได้เลยสำหรับ syntax แบบ erasable โปรเจกต์ส่วนใหญ่จึงไม่ต้องมีขั้น build เพื่อรัน เก็บ `tsc --noEmit` ไว้ตรวจ type และเพิ่ม tsx เฉพาะเมื่อคุณพึ่ง `enum`, decorators, bundling หรือการ targeting หลาย environment
 </Callout>
 
 export const ecosystemQuiz = [
   {
-    q: '`node --experimental-strip-types` ทำอะไร?',
+    q: 'เกิดอะไรขึ้นเมื่อรัน `node src/app.ts` บน Node 24?',
     options: [
-      'ตรวจสอบ TypeScript อย่างครบถ้วนก่อนรัน',
-      'Compile TypeScript เป็น JavaScript และเขียนไฟล์ output',
-      'ลบ TypeScript type annotations และรัน JavaScript โดยตรง',
-      'เปิดใช้งาน TypeScript features เชิงทดลองเช่น decorators',
+      'Node ตรวจสอบ type ของไฟล์อย่างครบถ้วนก่อนรัน',
+      'Node compile เป็น JavaScript และเขียนไฟล์ output',
+      'Node ลบ type annotations แล้วรัน JavaScript โดยตรง — ไม่มีการตรวจ type',
+      'ล้มเหลว — Node ต้องใช้ flag หรือ tsx ถึงจะรัน TypeScript ได้',
     ],
     answer: 2,
   },
@@ -240,7 +266,7 @@ export const ecosystemQuiz = [
     answer: 2,
   },
   {
-    q: 'flag ใดใน Node 20.6+ ที่โหลดไฟล์ `.env` โดยไม่ต้องใช้ package `dotenv`?',
+    q: 'flag ใดของ Node ที่โหลดไฟล์ `.env` โดยไม่ต้องใช้ package `dotenv`?',
     options: [
       '--dotenv=.env',
       '--load-env=.env',

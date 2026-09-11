@@ -67,6 +67,21 @@ console.log('Total env vars:', keys.length);
 
 <NodeRunner client:visible code={envCode} node />
 
+### Loading a .env file without dotenv
+
+Since Node 22 the runtime loads env files itself — from the CLI with `--env-file`, or from code with `process.loadEnvFile()`:
+
+```bash
+node --env-file=.env src/app.js
+```
+
+```js
+import { loadEnvFile } from 'node:process';
+
+loadEnvFile();              // defaults to ./.env
+console.log(process.env.PORT);
+```
+
 <Callout title="Read config from process.env, not hardcoded values">
 Never hardcode secrets, ports, or host names in source code. Read them from `process.env` at startup. This follows the 12-Factor App principle and lets you deploy the same code to development, staging, and production by changing only environment variables — no code changes required.
 </Callout>

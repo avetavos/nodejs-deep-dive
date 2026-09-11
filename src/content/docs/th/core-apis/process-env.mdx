@@ -67,6 +67,21 @@ console.log('Total env vars:', keys.length);
 
 <NodeRunner client:visible code={envCode} node />
 
+### โหลดไฟล์ .env โดยไม่ต้องใช้ dotenv
+
+ตั้งแต่ Node 22 runtime โหลด env file ได้เอง — จาก CLI ด้วย `--env-file` หรือจากโค้ดด้วย `process.loadEnvFile()`:
+
+```bash
+node --env-file=.env src/app.js
+```
+
+```js
+import { loadEnvFile } from 'node:process';
+
+loadEnvFile();              // ค่าเริ่มต้นคือ ./.env
+console.log(process.env.PORT);
+```
+
 <Callout title="อ่าน config จาก process.env ไม่ใช่ hardcode">
 อย่า hardcode secrets, ports หรือ host names ใน source code อ่านจาก `process.env` ตอนเริ่มต้น นี่คือหลักการ 12-Factor App ที่ทำให้ deploy code เดียวกันไปยัง development, staging และ production ได้โดยเปลี่ยนแค่ environment variables — ไม่ต้องแก้ code
 </Callout>

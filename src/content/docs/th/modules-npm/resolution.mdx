@@ -67,6 +67,8 @@ import { helper } from './helpers.mjs'; // ✅
 
 เดิมที CJS ไม่สามารถ `require()` โมดูล ESM ได้ — จะ throw `ERR_REQUIRE_ESM` — เพราะ ESM loading เป็นแบบ static และ asynchronous ส่วน CJS loading เป็นแบบ synchronous แต่ตั้งแต่ Node 22.12 (และ 20.19 LTS) เป็นต้นมา `require()` โมดูล ESM ทำงานได้เป็นค่าเริ่มต้น ตราบใดที่โมดูลนั้นไม่มี top-level `await` ส่วนโมดูลที่ใช้ top-level `await` ยังคง throw `ERR_REQUIRE_ASYNC_MODULE` เพราะการเรียก `require()` แบบ synchronous ไม่สามารถรอการประมวลผลแบบ async ได้
 
+ผลในทางปฏิบัติสำหรับคนเขียน library: **ไม่ต้อง ship ทั้ง CJS และ ESM อีกต่อไป** การเผยแพร่แบบ ESM อย่างเดียวใช้ได้กับทุกสาย Node ที่ยังรองรับ (22, 24, 26) เพราะฝั่ง CJS `require()` มันได้ export map แบบ dual ในหัวข้อถัดไปยังช่วย tooling รุ่นเก่า แต่ไม่ใช่สิ่งจำเป็นอีกแล้ว
+
 ## exports map
 
 ฟิลด์ `"exports"` ใน `package.json` เป็นวิธีที่ authoritative สำหรับ package ในการประกาศ public API surface path ใดก็ตามที่ไม่ได้ระบุใน `"exports"` เป็น private — ผู้ใช้ไม่สามารถ import โดยตรงได้

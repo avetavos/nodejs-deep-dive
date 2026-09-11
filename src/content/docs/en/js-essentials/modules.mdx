@@ -20,7 +20,7 @@ Node.js supports two module systems that cannot be freely mixed:
 | File extension | `.mjs` or `.js` with `"type":"module"` | `.cjs` or `.js` without `"type":"module"` |
 | Loading | Static, analysed at parse time | Dynamic, executed at runtime |
 | Top-level `await` | Supported | Not supported |
-| Default in Node 20+ | Yes (opt-in) | Legacy default |
+| Default in Node 24+ | Yes, with `"type": "module"` — and CJS can `require()` it | Legacy default |
 
 ## CommonJS (CJS)
 

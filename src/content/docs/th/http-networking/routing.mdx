@@ -82,6 +82,19 @@ server.listen(3000, function() {
 
 <NodeRunner client:visible code={urlParsingCode} node />
 
+## จับคู่ path ด้วย URLPattern
+
+การเช็ค `startsWith` ด้วยมือจะพังทันทีที่ route มี parameter Node 24 ทำให้ `URLPattern` ซึ่งเป็นมาตรฐานเว็บกลายเป็น global คุณจึงประกาศ route อย่าง `/users/:id` แล้วอ่านค่าที่จับได้ (ส่วน `url.parse()` แบบเก่า runtime-deprecated ตั้งแต่ Node 24 — ให้ใช้ `URL` และ `URLPattern` แทน)
+
+```js
+const userRoute = new URLPattern({ pathname: '/users/:id' });
+
+const match = userRoute.exec('http://localhost:3000/users/42');
+console.log(match.pathname.groups.id);                          // '42'
+
+console.log(userRoute.test('http://localhost:3000/posts/1'));   // false
+```
+
 ## Tiny router object
 
 เมื่อมี route มากกว่าสองสามอัน ควร extract ออกมาเป็น router map pattern นี้คือสิ่งที่ Express ใช้ภายใน:
