@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## readable.pipe(writable)
 
@@ -80,24 +82,154 @@ pipeline(
 );
 ```
 
-Node 15+ also ships `stream/promises` which gives you an `await`-friendly version:
+Node 15+ also ships `stream/promises`, which gives you an `await`-friendly version — no callback, and a normal rejected promise on error:
 
-```js
-const { pipeline } = require('node:stream/promises');
-const fs = require('node:fs');
-const zlib = require('node:zlib');
+export const streamPromisesCode = `
+import { pipeline } from 'node:stream/promises';
+import { Readable, Writable } from 'node:stream';
+import { createGzip, createGunzip } from 'node:zlib';
 
-fs.writeFileSync('./input.txt', 'hello world'); // demo fixture
+var source = Readable.from(['hello world, compressed and decompressed via a stream/promises pipeline']);
+var chunks = [];
+var sink = new Writable({
+  write(chunk, encoding, callback) { chunks.push(chunk); callback(); }
+});
 
-(async () => {
-  await pipeline(
-    fs.createReadStream('./input.txt'),
-    zlib.createGzip(),
-    fs.createWriteStream('./input.txt.gz')
-  );
-  console.log('done');
-})();
-```
+await pipeline(source, createGzip(), createGunzip(), sink);
+console.log('round-tripped:', Buffer.concat(chunks).toString());
+console.log('pipeline() resolved -- no callback needed with stream/promises');
+`;
+
+export const streamPromisesOut = `round-tripped: hello world, compressed and decompressed via a stream/promises pipeline
+pipeline() resolved -- no callback needed with stream/promises`;
+
+<NodeRunner client:visible code={streamPromisesCode} node expected={streamPromisesOut} />
+
+## Cancelling a pipeline with AbortSignal
+
+`pipeline()` (both the callback and promise forms) accepts an `options.signal`. Aborting it — because a client disconnected, a request timed out, or the user cancelled — destroys every stream in the chain immediately instead of letting a slow source keep running to no purpose:
+
+export const pipelineAbortCode = `
+import { pipeline } from 'node:stream/promises';
+import { Readable, Writable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
+
+async function* slowSource() {
+  for (let i = 0; i < 20; i++) {
+    await delay(10); // simulate a slow upstream (network, DB cursor, ...)
+    yield String(i);
+  }
+}
+
+var controller = new AbortController();
+var sink = new Writable({
+  write(chunk, enc, cb) { cb(); }
+});
+
+// Simulates a client disconnect or a request timeout arriving mid-stream
+setTimeout(function() { controller.abort(); }, 30);
+
+try {
+  await pipeline(Readable.from(slowSource()), sink, { signal: controller.signal });
+  console.log('pipeline finished normally');
+} catch (err) {
+  console.log('pipeline aborted:', err.name);
+}
+`;
+
+export const pipelineAbortOut = `pipeline aborted: AbortError`;
+
+<NodeRunner client:visible code={pipelineAbortCode} node expected={pipelineAbortOut} />
+
+## Transform streams: reshaping data in flight
+
+The uppercase example above is the simplest possible `Transform`: one chunk in, one chunk out. A `Transform` can just as easily change the *shape* of data — for example, turning a stream of objects into newline-delimited JSON (a common format for logs and streaming APIs), by running in **object mode** on the input side and byte mode on the output side:
+
+export const jsonLinesCode = `
+import { Transform, Readable } from 'node:stream';
+
+var toJsonLines = new Transform({
+  objectMode: true, // accepts JS objects as input chunks
+  transform(obj, encoding, callback) {
+    callback(null, JSON.stringify(obj) + '\\n'); // emits strings/bytes as output
+  }
+});
+
+var source = Readable.from([{ id: 1 }, { id: 2 }, { id: 3 }], { objectMode: true });
+
+var out = '';
+source.pipe(toJsonLines);
+for await (const chunk of toJsonLines) {
+  out += chunk;
+}
+console.log(out.trim());
+`;
+
+export const jsonLinesOut = `{"id":1}
+{"id":2}
+{"id":3}`;
+
+<NodeRunner client:visible code={jsonLinesCode} node expected={jsonLinesOut} />
+
+## .destroy() and finished() — cleanup on every path
+
+`.pipe()`'s error-propagation gap (above) means *you* are responsible for destroying every stream in a chain when one of them errors. `stream.finished(stream, callback)` gives you one callback that fires exactly once, whether the stream ended successfully, errored, or was destroyed — the reliable way to know "this stream is done, one way or another":
+
+export const destroyFinishedCode = `
+import { Readable, Writable, finished } from 'node:stream';
+
+var source = Readable.from((function* () {
+  yield 'a'; yield 'b'; throw new Error('source broke');
+})());
+
+var sink = new Writable({ write(chunk, enc, cb) { cb(); } });
+
+finished(sink, function(err) {
+  console.log('sink finished callback, err:', err ? err.message : null);
+});
+
+source.on('error', function(err) {
+  console.log('source error:', err.message);
+  sink.destroy(err); // propagate manually -- .pipe() alone would not do this
+});
+
+source.pipe(sink);
+`;
+
+export const destroyFinishedOut = `source error: source broke
+sink finished callback, err: source broke`;
+
+<NodeRunner client:visible code={destroyFinishedCode} node expected={destroyFinishedOut} />
+
+<Callout title="pipeline() calls destroy() and finished() for you">
+Everything in the demo above — listening for the source's error, destroying the sink, knowing when the sink is truly done — is exactly what `pipeline()` does internally for every stream in the chain. Reach for the manual pattern only when you have a reason not to use `pipeline()`.
+</Callout>
+
+## Duplex and compose()
+
+A `Duplex` stream has independent readable and writable sides — a TCP socket is the canonical example: what you write and what you read are unrelated data. `stream.compose(...streams)` (Node 16.9+) takes that idea further: it chains several `Transform`-like streams into a single `Duplex`, so a multi-step pipeline can be handed around and piped into like any other stream:
+
+export const composeCode = `
+import { Transform, Readable, compose } from 'node:stream';
+
+var upper = new Transform({ transform(chunk, enc, cb) { cb(null, chunk.toString().toUpperCase()); } });
+var addBang = new Transform({ transform(chunk, enc, cb) { cb(null, chunk.toString() + '!'); } });
+
+// compose() fuses two Transforms into one Duplex -- one unit you can pipe into
+var combined = compose(upper, addBang);
+var source = Readable.from(['node', 'streams']);
+
+var out = '';
+source.pipe(combined);
+for await (const chunk of combined) {
+  out += chunk;
+}
+console.log('composed result:', out);
+`;
+
+export const composeOut = `composed result: NODE!STREAMS!`;
+
+<NodeRunner client:visible code={composeCode} node expected={composeOut} />
 
 ## Runnable demo
 
@@ -131,10 +263,62 @@ pipeline(source, upper, sink, function(err) {
 });
 `;
 
-<NodeRunner client:visible code={pipelineCode} node />
+export const pipelineOut = `result: HELLO WORLD STREAMS`;
+
+<NodeRunner client:visible code={pipelineCode} node expected={pipelineOut} />
 
 <Callout title="Prefer pipeline() over .pipe() for proper error and cleanup handling">
 stream.pipeline() automatically propagates errors and destroys all streams in the chain. Using .pipe() leaves you responsible for manually attaching error listeners and destroying each stream — easy to get wrong, leading to file handle leaks and memory growth.
+</Callout>
+
+## Mental Model
+
+export const pipelineMentalModel = `flowchart TB
+  Pipe[".pipe(writable)"] -->|"error on any stream"| Gap["NOT propagated -- you must listen + destroy() manually"]
+  Pipeline["pipeline(...streams, cb)"] -->|"error on any stream"| Auto["all streams destroyed automatically, cb(err) called"]
+  PipelinePromise["stream/promises pipeline(...)"] -->|"error on any stream"| Reject["all streams destroyed, promise rejects"]
+  Pipeline -->|"options.signal"| Abort["AbortSignal cancels the whole chain early"]
+  Compose["compose(t1, t2, ...)"] -->|"fuses"| OneDuplex["a single Duplex you can pipe like any stream"]`;
+
+<Mermaid code={pipelineMentalModel} title="pipe() leaves error propagation to you; pipeline() (callback or promise) does it automatically and accepts an AbortSignal to cancel early" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `.pipe()` | Minimal, one-line connection between two streams | No automatic error propagation or cleanup — a leak or hang if you forget to wire it up yourself |
+| `pipeline()` (callback) | Automatic error propagation and cleanup across the whole chain | Callback-style — one more level of nesting if you're already in async/await code |
+| `stream/promises` `pipeline()` | Same guarantees as the callback form, but `await`-able and composes with `try/catch`/`Promise.all` | Requires an `async` context |
+| `pipeline()` with `AbortSignal` | Cancels a whole chain early on a timeout or client disconnect, freeing resources immediately | The abort surfaces as a rejected promise/callback error — every caller must handle that path, not just the "normal" error path |
+| `compose()` | Turns a multi-step pipeline into one reusable `Duplex` you can export, test, and pipe like any other stream | Adds a layer of indirection — errors and backpressure still flow through every inner stream, just wrapped |
+
+## Common Misconceptions
+
+- **"`.pipe()` and `pipeline()` are interchangeable — pipeline is just a newer name"** — fact: `.pipe()` never propagates errors between streams; `pipeline()` was added specifically to fix that, plus automatic cleanup and (later) `AbortSignal` support.
+- **"An aborted `pipeline()` just stops silently"** — fact: it destroys every stream in the chain and the callback fires (or the promise rejects) with an `AbortError` — you still need to handle that path.
+- **"`compose()` creates a new kind of stream"** — fact: it returns an ordinary `Duplex` — the same interface as a TCP socket — that happens to be built by chaining Transforms together internally.
+
+## Reading AI-generated code
+
+- Does code use `.pipe()` to connect more than one stream without any `error` listener on any of them? That's a guaranteed leak the moment any stream in the chain fails.
+- Does a snippet build a `pipeline()` (or `stream/promises` version) that accepts user-controlled input with no `AbortSignal`/timeout at all, so a slow or hung client can pin resources indefinitely?
+- Does code implement a multi-step transformation as several separate `.pipe()` calls with individually-wired error handling, when `compose()` would express the same idea as one reusable, testable unit?
+
+<SpotTheBug code={`const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+function compressFile(src, dest) {
+  fs.createReadStream(src)
+    .pipe(zlib.createGzip())
+    .pipe(fs.createWriteStream(dest));
+}
+
+compressFile('./input.txt', './input.txt.gz');`}>
+None of the three streams in this `.pipe()` chain has an `error` listener. If `input.txt` doesn't exist, or the disk fills up mid-write, or gzip encounters corrupt input, that stream emits `'error'` — and because `.pipe()` doesn't propagate errors, the other streams in the chain are never destroyed. The read stream's file descriptor (or the partially-written destination file) can leak. The fix is `stream.pipeline(fs.createReadStream(src), zlib.createGzip(), fs.createWriteStream(dest), function(err) { if (err) { /* handle it */ } })`, which destroys every stream in the chain automatically on any error.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`.pipe()` never propagates errors between streams — use `pipeline()` (or its `stream/promises` form) everywhere, and pass an `AbortSignal` whenever the pipeline should be cancellable.
 </Callout>
 
 export const pipelineQuiz = [
@@ -147,6 +331,7 @@ export const pipelineQuiz = [
       'It runs synchronously and blocks the event loop',
     ],
     answer: 2,
+    explain: '.pipe() does handle backpressure automatically — its documented gap is error propagation. If one stream in a .pipe() chain errors, the others are left open unless you manually listen and destroy them.',
   },
   {
     q: 'What happens when any stream in a stream.pipeline() chain emits an error?',
@@ -157,6 +342,7 @@ export const pipelineQuiz = [
       'The pipeline retries the failed operation',
     ],
     answer: 2,
+    explain: 'This is precisely what pipeline() was built to guarantee: any error from any stream in the chain destroys every other stream and surfaces once via the callback (or a rejected promise with stream/promises).',
   },
   {
     q: 'Which stream type can sit in the middle of a pipeline to transform data in-flight?',
@@ -167,6 +353,40 @@ export const pipelineQuiz = [
       'Duplex',
     ],
     answer: 2,
+    explain: "A Transform is specifically designed to sit between a Readable and a Writable, reshaping each chunk as it passes through. A plain Duplex could technically be piped into and read from too, but its two sides are independent by design, not connected.",
+  },
+  {
+    q: 'A pipeline() call is given { signal: controller.signal } and controller.abort() is called while data is still flowing. What happens?',
+    options: [
+      'Nothing until the current chunk finishes processing, then it completes normally',
+      'Every stream in the pipeline is destroyed and the callback/promise receives an AbortError',
+      'Only the first stream in the chain is destroyed',
+      'The signal is ignored unless every stream explicitly supports AbortSignal',
+    ],
+    answer: 1,
+    explain: 'pipeline() wires the AbortSignal to destroy every stream in the chain as soon as it fires, and the operation completes with an AbortError -- exactly the same cleanup guarantee pipeline() gives you for a stream-emitted error.',
+  },
+  {
+    q: 'What does compose(transform1, transform2) return?',
+    options: [
+      'An array of the two transforms',
+      'A single Duplex stream that behaves like transform1 piped into transform2',
+      'A Promise that resolves once both transforms finish',
+      'Nothing — compose() only works with three or more streams',
+    ],
+    answer: 1,
+    explain: 'compose() fuses multiple Transform-like streams into one Duplex: writing to it feeds the first stream, and reading from it reads the last stream\'s output, with everything in between wired together internally.',
+  },
+  {
+    q: 'Three streams are connected with .pipe().pipe() and none of them have error listeners. The middle stream errors. What is the most likely consequence?',
+    options: [
+      'The whole chain is automatically destroyed, same as pipeline()',
+      'Only the middle stream is affected; the process continues correctly',
+      'The other two streams stay open (potential file handle / memory leak) since .pipe() does not propagate the error, and the error may crash the process as an unhandled "error" event',
+      'Node retries the middle stream automatically',
+    ],
+    answer: 2,
+    explain: ".pipe() never propagates errors between the streams it connects. The upstream and downstream streams are left open (a resource leak), and since nothing is listening for 'error' on the stream that failed, that unhandled 'error' event throws and can crash the process -- the same unhandled-'error' behavior covered in the EventEmitter lesson, since every stream is an EventEmitter.",
   },
 ];
 

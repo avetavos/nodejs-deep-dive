@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Three flavours of the fs module
 
@@ -117,6 +119,87 @@ demo().catch(console.error);
 
 <NodeRunner client:visible code={fsStatCode} node />
 
+## fs/promises vs sync — blocking the event loop
+
+`readFileSync` does not just "read a file slower" — it **runs to completion before anything else in the process can run**, including a timer that was already scheduled with a `0` ms delay. `readFile` (promise-based) hands the read off and returns immediately, letting the rest of the synchronous code — and the event loop — keep moving while the read happens in the background:
+
+export const fsBlockingCode = `
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+
+var path = '/tmp/node-deep-dive-block-demo.txt';
+writeFileSync(path, 'x'.repeat(5_000_000)); // ~5 MB — big enough to take real time to read
+
+// --- Sync: readFileSync runs to completion before anything else can --
+// a pending timer cannot fire mid-read, no matter how short its delay ---
+var timerFired = false;
+setTimeout(function() { timerFired = true; }, 0);
+var syncData = readFileSync(path, 'utf8');
+console.log('sync read length:', syncData.length);
+console.log('timer fired before readFileSync returned:', timerFired); // always false
+
+// --- Async: readFile returns a pending Promise immediately -- the very
+// next line of synchronous code always runs before the read settles ---
+var order = [];
+readFile(path, 'utf8').then(function() { order.push('read settled'); });
+order.push('next line ran before the read settled');
+console.log(order.join(' | '));
+
+await readFile(path, 'utf8'); // let any pending read finish before cleanup
+unlinkSync(path);
+`;
+
+export const fsBlockingOut = `sync read length: 5000000
+timer fired before readFileSync returned: false
+next line ran before the read settled`;
+
+<NodeRunner client:visible code={fsBlockingCode} node expected={fsBlockingOut} />
+
+<Callout title="In a server, one readFileSync stalls every in-flight request">
+A single blocking read of a few milliseconds is invisible in a script. In a server handling concurrent requests, that same call freezes **every** connection — no request can be accepted, no response can be sent, no timer can fire — until the read returns. This is why `node:fs/promises` (or the callback API) is the rule for server code, and `readFileSync` is reserved for one-shot startup work before `server.listen()`.
+</Callout>
+
+## readFile vs streaming a large file — memory
+
+`readFile()` (sync or promise) allocates **one buffer holding the entire file**. For a 50 MB file that means one 50 MB allocation, held in memory until you're done with it. A stream instead delivers the file in bounded chunks — by default no more than `highWaterMark` (64 KiB) at a time — so memory use stays roughly constant regardless of file size:
+
+export const fsStreamMemoryCode = `
+import { writeFileSync, unlinkSync, createReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+
+var path = '/tmp/node-deep-dive-large.bin';
+writeFileSync(path, Buffer.alloc(50 * 1024 * 1024)); // 50 MB fixture, all zero bytes
+
+// readFile: one allocation the size of the whole file
+var whole = await readFile(path);
+console.log('readFile() loaded bytes in one buffer:', whole.length);
+
+// stream: delivered in bounded highWaterMark-sized chunks, one at a time
+var chunkCount = 0;
+var maxChunk = 0;
+var total = 0;
+await new Promise(function(resolve, reject) {
+  createReadStream(path)
+    .on('data', function(chunk) { chunkCount++; total += chunk.length; if (chunk.length > maxChunk) maxChunk = chunk.length; })
+    .on('end', resolve)
+    .on('error', reject);
+});
+console.log('stream delivered bytes across', chunkCount, 'chunks');
+console.log('largest single chunk (bytes):', maxChunk);
+console.log('total bytes match:', total === whole.length);
+
+unlinkSync(path);
+`;
+
+export const fsStreamMemoryOut = `readFile() loaded bytes in one buffer: 52428800
+stream delivered bytes across 800 chunks
+largest single chunk (bytes): 65536
+total bytes match: true`;
+
+<NodeRunner client:visible code={fsStreamMemoryCode} node expected={fsStreamMemoryOut} />
+
+For a 50 MB file, `readFile` needs one contiguous 50 MB allocation; the stream never holds more than 64 KiB at once — the difference that matters when the file could be gigabytes, or when hundreds of requests are reading files concurrently.
+
 ## Globbing and cleanup in modern Node
 
 Two newer APIs retire old dependencies. `fs.glob` (stable in Node 22+) replaces the `glob` package, and file handles support `await using` (Node 24+) so they close themselves:
@@ -156,6 +239,56 @@ console.log(config.port);
 
 Never call `readFileSync` inside a request handler, route callback, or any function invoked after the server starts.
 
+## Mental Model
+
+export const fsMentalModel = `flowchart TB
+  Call["fs call"] --> Sync["readFileSync / writeFileSync"]
+  Call --> Async["readFile / writeFile (fs/promises)"]
+  Sync -->|"runs to completion, no one else can run"| Blocks["blocks the event loop — every other request waits"]
+  Async -->|"handed to the threadpool, returns a pending Promise"| Free["event loop keeps handling other work"]
+  Blocks -->|"acceptable"| Startup["CLI scripts / before server.listen()"]
+  Free -->|"required"| Server["server request handlers"]`;
+
+<Mermaid code={fsMentalModel} title="sync fs calls run to completion and block everything else; async fs calls hand the work to the threadpool and return immediately" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `fs` sync (`readFileSync`) | Simplest code — no callback, no await, no threadpool round-trip | Blocks the entire process for the duration of the call — unacceptable once a server is accepting requests |
+| `fs/promises` (`readFile`) | Never blocks the event loop; composes with `async/await` | One extra threadpool hop per call — slightly higher latency than sync for a single call in a non-concurrent script |
+| `readFile()` whole-file | Simplest possible code — one buffer, no event wiring | Memory use scales with file size; a 1 GB file needs a 1 GB buffer |
+| `createReadStream()` | Constant memory regardless of file size; can start processing before the file finishes reading | More code — you handle `'data'`/`'end'`/`'error'` (or use `pipeline`, covered in the streams module) |
+
+## Common Misconceptions
+
+- **"readFileSync is just a slower readFile"** — fact: the difference isn't speed, it's that `readFileSync` blocks the *entire process* — no timer, no other request, no I/O callback can run until it returns.
+- **"A quick readFileSync is fine because it only takes a few milliseconds"** — fact: those milliseconds are stolen from every concurrent request the server is handling at that moment, not just the one that triggered the read.
+- **"readFile() and a stream use about the same memory since they read the same file"** — fact: `readFile()` holds the whole file as one buffer; a stream holds at most one `highWaterMark` chunk (64 KiB by default) at a time, independent of total file size.
+
+## Reading AI-generated code
+
+- Does a route handler or any function called after `server.listen()` use `readFileSync`, `writeFileSync`, or `existsSync`? Any of these blocks every concurrent request for the duration of the call.
+- Does code load a potentially large or user-controlled file with `readFile()` into a single buffer, instead of streaming it, when the file will just be forwarded or processed chunk-by-chunk anyway?
+- Does a file handle opened with `fs.open()`/`fsPromises.open()` get closed on every exit path, including thrown errors — or would `await using` (Node 24+) make that automatic?
+
+<SpotTheBug code={`import { readFileSync } from 'node:fs';
+import http from 'node:http';
+
+var server = http.createServer(function(req, res) {
+  // reads the config file from disk on every single request
+  var config = JSON.parse(readFileSync('./config.json', 'utf8'));
+  res.end(JSON.stringify({ port: config.port }));
+});
+
+server.listen(3000);`}>
+`readFileSync` runs inside the request handler, so **every incoming request** blocks the entire event loop for the duration of the disk read — no other request can be accepted or answered while it runs, even ones that have nothing to do with this route. The fix is to read the config once at startup (before `server.listen()`, where a sync call is acceptable) and reuse the parsed object from a variable in every request, or use `fs/promises`' `readFile` with a small in-memory cache if the file can change at runtime.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`fs/promises` in anything that runs after `server.listen()`, `fs` sync only at startup — a blocking read doesn't just slow down the request that triggered it, it freezes every other request the process is handling.
+</Callout>
+
 export const fsQuiz = [
   {
     q: 'Why should you avoid fs.readFileSync inside a server request handler?',
@@ -166,6 +299,7 @@ export const fsQuiz = [
       'It only works on Linux systems',
     ],
     answer: 1,
+    explain: 'readFileSync runs to completion on the single JS thread before anything else can run — every other in-flight request, timer, and I/O callback waits for it, no matter how fast the disk is.',
   },
   {
     q: 'What does fs.writeFile do if the target file already exists?',
@@ -176,6 +310,7 @@ export const fsQuiz = [
       'It creates a backup and writes to a new file',
     ],
     answer: 2,
+    explain: 'writeFile always replaces the full contents of an existing file. Use appendFile if you want to add to what is already there instead of overwriting it.',
   },
   {
     q: 'Which import gives you the promise-based fs API?',
@@ -186,6 +321,40 @@ export const fsQuiz = [
       'import fs from "node:fs/async"',
     ],
     answer: 1,
+    explain: '"node:fs/promises" is the dedicated promise-based module. "node:fs" also exposes an fs.promises namespace for the same functions, but the direct submodule import is the more common and recommended form.',
+  },
+  {
+    q: 'What does this print?\n\nvar timerFired = false;\nsetTimeout(() => { timerFired = true; }, 0);\nvar data = readFileSync(path, "utf8");\nconsole.log(timerFired);',
+    options: [
+      'true — 0 ms means the timer runs immediately',
+      'false — readFileSync always runs to completion before any timer callback gets a turn',
+      'It depends on file size',
+      'undefined — timerFired is not defined yet',
+    ],
+    answer: 1,
+    explain: 'A setTimeout callback can only run once the current synchronous code finishes and the event loop reaches the timers phase. readFileSync is synchronous — it never yields — so the timer, however small its delay, cannot fire until after readFileSync has already returned.',
+  },
+  {
+    q: 'A 200 MB file is read once with fs.readFile() and once with fs.createReadStream(). Which statement about memory use is correct?',
+    options: [
+      'They use identical memory because they read the same bytes',
+      'readFile() needs roughly one 200 MB allocation; the stream needs roughly one highWaterMark chunk (64 KiB by default) at a time',
+      'The stream uses more memory because of the overhead of multiple `data` events',
+      'readFile() uses less memory because it has no event listeners',
+    ],
+    answer: 1,
+    explain: 'readFile() (sync or promise) must hold the entire file as one buffer before it can return it, so peak memory scales with file size. A stream delivers the file in bounded highWaterMark-sized pieces, so memory use stays roughly constant no matter how large the file is.',
+  },
+  {
+    q: 'What is wrong with calling readFileSync(\'./config.json\') inside an HTTP request handler that runs on every request?',
+    options: [
+      'Nothing, as long as the file is small',
+      'It throws MODULE_NOT_FOUND on the second call',
+      'It blocks every other concurrent request for the duration of each read, on every single request',
+      'It only works the first time the server starts',
+    ],
+    answer: 2,
+    explain: 'The problem is not correctness but concurrency: every call inside the handler blocks the entire event loop, so under real traffic every other in-flight request is delayed by every disk read. The fix is to read the config once at startup and reuse the parsed value.',
   },
 ];
 

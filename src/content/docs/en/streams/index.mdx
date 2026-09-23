@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The problem with loading everything at once
 
@@ -61,10 +63,59 @@ async function main() {
 main();
 `;
 
-<NodeRunner client:visible code={streamsIndexCode} node />
+export const streamsIndexOut = `chunk: "hello"
+chunk: " "
+chunk: "streaming"
+chunk: " "
+chunk: "world"
+assembled: hello streaming world`;
+
+<NodeRunner client:visible code={streamsIndexCode} node expected={streamsIndexOut} />
 
 <Callout title="Streams process data chunk by chunk">
 Instead of loading an entire file or response into memory, streams let you start processing the first chunk while the rest is still arriving — keeping memory use constant regardless of total data size.
+</Callout>
+
+## Mental Model
+
+export const streamsIndexMentalModel = `flowchart LR
+  Readable["Readable — data flows OUT"] -->|".pipe() / pipeline()"| Writable["Writable — data flows IN"]
+  Readable -->|"through a"| Transform["Transform — reshapes each chunk"]
+  Transform --> Writable
+  Duplex["Duplex — both directions independently"]
+  All["Readable, Writable, Duplex, Transform"] -->|"all extend"| EE["EventEmitter"]`;
+
+<Mermaid code={streamsIndexMentalModel} title="data flows from a Readable, optionally through a Transform, into a Writable — every stream type is also an EventEmitter" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Streaming (chunked) | Memory use stays bounded regardless of total data size; can start processing before the source finishes | More moving parts than a single `readFile()` call — events or async iteration, backpressure, error propagation |
+| Loading everything into memory first | Simplest possible code — no event wiring, whole result available at once | Peak memory scales with input size; a large enough input crashes the process outright |
+
+## Common Misconceptions
+
+- **"Streams are always faster than reading a whole file"** — fact: streams save *memory*, not necessarily wall-clock time. For a file that comfortably fits in RAM, `readFile()` can be simpler and just as fast.
+- **"Every stream needs a `data` event listener to produce output"** — fact: `for await...of` (async iteration) consumes a Readable without ever touching the `data` event, and handles backpressure automatically in the process.
+- **"Transform streams and Duplex streams are the same thing"** — fact: both are bidirectional, but a `Transform`'s output is derived from its input (one side feeds the other); a `Duplex`'s readable and writable sides are independent — a TCP socket reads and writes unrelated data on each side.
+
+## Reading AI-generated code
+
+- Does code call `fs.readFileSync()` or `fs.readFile()` to load a file only to immediately write it back out or forward it somewhere else, when a stream (or `pipeline`) would never hold the whole file in memory?
+- Does a snippet attach a `data` listener to a Readable without ever checking backpressure downstream, assuming `.pipe()`'s automatic pause/resume behavior without actually calling `.pipe()`?
+- Does code treat `Transform` and `Duplex` as interchangeable — extending `Duplex` when the real intent is "take X in, produce derived Y out" (a `Transform`)?
+
+<SpotTheBug code={`const fs = require('node:fs');
+
+// Loads the whole file into memory just to copy it elsewhere
+var data = fs.readFileSync('./huge-input.log');
+fs.writeFileSync('./huge-output.log', data);`}>
+This reads the entire file into a single in-memory `Buffer` before writing it back out, even though nothing here needs to inspect or transform the content — for a multi-gigabyte log file this can exhaust available memory or simply waste it. `fs.createReadStream('./huge-input.log').pipe(fs.createWriteStream('./huge-output.log'))` (or `stream/promises`' `pipeline`, covered later in this module) copies the file in bounded chunks without ever holding more than one chunk in memory at a time.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A stream processes data in bounded chunks instead of loading it all at once — every stream type is an `EventEmitter`, and `for await...of` is the cleanest way to consume one without managing backpressure yourself.
 </Callout>
 
 export const streamsIndexQuiz = [
@@ -77,6 +128,7 @@ export const streamsIndexQuiz = [
       'Streams run on a separate thread',
     ],
     answer: 1,
+    explain: 'A stream processes data in bounded chunks, so memory use stays roughly constant no matter how large the source is. Loading everything into memory first means peak memory scales directly with input size.',
   },
   {
     q: 'Which Node.js stream type transforms data as it passes through?',
@@ -87,6 +139,7 @@ export const streamsIndexQuiz = [
       'Transform',
     ],
     answer: 3,
+    explain: 'A Transform is a Duplex stream where the writable side feeds the readable side after applying some transformation (compression, encoding, uppercasing, ...). A plain Duplex has independent, unrelated readable and writable sides.',
   },
   {
     q: 'What base class do all four Node.js stream types extend?',
@@ -97,6 +150,29 @@ export const streamsIndexQuiz = [
       'Worker',
     ],
     answer: 1,
+    explain: 'Readable, Writable, Duplex, and Transform all extend EventEmitter, which is why every stream emits events like data, end, error, drain, and finish that you can attach handlers to.',
+  },
+  {
+    q: 'What does this print?\n\nconst { Readable } = require("node:stream");\nvar s = Readable.from(["a", "b"]);\nconsole.log(typeof s.on);',
+    options: [
+      "'undefined' — Readable.from() returns a plain iterable, not a stream",
+      "'function' — every stream, including one created by Readable.from, is an EventEmitter",
+      "'object'",
+      'It throws',
+    ],
+    answer: 1,
+    explain: 'Readable.from() returns a real Readable stream instance, and every stream type extends EventEmitter, so .on is always a function on it — you can listen for data, end, error, and the rest even on a stream built from a plain array.',
+  },
+  {
+    q: 'A function reads a 2 GB file with fs.readFileSync() and immediately writes it to another path with fs.writeFileSync(). What is the main risk?',
+    options: [
+      'writeFileSync cannot write files larger than 1 GB',
+      'The process holds the entire 2 GB in memory at once, which can crash it on a memory-constrained host',
+      'readFileSync silently truncates files over 1 GB',
+      'There is no risk — this is the recommended pattern for large files',
+    ],
+    answer: 1,
+    explain: 'Both sync fs calls hold the full file content as one in-memory buffer. For a 2 GB file that is a 2 GB allocation, which can exceed available memory on a constrained container or crash the process outright. A stream (or pipeline) never holds more than one bounded chunk at a time.',
   },
 ];
 

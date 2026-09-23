@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Why Buffer exists
 
@@ -40,7 +42,55 @@ var buf3 = Buffer.alloc(4);
 console.log('buf3 (zeroed):', buf3);  // <Buffer 00 00 00 00>
 `;
 
-<NodeRunner client:visible code={bufferFromCode} node />
+export const bufferFromOut = `buf1: <Buffer 48 65 6c 6c 6f>
+buf1 length: 5
+buf2: <Buffer de ad be ef>
+buf2 length: 4
+buf3 (zeroed): <Buffer 00 00 00 00>`;
+
+<NodeRunner client:visible code={bufferFromCode} node expected={bufferFromOut} />
+
+## Buffer.alloc vs Buffer.allocUnsafe
+
+`Buffer.alloc(size)` zero-fills the memory before handing it to you — safe, but it costs a write over every byte. `Buffer.allocUnsafe(size)` skips that zero-fill and just gives you whatever bytes were already sitting in that region of the memory pool — faster, but those bytes could be **anything**, including leftover fragments of previously-freed buffers (old request bodies, old file contents, old secrets).
+
+<Callout title="allocUnsafe is only safe if you overwrite every byte before reading it">
+`allocUnsafe` is a real footgun in AI-generated code: it looks identical to `alloc` in the diff, runs fine locally (the pool often happens to be zeroed on a fresh process), and then leaks stale heap data in production once the pool has been recycled. Only reach for it when you are about to `.fill()` it or write into every byte yourself (e.g. as a scratch buffer immediately passed to `fs.read()`).
+</Callout>
+
+export const bufferAllocUnsafeCode = `
+var safe = Buffer.alloc(8);
+console.log('alloc(8):', safe); // always zeroed — deterministic
+
+var unsafe = Buffer.allocUnsafe(8);
+console.log('allocUnsafe(8) length:', unsafe.length);
+console.log('allocUnsafe(8) is a Buffer:', Buffer.isBuffer(unsafe));
+// unsafe's contents are NOT printed here — they are whatever bytes were
+// already in that memory region and are not guaranteed to be the same
+// from one run (or one machine) to the next.
+
+// The safe pattern: fill or fully overwrite before use
+unsafe.fill(0);
+console.log('after fill(0):', unsafe);
+console.log('now equal to alloc(8):', unsafe.equals(safe));
+`;
+
+export const bufferAllocUnsafeOut = `alloc(8): <Buffer 00 00 00 00 00 00 00 00>
+allocUnsafe(8) length: 8
+allocUnsafe(8) is a Buffer: true
+after fill(0): <Buffer 00 00 00 00 00 00 00 00>
+now equal to alloc(8): true`;
+
+<NodeRunner client:visible code={bufferAllocUnsafeCode} node expected={bufferAllocUnsafeOut} />
+
+Illustrative only — the exact bytes below will differ every time you run it, which is exactly the point:
+
+```js
+// @skip-verify nondeterministic memory contents — illustrates allocUnsafe's danger, not something with a fixed expected output
+var mystery = Buffer.allocUnsafe(8);
+console.log(mystery);
+// <Buffer 00 00 00 00 8f 12 40 55>  <- or anything else. Never rely on this.
+```
 
 ## Encodings: utf8, hex, base64
 
@@ -60,7 +110,48 @@ var decoded = Buffer.from(b64, 'base64').toString('utf8');
 console.log('decoded:', decoded);
 `;
 
-<NodeRunner client:visible code={encodingsCode} node />
+export const encodingsOut = `utf8  : Node.js
+hex   : 4e6f64652e6a73
+base64: Tm9kZS5qcw==
+decoded: Node.js`;
+
+<NodeRunner client:visible code={encodingsCode} node expected={encodingsOut} />
+
+## base64url — the URL/cookie/header-safe encoding
+
+Standard base64 can contain `+`, `/`, and trailing `=` padding — all three need escaping in a URL, a cookie, or an HTTP header. `base64url` (Node 15.7+) is the same encoding with a URL-safe alphabet (`-`/`_` instead of `+`/`/`) and no padding, which is exactly the format JWTs use for their header and payload segments.
+
+export const base64urlCode = `
+function b64url(obj) {
+  return Buffer.from(JSON.stringify(obj)).toString('base64url');
+}
+
+// A JWT-shaped payload: header.payload (signature omitted for this demo)
+var header = b64url({ alg: 'HS256', typ: 'JWT' });
+var payload = b64url({ sub: '1234567890', name: 'Ada' });
+console.log('header:', header);
+console.log('payload:', payload);
+console.log('token:', header + '.' + payload + '.SIGNATURE');
+
+// base64url is safe to drop straight into a URL, cookie, or header value —
+// it never produces +, /, or trailing = padding.
+var raw = Buffer.from([0xff, 0xff, 0xbe]);
+console.log('standard base64:', raw.toString('base64')); // contains + and /
+console.log('base64url      :', raw.toString('base64url')); // - and _ instead, no padding
+
+// Round-trip
+var decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+console.log('decoded payload:', decoded);
+`;
+
+export const base64urlOut = `header: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
+payload: eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkYSJ9
+token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkYSJ9.SIGNATURE
+standard base64: //++
+base64url      : __--
+decoded payload: { sub: '1234567890', name: 'Ada' }`;
+
+<NodeRunner client:visible code={base64urlCode} node expected={base64urlOut} />
 
 ## Byte length vs string length
 
@@ -81,7 +172,14 @@ console.log('emoji .length:', emoji.length);
 console.log('emoji bytes (utf8):', Buffer.byteLength(emoji, 'utf8'));
 `;
 
-<NodeRunner client:visible code={byteLengthCode} node />
+export const byteLengthOut = `ascii chars: 5
+ascii bytes: 5
+thai chars: 6
+thai bytes (utf8): 18
+emoji .length: 7
+emoji bytes (utf8): 9`;
+
+<NodeRunner client:visible code={byteLengthCode} node expected={byteLengthOut} />
 
 ## Slicing and copying
 
@@ -103,7 +201,109 @@ console.log('copy:', copy.toString());   // world
 console.log('buf unchanged:', buf.toString());
 `;
 
-<NodeRunner client:visible code={sliceCode} node />
+export const sliceOut = `slice: Hello
+buf after mutation: Jello, World!
+copy: world
+buf unchanged: Jello, World!`;
+
+<NodeRunner client:visible code={sliceCode} node expected={sliceOut} />
+
+## StringDecoder: decoding multi-byte characters split across chunks
+
+A network stream delivers bytes in whatever chunks the OS hands over — it has no idea where a UTF-8 character boundary falls. If a multi-byte character (like most Thai characters, which are 3 bytes each in UTF-8) is split across two chunks, calling `.toString('utf8')` on each chunk **independently** corrupts it: each half is an incomplete byte sequence, so both halves decode to the Unicode replacement character (`�`).
+
+`node:string_decoder`'s `StringDecoder` fixes this: it buffers incomplete trailing bytes and prepends them to the next chunk, so multi-byte characters are only ever decoded once they're complete.
+
+export const stringDecoderCode = `
+const { StringDecoder } = require('node:string_decoder');
+
+var thai = 'สวัสดี'; // 6 Thai characters
+var full = Buffer.from(thai, 'utf8');
+console.log('full string:', thai);
+console.log('total bytes:', full.length);
+
+// Split the buffer mid-character to simulate a chunk boundary landing
+// inside a multi-byte sequence, as can happen with any network stream.
+var splitAt = 4;
+var chunk1 = full.subarray(0, splitAt);
+var chunk2 = full.subarray(splitAt);
+
+console.log('--- naive: toString() per chunk ---');
+console.log('chunk1.toString():', JSON.stringify(chunk1.toString('utf8')));
+console.log('chunk2.toString():', JSON.stringify(chunk2.toString('utf8')));
+console.log('naive concat:', chunk1.toString('utf8') + chunk2.toString('utf8'));
+
+console.log('--- correct: StringDecoder buffers partial characters ---');
+var decoder = new StringDecoder('utf8');
+var result = decoder.write(chunk1);
+result += decoder.write(chunk2);
+result += decoder.end();
+console.log('decoded:', result);
+console.log('matches original:', result === thai);
+`;
+
+export const stringDecoderOut = `full string: สวัสดี
+total bytes: 18
+--- naive: toString() per chunk ---
+chunk1.toString(): "ส�"
+chunk2.toString(): "��ัสดี"
+naive concat: ส���ัสดี
+--- correct: StringDecoder buffers partial characters ---
+decoded: สวัสดี
+matches original: true`;
+
+<NodeRunner client:visible code={stringDecoderCode} node expected={stringDecoderOut} />
+
+## Mental Model
+
+export const bufferMentalModel = `flowchart LR
+  A["Buffer.alloc(n)"] -->|"zero-fills first"| Z["all bytes 0x00 — safe to read immediately"]
+  B["Buffer.allocUnsafe(n)"] -->|"skips zero-fill"| G["whatever was in the memory pool — must overwrite before reading"]
+  G -->|".fill() or write every byte"| Z
+  S["multi-byte char split across two chunks"] -->|"toString() per chunk"| Corrupt["each half is incomplete -> replacement character"]
+  S -->|"StringDecoder.write() per chunk"| Correct["partial bytes carried to next chunk -> correct string"]`;
+
+<Mermaid code={bufferMentalModel} title="alloc trades a zero-fill write for safety; allocUnsafe trades safety for speed; StringDecoder is the fix for chunk boundaries that split a character" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `Buffer.alloc(n)` | Always safe — deterministic zeroed memory | Pays the cost of zero-filling even when you're about to overwrite everything anyway |
+| `Buffer.allocUnsafe(n)` | Skips the zero-fill — faster in a hot path | Contents are undefined until you overwrite them; forgetting to do so leaks old heap data |
+| `.slice()`/`.subarray()` view | Zero-copy — no new memory allocated | Mutating the view mutates the original buffer, which is easy to do by accident |
+| `.toString()` per chunk | Simplest possible code | Silently corrupts any multi-byte character split across a chunk boundary |
+| `StringDecoder` | Correct across chunk boundaries | One more object to carry through your stream-handling code |
+
+## Common Misconceptions
+
+- **"`Buffer.allocUnsafe` is just a faster `Buffer.alloc`"** — fact: it is faster because it skips zeroing memory; the bytes you get back are leftover data, not zeros, until you overwrite them yourself.
+- **"base64 and base64url are the same thing with a different name"** — fact: base64url substitutes `-`/`_` for `+`/`/` and drops padding, specifically so the result is safe to embed in a URL, cookie, or header without escaping.
+- **"`chunk.toString('utf8')` is always safe for text streams"** — fact: it is only safe when the chunk boundary never splits a multi-byte character — which a network stream cannot guarantee.
+- **"`buf.slice()` returns a copy, like `Array.prototype.slice()`"** — fact: `Buffer#slice`/`#subarray` return a **view** over the same underlying memory; mutating the slice mutates the original.
+
+## Reading AI-generated code
+
+- Is `Buffer.allocUnsafe()` used anywhere the buffer is read (logged, sent, hashed) before every byte has been explicitly written or `.fill()`ed?
+- Does a stream handler call `chunk.toString('utf8')` on each chunk independently, instead of accumulating with `Buffer.concat()` or decoding with `StringDecoder`? This breaks the moment a multi-byte character (Thai, emoji, CJK) straddles a chunk boundary.
+- Does code compute a string's size with `str.length` instead of `Buffer.byteLength(str, 'utf8')` before allocating a fixed-size buffer or setting a `Content-Length` header? Any non-ASCII input will overflow or truncate.
+- Is a JWT or URL token built with standard `base64` instead of `base64url`, requiring manual `+`/`/`/`=` escaping that's easy to get wrong?
+
+<SpotTheBug code={`const { Transform } = require('node:stream');
+
+class Uppercase extends Transform {
+  _transform(chunk, encoding, callback) {
+    // chunk is a raw Buffer — this decodes each piece independently
+    var text = chunk.toString('utf8');
+    callback(null, text.toUpperCase());
+  }
+}`}>
+`_transform` receives raw `Buffer` chunks with no guarantee that a chunk boundary respects UTF-8 character boundaries. Calling `chunk.toString('utf8')` on each chunk independently will corrupt any multi-byte character (Thai, emoji, CJK) that happens to be split across two chunks — the same failure mode shown in the `StringDecoder` demo above, where each half decodes to `�` instead of the real character. The fix is to hold a `StringDecoder` instance on the class (`this._decoder = new StringDecoder('utf8')`) and call `this._decoder.write(chunk)` inside `_transform`, plus `this._decoder.end()` in `_flush` to flush any trailing partial bytes.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`Buffer.alloc` is safe by default and `Buffer.allocUnsafe` is a deliberate trade of safety for speed; decoding raw bytes to text only across whole characters — never per fixed-size chunk — is what `StringDecoder` (and Transform streams built on it) exist to guarantee.
+</Callout>
 
 export const bufferQuiz = [
   {
@@ -115,6 +315,7 @@ export const bufferQuiz = [
       'Buffer.byteLength counts bits, not bytes',
     ],
     answer: 1,
+    explain: 'str.length reports the number of UTF-16 code units JavaScript uses internally, which is not the same as the number of bytes the string would occupy once encoded (UTF-8, in most cases). For ASCII the two numbers happen to match; for Thai, emoji, or any non-Latin text they diverge.',
   },
   {
     q: 'What does Buffer.from("deadbeef", "hex") produce?',
@@ -125,6 +326,7 @@ export const bufferQuiz = [
       'A Buffer of 8 bytes, one per hex character',
     ],
     answer: 1,
+    explain: 'hex is a valid Buffer encoding: each pair of hex digits becomes one byte, so an 8-character hex string produces a 4-byte Buffer <Buffer de ad be ef>.',
   },
   {
     q: 'What happens when you mutate a slice returned by buf.slice()?',
@@ -135,6 +337,40 @@ export const bufferQuiz = [
       'Only the original is modified',
     ],
     answer: 1,
+    explain: 'buf.slice() (like buf.subarray()) returns a view over the same underlying memory as the original buffer, not a copy. Writing through the slice writes through to the original.',
+  },
+  {
+    q: 'What does this print?\n\nvar safe = Buffer.alloc(4);\nvar unsafe = Buffer.allocUnsafe(4);\nconsole.log(safe.equals(Buffer.from([0, 0, 0, 0])));',
+    options: [
+      'true — alloc() always zero-fills, so it is guaranteed equal to an all-zero buffer',
+      'false — alloc() does not zero-fill',
+      'It throws — Buffer.equals requires the same encoding',
+      'It depends on allocUnsafe(4), which is also compared',
+    ],
+    answer: 0,
+    explain: 'The comparison only involves safe (from Buffer.alloc(4)), which the Node.js docs guarantee is always zero-filled — this line has a deterministic answer regardless of what allocUnsafe(4) happened to contain.',
+  },
+  {
+    q: 'A UTF-8 byte stream delivers a 3-byte Thai character split as 2 bytes in one chunk and 1 byte in the next. What does `chunk.toString(\'utf8\')` on each chunk independently produce?',
+    options: [
+      'The correct character, reassembled automatically',
+      'An error is thrown for invalid UTF-8',
+      'Two replacement characters (�) — each chunk is an incomplete byte sequence on its own',
+      'The first chunk is buffered until the second arrives, producing the correct character',
+    ],
+    answer: 2,
+    explain: '.toString() has no memory between calls — it decodes exactly the bytes it is given. Two incomplete halves of one UTF-8 character each decode to the replacement character U+FFFD. StringDecoder is specifically built to carry the incomplete trailing bytes forward to the next .write() call instead.',
+  },
+  {
+    q: 'Which encoding is the right choice for embedding a token directly in a URL query string with no manual escaping?',
+    options: [
+      'hex',
+      'base64',
+      'base64url',
+      'utf8',
+    ],
+    answer: 2,
+    explain: 'base64url uses a URL-safe alphabet (- and _ instead of + and /) and omits padding, so the output never needs percent-encoding to survive in a URL, cookie, or header value. Standard base64 can contain +, /, and = — all of which need escaping in a URL.',
   },
 ];
 

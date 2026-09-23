@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The process object
 
@@ -67,6 +69,48 @@ console.log('Total env vars:', keys.length);
 
 <NodeRunner client:visible code={envCode} node />
 
+### Every value is a string — the PORT > 1024 trap
+
+Every key and value in `process.env` is a **string**, even if the shell set it to something that looks like a number or a boolean. `PORT=3000` in the environment gives you `process.env.PORT === '3000'`, not `3000`. Relational operators (`<`, `>`) coerce a string operand to a number for you, but `===` and `+` do not — that mismatch is one of the most common `process.env` bugs:
+
+export const envStringsCode = `
+process.env.PORT = '3000'; // set here only to make this demo self-contained
+
+console.log('typeof PORT:', typeof process.env.PORT);
+
+// Trap 1: strict equality never coerces
+console.log('PORT === 3000:', process.env.PORT === 3000);       // false -- string !== number
+console.log('PORT === "3000":', process.env.PORT === '3000');   // true
+
+// Trap 2: + concatenates strings instead of adding numbers
+console.log('PORT + 1:', process.env.PORT + 1);                 // "30001"
+console.log('Number(PORT) + 1:', Number(process.env.PORT) + 1); // 3001 -- convert first
+
+// Relational operators DO coerce to number...
+console.log('PORT > 1024:', process.env.PORT > 1024); // true
+
+// ...but an unset variable coerces to NaN, and every comparison with NaN
+// is false -- silently, with no error, instead of telling you it's missing.
+delete process.env.PORT;
+console.log('unset PORT > 1024:', process.env.PORT > 1024);   // false, NOT an error
+console.log('Number(unset PORT):', Number(process.env.PORT)); // NaN
+`;
+
+export const envStringsOut = `typeof PORT: string
+PORT === 3000: false
+PORT === "3000": true
+PORT + 1: 30001
+Number(PORT) + 1: 3001
+PORT > 1024: true
+unset PORT > 1024: false
+Number(unset PORT): NaN`;
+
+<NodeRunner client:visible code={envStringsCode} node expected={envStringsOut} />
+
+<Callout title="Always convert before comparing or doing arithmetic">
+`Number(process.env.PORT)` (or `parseInt(process.env.PORT, 10)`) before comparing with `===` or using `+`. And check the result isn't `NaN` — an unset or malformed env var fails silently otherwise, instead of crashing loudly where you'd notice it in development.
+</Callout>
+
 ### Loading a .env file without dotenv
 
 Since Node 22 the runtime loads env files itself — from the CLI with `--env-file`, or from code with `process.loadEnvFile()`:
@@ -124,6 +168,174 @@ if (!process.env.DATABASE_URL) {
 
 Calling `process.exit()` is a hard stop — it skips pending async callbacks **and** any `finally` blocks still on the call stack. Prefer setting `process.exitCode` (e.g. `process.exitCode = 1`) and letting the process exit naturally instead — that gives pending I/O, `finally` blocks, and a graceful shutdown (e.g. `server.close()`) a chance to run.
 
+export const exitCodeCode = `
+process.exitCode = 1; // tentative -- overwritten below once cleanup finishes
+
+console.log('exitCode set to 1 (tentative)');
+
+setImmediate(function() {
+  console.log('setImmediate callback ran -- exitCode does NOT skip pending callbacks');
+  process.exitCode = 0; // cleanup succeeded -- exit 0 once the loop naturally drains
+});
+`;
+
+export const exitCodeOut = `exitCode set to 1 (tentative)
+setImmediate callback ran -- exitCode does NOT skip pending callbacks`;
+
+<NodeRunner client:visible code={exitCodeCode} node expected={exitCodeOut} />
+
+export const hardExitCode = `// @expect-throw
+console.log('about to hard-exit with process.exit(1)');
+process.exit(1);
+setImmediate(function() {
+  console.log('this NEVER prints -- process.exit() skips pending callbacks');
+});
+`;
+
+export const hardExitOut = `about to hard-exit with process.exit(1)`;
+
+<NodeRunner client:visible code={hardExitCode} node expected={hardExitOut} />
+
+Same pending `setImmediate`, two different outcomes: `process.exitCode` lets it run before the process exits; `process.exit()` cuts it off mid-flight.
+
+## Signals and graceful shutdown
+
+Orchestrators (Docker, Kubernetes, `systemd`, `Ctrl+C` in a terminal) stop a process by sending it a signal, not by killing it outright: `SIGTERM` asks nicely, `SIGINT` is what `Ctrl+C` sends. Node lets you intercept both with `process.on()` to finish in-flight work — stop accepting new connections, let existing requests finish, close database connections — before actually exiting:
+
+export const sigtermCode = `
+// Keeps the event loop alive long enough for the signal to actually be
+// delivered -- with nothing else pending, Node can exit(0) before the
+// signal ever arrives. The handler clears it once it runs.
+var keepAlive = setTimeout(function() {}, 5000);
+
+process.on('SIGTERM', function() {
+  clearTimeout(keepAlive);
+  console.log('SIGTERM received -- closing server gracefully');
+  console.log('cleanup done, exiting 0');
+  process.exit(0);
+});
+
+console.log('server started (simulated)');
+// In production this signal comes from the orchestrator; here we send it to
+// ourselves to make the demo self-contained and deterministic.
+process.kill(process.pid, 'SIGTERM');
+console.log('this line runs synchronously -- the signal handler fires after it');
+`;
+
+export const sigtermOut = `server started (simulated)
+this line runs synchronously -- the signal handler fires after it
+SIGTERM received -- closing server gracefully
+cleanup done, exiting 0`;
+
+<NodeRunner client:visible code={sigtermCode} node expected={sigtermOut} />
+
+<Callout title="Without a SIGTERM handler, Docker/k8s kill you after a timeout">
+With no listener, `SIGTERM` terminates the process immediately — any request being handled at that moment is cut off mid-response. Kubernetes gives a pod a grace period (default 30s) between `SIGTERM` and a hard `SIGKILL`; use that window to call `server.close()` (stop accepting new connections, let in-flight ones finish) and close any database pools before calling `process.exit(0)` yourself.
+</Callout>
+
+## process.nextTick — where it fits in the event loop
+
+`process.nextTick(fn)` queues `fn` to run **before** the event loop continues to the next phase — even before other microtasks (promise callbacks) queued earlier. It's covered in depth, with the full ordering against `Promise`, `setImmediate`, and `setTimeout`, in [Microtasks and Macrotasks](/nodejs/en/event-loop-async/microtasks-macrotasks/). The short version relevant here: `process` is where `nextTick` lives, but it is really an event-loop primitive, not a `process`-specific feature — it exists on `process` for historical reasons (it predates `queueMicrotask`).
+
+## The node: prefix — recap
+
+As covered in this module's [overview](/nodejs/en/core-apis/), `process` needs no import at all — it's a true global, like `Buffer`. Every module used on this page (`node:util`, `node:fs`, `node:child_process`) can be imported with or without the `node:` prefix *if* it's a legacy module; brand-new built-ins like `node:test` and `node:sqlite` only resolve with the prefix. When you see `require('util')` in older code, it is equivalent to `require('node:util')` — the prefix is a clarity convention, not a behavior change, for anything that predates it.
+
+## CLI parsing and terminal styling: util.parseArgs and util.styleText
+
+`node:util` ships two small utilities that remove the need for popular npm packages in simple CLI tools. `parseArgs` (stable since 20.x) replaces `yargs`/`minimist` for straightforward flag parsing:
+
+export const parseArgsCode = `
+import { parseArgs } from 'node:util';
+
+// Normally read from process.argv.slice(2); hardcoded here to keep the demo deterministic
+var fakeArgv = ['--name', 'Ada', '--verbose', '--count', '3'];
+
+var { values } = parseArgs({
+  args: fakeArgv,
+  options: {
+    name: { type: 'string' },
+    verbose: { type: 'boolean' },
+    count: { type: 'string' },
+  },
+});
+
+console.log(values);
+`;
+
+export const parseArgsOut = `[Object: null prototype] { name: 'Ada', verbose: true, count: '3' }`;
+
+<NodeRunner client:visible code={parseArgsCode} node expected={parseArgsOut} />
+
+`styleText` (stable since 22.x) adds ANSI color/style codes to a string — replacing `chalk`/`picocolors` for basic cases. It automatically checks whether the target stream actually supports color and **returns the plain string unchanged if not** (piped output, a log file, most CI runners):
+
+export const styleTextCode = `
+import { styleText } from 'node:util';
+
+var msg = styleText('green', 'OK');
+console.log(JSON.stringify(msg));
+// When stdout is not a TTY (as in this verified output, and in CI logs),
+// styleText skips the ANSI codes entirely -- the string comes back unchanged.
+console.log('length with codes:', msg.length, 'vs plain length:', 'OK'.length);
+`;
+
+export const styleTextOut = `"OK"
+length with codes: 2 vs plain length: 2`;
+
+<NodeRunner client:visible code={styleTextCode} node expected={styleTextOut} />
+
+## Mental Model
+
+export const processEnvMentalModel = `flowchart TB
+  Env["process.env.PORT"] -->|"always"| Str["a string, never a number"]
+  Str -->|"=== or arithmetic"| Trap["silent bug: false / string concat"]
+  Str -->|"Number() first"| Safe["correct comparison/arithmetic"]
+  Exit1["process.exitCode = n"] -->|"lets pending callbacks + finally run"| Natural["process exits naturally"]
+  Exit2["process.exit(n)"] -->|"cuts off immediately"| Hard["pending callbacks + finally skipped"]
+  Sig["SIGTERM / SIGINT"] -->|"no listener"| Immediate["process dies immediately, mid-request"]
+  Sig -->|"process.on(signal, ...)"| Graceful["finish in-flight work, then exit(0)"]`;
+
+<Mermaid code={processEnvMentalModel} title="process.env is always strings; exitCode drains pending work while exit() cuts it off; an unhandled signal kills the process immediately, a handled one exits gracefully" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Reading config via `process.env` | Same code deploys to every environment (12-Factor); no rebuild for new config | Everything is a string — every numeric/boolean value needs explicit conversion and validation |
+| `process.exitCode = n` | Pending I/O, timers, and `finally` blocks get to run; safer default | Requires the event loop to actually drain — a stuck handle keeps the process alive |
+| `process.exit(n)` | Guarantees immediate termination, useful when something is truly stuck | Skips `finally` blocks and pending callbacks unconditionally — including ones flushing logs or closing connections |
+| Handling `SIGTERM` yourself | Requests in flight get to finish; connections close cleanly | Adds shutdown-path code that's easy to get wrong (must actually call `exit()` eventually, or the orchestrator's grace period runs out and it `SIGKILL`s you anyway) |
+
+## Common Misconceptions
+
+- **"process.env.PORT > 1024 is unsafe because PORT is a string"** — fact: relational operators (`<`/`>`) coerce a string operand to a number automatically; the real traps are `===` (never coerces) and `+` (concatenates strings instead of adding).
+- **"process.exit() and setting process.exitCode do the same thing, just different syntax"** — fact: `exitCode` lets the event loop drain naturally — pending callbacks and `finally` blocks run; `exit()` terminates immediately, skipping both.
+- **"Without a signal handler, Kubernetes waits for my process to finish its current request"** — fact: with no `SIGTERM` listener, the default behavior terminates the process right away; only an explicit handler buys time to finish in-flight work, and only up to the orchestrator's grace period.
+- **"styleText always adds color codes to my string"** — fact: it checks whether the destination stream supports color first, and silently returns the plain string when it doesn't (piped output, log files, most CI).
+
+## Reading AI-generated code
+
+- Does code compare `process.env.SOMETHING` with `===` against a number, or feed it directly into arithmetic with `+`, without an explicit `Number(...)`/`parseInt(...)` conversion first?
+- Does a script call `process.exit()` right after `console.log()` or a `fs.writeFile()`/database write, when the write might still be in flight? On some platforms buffered stdout can be truncated, and any pending async write is abandoned outright.
+- Does a long-running server register a `SIGTERM`/`SIGINT` handler at all? Its absence means every deploy kills in-flight requests instead of finishing them.
+- Does cleanup logic live in a `finally` block that only runs on the natural exit path, while an earlier branch calls `process.exit()` directly — silently skipping that same cleanup?
+
+<SpotTheBug code={`import http from 'node:http';
+
+var server = http.createServer(function(req, res) {
+  res.end('ok');
+});
+
+server.listen(process.env.PORT || 3000, function() {
+  console.log('listening on port', process.env.PORT || 3000);
+});`}>
+`process.env.PORT` is a **string** (or `undefined`). `server.listen()` happens to accept a string port number, so this specific call doesn't crash — but the moment this value is used anywhere with `===`, arithmetic, or a type check (`typeof port === 'number'`, a validation schema, a health-check comparing against a numeric range), the string type causes a silent bug. The fix is to convert once, near the top: `var port = Number(process.env.PORT) || 3000;`, so every later use of `port` is a real number.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Every `process.env` value is a string until you convert it, `process.exitCode` lets pending work finish while `process.exit()` cuts it off, and a `SIGTERM` handler is the difference between a graceful deploy and every in-flight request getting dropped.
+</Callout>
+
 export const processQuiz = [
   {
     q: 'What does process.argv[0] contain when you run `node script.js`?',
@@ -134,6 +346,7 @@ export const processQuiz = [
       'The current working directory',
     ],
     answer: 2,
+    explain: 'argv[0] is always the path to the node executable itself, argv[1] is the script path, and argv[2] onward are the arguments you actually passed.',
   },
   {
     q: 'What type are the values stored in process.env?',
@@ -144,6 +357,7 @@ export const processQuiz = [
       'Depends on the shell',
     ],
     answer: 1,
+    explain: 'Every key and value in process.env is a string, regardless of what it looks like. PORT=3000 in the shell gives you the string "3000", never the number 3000.',
   },
   {
     q: 'Which exit code conventionally indicates successful completion?',
@@ -154,6 +368,40 @@ export const processQuiz = [
       '200',
     ],
     answer: 2,
+    explain: 'Exit code 0 is the universal Unix convention for success. Any non-zero code (commonly 1) signals failure to shells, CI systems, and process managers.',
+  },
+  {
+    q: 'What does this print?\n\nprocess.env.PORT = "3000";\nconsole.log(process.env.PORT === 3000);\nconsole.log(process.env.PORT > 1024);',
+    options: [
+      'true, then true',
+      'false, then true',
+      'true, then false',
+      'false, then false',
+    ],
+    answer: 1,
+    explain: '=== never coerces types, so a string is never === to a number: false. The > operator does coerce a string operand to a number for the comparison, so "3000" > 1024 evaluates the numeric comparison and is true.',
+  },
+  {
+    q: 'A function does `process.exit(1)` immediately after starting a `setImmediate(() => cleanup())` call. Does cleanup() run?',
+    options: [
+      'Yes — setImmediate callbacks always run before any exit',
+      'No — process.exit() terminates immediately, skipping any pending callback, including that setImmediate',
+      'Only if cleanup() is synchronous',
+      'Yes, but only on Linux',
+    ],
+    answer: 1,
+    explain: 'process.exit() is a hard, immediate stop. Anything still queued -- pending I/O, timers, setImmediate/setTimeout callbacks, even finally blocks on the current stack -- is abandoned. Setting process.exitCode instead would let the setImmediate run first.',
+  },
+  {
+    q: 'What happens to a Node.js server process that receives SIGTERM with no signal handler registered?',
+    options: [
+      'Node ignores SIGTERM by default -- the process keeps running',
+      'The process terminates immediately, cutting off any in-flight requests',
+      'Node automatically calls server.close() and waits for requests to finish',
+      'SIGTERM is only relevant on Windows',
+    ],
+    answer: 1,
+    explain: "With no listener, SIGTERM's default disposition terminates the process right away. Only registering process.on('SIGTERM', ...) buys time to finish in-flight requests and close connections before exiting yourself.",
   },
 ];
 

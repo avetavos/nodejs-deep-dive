@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What are Node's Core APIs?
 
@@ -67,10 +69,67 @@ console.log('Chars: ' + str.length);
 console.log('Bytes (UTF-8): ' + Buffer.byteLength(str, 'utf8'));
 `;
 
-<NodeRunner client:visible code={indexDemoCode} node />
+export const indexDemoOut = `Node version: v24.13.0
+String: Hello, Node!
+Chars: 12
+Bytes (UTF-8): 12`;
+
+<NodeRunner client:visible code={indexDemoCode} node expected={indexDemoOut} />
 
 <Callout title="Globals vs modules">
 `process` and `Buffer` are true globals — no import needed. Legacy built-ins like `fs`, `path`, `events`, and `stream` can be imported with or without the `node:` prefix — `require('fs')` and `require('node:fs')` both work; the prefix is optional but recommended for clarity. Newer built-ins only exist under the prefixed name: `node:test` and `node:sqlite` have no unprefixed form, so `require('test')` throws `MODULE_NOT_FOUND`.
+</Callout>
+
+## Mental Model
+
+Two of these are true globals reachable from anywhere with zero import; the other two are modules you must pull in explicitly — and one of those modules (`EventEmitter`) is the base class the other three quietly depend on.
+
+export const coreApisMentalModel = `flowchart TB
+  subgraph Globals["always available, no import"]
+    process["process"]
+    Buffer["Buffer"]
+  end
+  subgraph Modules["explicit import"]
+    fs["node:fs / node:fs/promises"]
+    events["node:events — EventEmitter"]
+  end
+  events -->|"extended by"| fsStream["fs.ReadStream / fs.WriteStream"]
+  fs -->|"returns"| fsStream
+  events -->|"extended by"| httpNet["http.Server, net.Socket (later modules)"]
+  process -->|"reports on"| httpNet`;
+
+<Mermaid code={coreApisMentalModel} title="process and Buffer need no import; fs and EventEmitter do — and EventEmitter is the base class fs streams and later HTTP/net objects extend" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `process` / `Buffer` as globals | Zero-friction access from any file, no import churn | Harder to see a dependency at a glance — a function using `process.env` gives no import-level hint that it reads config |
+| Optional `node:` prefix on legacy modules (`fs`, `path`) | Old code (`require('fs')`) keeps working forever | Two spellings of the same module coexist in a codebase — inconsistent style |
+| Mandatory `node:` prefix on new modules (`node:test`, `node:sqlite`) | Impossible to shadow with an npm package named `test` or `sqlite` | No unprefixed fallback — copy-pasting old-style `require('sqlite')` fails with `MODULE_NOT_FOUND` instead of a clearer error |
+
+## Common Misconceptions
+
+- **"Every Node built-in needs an import"** — fact: `process` and `Buffer` are globals; only modules like `node:fs` and `node:events` need `import`/`require`.
+- **"The `node:` prefix is just decoration"** — fact: for legacy modules it's optional style; for `node:test` and `node:sqlite` it is the *only* valid specifier — there is no bare `require('test')`.
+- **"`node:sqlite` is production-ready because it ships in Node 24"** — fact: it still prints an `ExperimentalWarning` on every import on 24.13; the API can change in a semver-minor release.
+
+## Reading AI-generated code
+
+- Does generated code `require('sqlite')` or `require('test')` without the `node:` prefix? Both throw `MODULE_NOT_FOUND` — these two modules have no unprefixed form, unlike `fs` or `path`.
+- Does a snippet treat `node:sqlite` as stable (no warning handling, used casually in examples) when it is still Experimental on the target Node version?
+- Does the code import `Buffer` or `process` from somewhere (`import { Buffer } from 'node:buffer'`)? That's valid but unnecessary — double-check it isn't hiding a typo like `bufer` that a linter would have caught on the global form.
+
+<SpotTheBug code={`const { test } = require('test');
+
+test('adds numbers', () => {
+  console.log('ok');
+});`}>
+`node:test` has no unprefixed form — only `require('node:test')` (or `require('test')` under `--experimental-require-module`... no, that flag doesn't exist either) resolves. Plain `require('test')` throws `Error [ERR_MODULE_NOT_FOUND]` / `MODULE_NOT_FOUND: Cannot find module 'test'`, because Node does not register bare `test` as a module specifier — only `node:test`. The fix is `require('node:test')` (or `import { test } from 'node:test'`). This is the same rule as `node:sqlite`: brand-new built-ins only exist under the prefixed name, unlike legacy modules such as `fs` where both spellings work.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`process` and `Buffer` need no import; every other core module does — and for the newest ones (`node:test`, `node:sqlite`) the `node:` prefix is mandatory, not stylistic.
 </Callout>
 
 export const indexQuiz = [
@@ -83,6 +142,7 @@ export const indexQuiz = [
       'http',
     ],
     answer: 2,
+    explain: 'process and Buffer are true globals injected into every Node.js realm. fs, path, and http are modules — they must be imported or required, even though they ship with Node itself.',
   },
   {
     q: 'What is the recommended modern prefix for importing a Node.js built-in module?',
@@ -93,6 +153,40 @@ export const indexQuiz = [
       'Built-ins cannot be imported with ESM',
     ],
     answer: 1,
+    explain: 'The "node:" prefix makes it unambiguous that the specifier resolves to a built-in, not an npm package. It is optional for legacy modules like fs but mandatory for newer ones like node:test and node:sqlite.',
+  },
+  {
+    q: "What does `require('test')` throw on Node 24, given `node:test` is the built-in test runner?",
+    options: [
+      'Nothing — it resolves to node:test just like require("fs") resolves to node:fs',
+      'A deprecation warning, then it works',
+      'MODULE_NOT_FOUND — Cannot find module \'test\'',
+      'A TypeError because test is a reserved word',
+    ],
+    answer: 2,
+    explain: "node:test has no unprefixed form. Node only registers the bare specifier for legacy built-ins (fs, path, events, ...). require('test') looks for an npm package named 'test' in node_modules, finds none, and throws MODULE_NOT_FOUND.",
+  },
+  {
+    q: 'What happens the first time a process imports node:sqlite on Node 24.13?',
+    options: [
+      'Nothing — it has been stable since Node 22.13',
+      'It prints an ExperimentalWarning to stderr, then works',
+      'It throws because the flag --experimental-sqlite is required',
+      'It silently falls back to an in-memory Map',
+    ],
+    answer: 1,
+    explain: 'node:sqlite is unflagged (no CLI flag needed) since 22.13 but still marked Experimental on 24.13 — every import prints an ExperimentalWarning even though the code runs normally. Experimental means the API shape can still change in a semver-minor release, not that it requires a flag.',
+  },
+  {
+    q: 'A teammate writes `const Buffer = require("node:buffer").Buffer;` at the top of every file. Is this necessary?',
+    options: [
+      'Yes — Buffer is not actually global, this is required',
+      "No — Buffer is a global; the explicit require is redundant but harmless",
+      'No — and it will throw, because node:buffer does not export Buffer',
+      'Yes, but only in CommonJS files, not ESM',
+    ],
+    answer: 1,
+    explain: "Buffer is a real global (like process), reachable in any file without an import. node:buffer does export Buffer for the rare case you want to be explicit or you're in a sandboxed realm without globals, but doing it everywhere is just unnecessary ceremony — not wrong, just noise.",
   },
 ];
 

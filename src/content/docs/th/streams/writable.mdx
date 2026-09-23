@@ -1,6 +1,6 @@
 ---
 title: 'Writable Streams'
-description: 'การเขียนข้อมูลด้วย write() และ end() และการควบคุมการไหลด้วย event drain'
+description: 'การเขียนข้อมูลด้วย write() และ end() และการควบคุม flow ด้วย event drain'
 sidebar:
   order: 3
 ---
@@ -9,17 +9,19 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## Writable Stream คืออะไร?
+## Writable stream คืออะไร?
 
-`Writable` คือ Stream ที่สามารถเขียนข้อมูลเข้าไปได้ ตัวอย่างใน Node ได้แก่ `fs.createWriteStream` (เขียนไฟล์), `process.stdout` (แสดงผลที่ Terminal) และ HTTP response object คุณยังสร้าง Writable แบบกำหนดเองได้โดย extend คลาส `Writable` และ implement method `_write`
+`Writable` คือ stream ที่ข้อมูลถูกเขียนเข้าไปได้ ตัวอย่างในตัวของ Node ได้แก่ `fs.createWriteStream` (เขียนไฟล์), `process.stdout` (output ของ terminal) และ HTTP response object คุณสร้าง writable กำหนดเองได้ด้วยการ extend `Writable` และ implement method `_write`
 
 ## write() และ end()
 
-Method หลักสองตัวบน Writable คือ:
+method หลักสองตัวบน Writable คือ:
 
-- **`writable.write(chunk[, encoding][, callback])`** — เขียน chunk ข้อมูล คืนค่า `true` ถ้า internal buffer ต่ำกว่า high-water mark, `false` ถ้าปลายทางตามไม่ทัน (สัญญาณ backpressure)
-- **`writable.end([chunk][, callback])`** — บอกว่าไม่มีข้อมูลเพิ่มเติมแล้ว เขียน chunk สุดท้ายเพิ่มได้ (optional) และ trigger event `finish` เมื่อ flush ข้อมูลทั้งหมดแล้ว
+- **`writable.write(chunk[, encoding][, callback])`** — เขียน chunk ของข้อมูล คืนค่า `true` ถ้า internal buffer อยู่ใต้ high-water mark, `false` ถ้าปลายทางตามไม่ทัน (สัญญาณ backpressure)
+- **`writable.end([chunk][, callback])`** — ส่งสัญญาณว่าจะไม่มีการเขียนข้อมูลอีก อาจเขียน chunk สุดท้ายหนึ่งอันได้ด้วย จะยิง event `finish` เมื่อข้อมูลทั้งหมดถูก flush แล้ว
 
 ```js
 const fs = require('node:fs');
@@ -33,9 +35,9 @@ dest.end('last line\n', function() {
 });
 ```
 
-## Event `finish`
+## event `finish`
 
-หลังจากเรียก `end()` และ flush ข้อมูลทั้งหมดไปยัง underlying system แล้ว Stream จะ emit `finish` นี่คือเวลาที่ถูกต้องเพื่อรู้ว่าการเขียนเสร็จสมบูรณ์จริงๆ:
+หลังจาก `end()` ถูกเรียกและข้อมูลที่ค้างอยู่ทั้งหมดถูก flush ไปยังระบบข้างล่างแล้ว stream จะ emit `finish` นี่คือจังหวะที่ถูกต้องในการรู้ว่าการเขียนเสร็จสมบูรณ์จริง ๆ:
 
 ```js
 const fs = require('node:fs');
@@ -48,9 +50,9 @@ dest.on('finish', function() {
 dest.end('done');
 ```
 
-## Event `drain` และการควบคุมการไหล
+## event `drain` และการควบคุม flow
 
-`write()` คืนค่า boolean เมื่อคืนค่า `false` internal buffer เต็มแล้ว — คุณต้อง **หยุดเขียน** และรอ event `drain` ก่อนจึงเขียนต่อ การเพิกเฉยต่อสัญญาณนี้ทำให้ Memory เติบโตแบบไม่มีขอบเขตเพราะ chunk ที่ Buffer สะสมขึ้นเรื่อยๆ
+`write()` คืนค่า boolean เมื่อมันคืน `false` แปลว่า internal buffer เต็มแล้ว — คุณต้อง **หยุดเขียน** และรอ event `drain` ก่อนที่จะเขียนต่อ การเพิกเฉยต่อสิ่งนี้ทำให้ memory โตขึ้นโดยไม่มีขอบเขตเมื่อ chunk ที่ buffer ไว้สะสมมากขึ้นเรื่อย ๆ
 
 ```js
 function writeWithDrain(writable, chunks) {
@@ -73,11 +75,48 @@ function writeWithDrain(writable, chunks) {
 }
 ```
 
-นี่คือ pattern แบบ manual ที่ `pipe` และ `pipeline` จัดการให้คุณโดยอัตโนมัติ การเข้าใจ pattern นี้อธิบายว่าทำไม API ระดับสูงเหล่านั้นจึงมีอยู่
+นี่คือรูปแบบที่ต้องทำเองซึ่ง `pipe` และ `pipeline` จัดการให้อัตโนมัติ การเข้าใจมันช่วยอธิบายว่าทำไม API ระดับสูงเหล่านั้นถึงมีอยู่
 
-## Demo ที่รันได้
+## การวัด highWaterMark, write() และ writableLength
 
-Demo สร้าง Writable แบบกำหนดเองที่ log แต่ละ chunk ลง Console จำลอง sink ที่ช้า แล้วเขียนข้อมูลสามชุดและปิด Stream
+`writable.writableLength` รายงานอย่างแม่นยำว่ามีกี่ byte (หรือ object ใน object mode) ที่ถูก buffer อยู่ตอนนี้และยังไม่ถูก flush ไปยังปลายทาง การดูมันคู่กับ return value ของ `write()` ทำให้ high-water mark เป็นรูปธรรมแทนที่จะเป็นแค่แนวคิดนามธรรม:
+
+export const hwmCode = `
+import { Writable } from 'node:stream';
+
+var sink = new Writable({
+  highWaterMark: 10, // bytes -- tiny on purpose so backpressure triggers fast
+  write(chunk, encoding, callback) {
+    setImmediate(callback); // simulate an async destination
+  }
+});
+
+console.log('highWaterMark:', sink.writableHighWaterMark);
+
+var okFirst = sink.write('12345'); // 5 bytes, still under 10
+console.log('write() #1 returned:', okFirst, '| writableLength:', sink.writableLength);
+
+var okSecond = sink.write('1234567890'); // pushes past the high-water mark
+console.log('write() #2 returned:', okSecond, '| writableLength:', sink.writableLength);
+
+sink.once('drain', function() {
+  console.log('drain fired -- writableLength now:', sink.writableLength);
+  sink.end();
+});
+`;
+
+export const hwmOut = `highWaterMark: 10
+write() #1 returned: true | writableLength: 5
+write() #2 returned: false | writableLength: 15
+drain fired -- writableLength now: 0`;
+
+<NodeRunner client:visible code={hwmCode} node expected={hwmOut} />
+
+สังเกตว่า `writableLength` ขึ้นไปถึง 15 — *เกิน* high-water mark ที่ 10 high-water mark คือ threshold ที่พลิก return value ของ `write()` เป็น `false` ไม่ใช่ hard cap: Node ยังรับและ buffer chunk ที่คุณเพิ่งเขียนไป และเป็นความรับผิดชอบของคุณที่จะหยุดเรียก `write()` จนกว่า `drain` จะยิง
+
+## Runnable demo
+
+demo สร้าง custom Writable ที่ log แต่ละ chunk ไปที่ console จำลอง sink ที่ช้า จากนั้นเขียนสาม chunk และปิด stream
 
 export const writableCode = `
 const { Writable } = require('node:stream');
@@ -98,10 +137,67 @@ sink.write('beta');
 sink.end('gamma');
 `;
 
-<NodeRunner client:visible code={writableCode} node />
+export const writableOut = `sink received: alpha
+sink received: beta
+sink received: gamma
+stream finished`;
 
-<Callout title="ให้ความสำคัญกับค่าที่ write() คืนมาเพื่อควบคุมการไหล">
-เมื่อ writable.write() คืนค่า false แสดงว่า destination buffer เต็มแล้ว หยุดเขียนทันทีและรอ event drain ก่อนส่งข้อมูลเพิ่ม การเพิกเฉยต่อสัญญาณนี้ทำให้ Node process Buffer ข้อมูลไว้ใน Memory ไม่จำกัด และสุดท้ายจะ crash เพราะ Out of Memory
+<NodeRunner client:visible code={writableCode} node expected={writableOut} />
+
+<Callout title="เคารพ return value ของ write() เพื่อควบคุม flow">
+เมื่อ writable.write() คืน false ปลายทาง buffer เต็มแล้ว หยุดเขียนทันทีและรอ event drain ก่อนส่งข้อมูลเพิ่ม การเพิกเฉยต่อสัญญาณนี้ทำให้ Node process buffer ข้อมูลไม่จำกัดใน memory จนในที่สุดเกิด out-of-memory crash
+</Callout>
+
+## Mental Model
+
+export const writableMentalModel = `flowchart TB
+  Write["writable.write(chunk)"] -->|"below high-water mark"| True["returns true -- keep writing"]
+  Write -->|"at or above high-water mark"| False["returns false -- buffer is full"]
+  False -->|"you must"| Pause["stop writing"]
+  Pause -->|"wait for"| Drain["'drain' event"]
+  Drain -->|"safe to"| Write
+  End["writable.end()"] -->|"once all buffered data is flushed"| Finish["'finish' event"]`;
+
+<Mermaid code={writableMentalModel} title="return value แบบ boolean ของ write() คือสัญญา backpressure ทั้งหมด: false แปลว่าหยุดและรอ drain ก่อนเขียนอีกครั้ง" />
+
+## Trade-offs
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| จัดการ `write()`/`drain` เอง | ควบคุมได้เต็มที่ว่าจะ buffer เมื่อไหร่และเท่าไหร่ | ยาวและพลาดง่าย — ลืมตรวจแค่จุดเดียว memory ก็โตไม่มีขอบเขต |
+| `.pipe()` / `pipeline()` | จัดการขั้นตอน write()/drain ให้อัตโนมัติ | ควบคุมโดยตรงน้อยลง; คุณใช้ contract ของ error/completion ของ API ระดับสูงแทนที่จะสร้างเอง |
+| ตรวจ `writableLength` โดยตรง | ให้จำนวน byte (หรือ object) ที่ buffer อยู่แบบ real-time ที่แม่นยำสำหรับ monitoring/logging | ต้องอ่านให้ถูกอีกเรื่องหนึ่ง — มันไม่มีความหมายถ้าไม่รู้ `writableHighWaterMark` ปัจจุบันด้วย |
+
+## Common Misconceptions
+
+- **"high-water mark เป็น hard limit ว่า writable buffer ได้เท่าไหร่"** — ความจริง: มันเป็น soft threshold ที่พลิก return value ของ `write()` เป็น `false`; Node ยังรับและ buffer chunk ที่ทำให้เกินมันอยู่ดี
+- **"`write()` ที่คืน `false` แปลว่าการเขียนล้มเหลว"** — ความจริง: chunk ยังถูกรับไว้และจะถูก flush; `false` เป็นแค่สัญญาณให้ช้าลง ไม่ใช่ error
+- **"`finish` กับ `close` หมายถึงสิ่งเดียวกัน"** — ความจริง: `finish` ยิงเมื่อข้อมูลที่ buffer ไว้ทั้งหมดถูก flush แล้วหลัง `end()`; `close` ยิงเมื่อ resource ข้างล่าง (file descriptor, socket) ถูกปล่อยจริง ๆ ซึ่งอาจเกิดคนละเวลากัน
+
+## อ่านโค้ดที่ AI เขียน
+
+- code เรียก `writable.write()` ใน loop โดยไม่เคยตรวจ return value แบบ boolean หรือ listen `drain` เลยหรือเปล่า?
+- implementation ของ `write(chunk, encoding, callback)` ใน custom `Writable` ลืมเรียก `callback()` ในบาง code path (รวมถึง error path) ทำให้ stream ค้างตลอดกาลรอ callback ที่ไม่มีวันมาหรือเปล่า?
+- code สมมติว่า `end()` เสร็จแปลว่าไฟล์/socket ปลายทางถูกปิดสมบูรณ์แล้ว ทั้งที่ควรรอ `finish` (ข้อมูล flush แล้ว) หรือ `close` (resource ถูกปล่อยแล้ว) ขึ้นอยู่กับว่าจริง ๆ ต้องการรู้อะไรหรือเปล่า?
+
+<SpotTheBug code={`const { Writable } = require('node:stream');
+const fs = require('node:fs');
+
+var dest = fs.createWriteStream('./output.log');
+
+function writeAll(lines) {
+  for (var i = 0; i < lines.length; i++) {
+    dest.write(lines[i] + '\\n'); // return value never checked
+  }
+  dest.end();
+}
+
+writeAll(new Array(1000000).fill('a log line'));`}>
+`writeAll` เรียก `dest.write()` ใน loop แน่นโดยไม่เคยตรวจ return value หรือหยุดเมื่อมันคืน `false` ถ้าปลายทาง (ดิสก์, network socket) ตามการเรียก `write()` แบบ synchronous เป็นล้านครั้งไม่ทัน Node ก็ยังคง buffer ทุก chunk ใน memory อยู่ดี และ process อาจ OOM ก่อนที่จะถึง `end()` ด้วยซ้ำ วิธีแก้คือรูปแบบที่ทำเองจากก่อนหน้านี้ในบทนี้ — ตรวจ return value ของ `write()` แล้วหยุดผ่าน `writable.once('drain', next)` — หรือง่ายกว่านั้นคือแทนที่ loop ทั้งหมดด้วย Readable ที่ห่อ `lines` แล้ว pipe เข้า `dest`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+return value แบบ boolean ของ `write()` คือสัญญา backpressure ทั้งหมด — `false` แปลว่าหยุดและรอ `drain`, และ `writableLength` บอกคุณตรง ๆ ว่ามีอะไร buffer อยู่ตอนนี้เท่าไหร่
 </Callout>
 
 export const writableQuiz = [
@@ -111,12 +207,13 @@ export const writableQuiz = [
       'null',
       'true',
       'false',
-      'Promise ที่ resolve เมื่อ drain',
+      'Promise ที่ resolve เมื่อ drain แล้ว',
     ],
     answer: 2,
+    explain: 'write() คืน false เมื่อ internal buffer ถึงหรือเกิน high-water mark นี่เป็นสัญญาณแบบ synchronous ทันที — ไม่มี Promise เข้ามาเกี่ยวข้อง',
   },
   {
-    q: 'Event ใด fire หลังจากเรียก writable.end() และ flush ข้อมูลทั้งหมดแล้ว?',
+    q: 'event ใดยิงหลังจาก writable.end() ถูกเรียกและข้อมูลทั้งหมดถูก flush แล้ว?',
     options: [
       'end',
       'close',
@@ -124,16 +221,51 @@ export const writableQuiz = [
       'finish',
     ],
     answer: 3,
+    explain: 'finish ยิงเมื่อ end() ถูกเรียกและทุก chunk ที่ buffer ไว้ถูกเขียนไปยังปลายทางจริง ๆ แล้ว end เป็น event ฝั่ง Readable ไม่ใช่ Writable',
   },
   {
-    q: 'ควรทำอะไรเมื่อ writable.write() คืนค่า false?',
+    q: 'การกระทำที่ถูกต้องเมื่อ writable.write() คืน false คืออะไร?',
     options: [
       'เรียก writable.end() ทันที',
       'เขียนต่อไป — false เป็นแค่คำเตือน',
       'หยุดเขียนและรอ event drain',
-      'ทำลาย Stream และสร้างใหม่',
+      'destroy stream แล้วสร้างใหม่',
     ],
     answer: 2,
+    explain: 'false แปลว่า internal buffer ถึงหรือเกิน high-water mark การตอบสนองที่ถูกต้องคือหยุดเรียก write() และรอ event drain ก่อนเขียนต่อ ซึ่งตรงกับสิ่งที่ pipe() และ pipeline() ทำภายในเป๊ะ',
+  },
+  {
+    q: 'Writable มี highWaterMark: 10 (byte) หลังจากเรียก write() หนึ่งครั้งด้วย chunk ขนาด 15 byte writableLength จะรายงานอะไร และ write() คืนค่าอะไร?',
+    options: [
+      'writableLength: 10 (ถูก cap ที่ high-water mark), write() คืน true',
+      'writableLength: 15, write() คืน false',
+      'writableLength: 0 เพราะ chunk ถูกปฏิเสธ, write() คืน false',
+      'writableLength: 15, write() คืน true เพราะเป็นการเรียกครั้งเดียว',
+    ],
+    answer: 1,
+    explain: 'high-water mark เป็น threshold สำหรับ return value แบบ boolean ไม่ใช่ hard cap ของการ buffer -- chunk ขนาด 15 byte เต็มยังถูกรับและนับใน writableLength และเพราะ 15 เกิน high-water mark ที่ 10 byte write() จึงคืน false',
+  },
+  {
+    q: 'implementation ของ write(chunk, encoding, callback) ใน custom Writable throw exception แทนที่จะเรียก callback() บน error path อาการที่สังเกตได้คืออะไร?',
+    options: [
+      'Node เรียก callback(err) ให้อัตโนมัติ',
+      'stream ทิ้ง chunk ไปเงียบ ๆ แล้วทำงานต่อปกติ',
+      'stream ค้างตลอดกาล เพราะไม่มีอะไรส่งสัญญาณว่าการเขียนเสร็จหรือล้มเหลว',
+      'process crash ทันทีพร้อม error message ที่ชัดเจนชี้ไปที่ callback ที่หายไป',
+    ],
+    answer: 2,
+    explain: 'state machine ภายในของ Writable รอให้ callback ถูกเรียกก่อนที่จะประมวลผล chunk ถัดไปหรือ emit finish ถ้า error path return โดยไม่เรียกมัน (ไม่ว่าจะผ่าน exception ที่ throw ออกมาโดยไม่ถูกจับภายใน หรือแค่ลืมเรียก) stream อาจค้างรอ callback ที่ไม่มีวันมาถึง',
+  },
+  {
+    q: 'ความแตกต่างระหว่าง event finish กับ close บน Writable คืออะไร?',
+    options: [
+      'มันเป็น alias ของ event เดียวกัน',
+      'finish ยิงเมื่อข้อมูลที่ buffer ไว้ทั้งหมดถูก flush แล้วหลัง end(); close ยิงเมื่อ resource ข้างล่างถูกปล่อยจริง ๆ ซึ่งอาจเป็นคนละจังหวะกัน',
+      'close ยิงก่อน finish เสมอ',
+      'finish มีอยู่แค่บน Readable stream เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'finish เกี่ยวกับข้อมูล: ทุกอย่างที่เขียนก่อน end() ถูก flush ไปยังระบบข้างล่างแล้ว close เกี่ยวกับตัว resource เอง (file descriptor, socket) ที่ถูกปล่อย ซึ่งสำหรับอะไรอย่าง fs.createWriteStream จะเกิดหลัง finish ไม่ใช่พร้อมกัน',
   },
 ];
 

@@ -1,6 +1,6 @@
 ---
 title: EventEmitter
-description: 'Node.js EventEmitter: on, emit, once, removeListener และการสร้าง custom event-driven classes'
+description: 'Node.js EventEmitter: on, emit, once, removeListener และการสร้าง custom event-driven class'
 sidebar:
   order: 5
 ---
@@ -9,13 +9,15 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## แกนหลักของ event-driven model ของ Node
 
-`EventEmitter` (จาก `node:events`) คือ class ที่ขับเคลื่อน I/O object เกือบทุกตัวใน Node.js HTTP server, TCP sockets, file streams, child processes และ library ของ third-party หลายตัวล้วน extend `EventEmitter` การเข้าใจ class นี้หมายถึงการเข้าใจวิธีที่ Node สื่อสารระหว่าง components
+`EventEmitter` (จาก `node:events`) คือ class ที่ขับเคลื่อนแทบทุก I/O object ใน Node.js HTTP server, TCP socket, file stream, child process และไลบรารีบุคคลที่สามจำนวนมากล้วน extend `EventEmitter` การเข้าใจมันคือการเข้าใจว่า Node สื่อสารระหว่าง component ต่าง ๆ อย่างไร
 
-<Callout title="EventEmitter คือแกนหลักของ Node's streams, HTTP และอื่นๆ">
-`http.Server`, `net.Socket`, `fs.ReadStream` — ทั้งหมดนี้ extend `EventEmitter` เมื่อ request มาถึง server จะ emit `'request'` เมื่อ socket หลุดการเชื่อมต่อ ก็ emit `'close'` การเรียนรู้ `EventEmitter` คือการเรียนรู้ communication contract พื้นฐานของ Node.js
+<Callout title="EventEmitter คือแกนหลักของ stream, HTTP และอื่น ๆ ของ Node">
+`http.Server`, `net.Socket`, `fs.ReadStream` — ทั้งหมดนี้ extend `EventEmitter` เมื่อ request มาถึง server จะ emit `'request'` เมื่อ socket ตัดการเชื่อมต่อ มันจะ emit `'close'` การเรียนรู้ `EventEmitter` คือการเรียนรู้ contract การสื่อสารพื้นฐานของ Node.js
 </Callout>
 
 ## การใช้งานพื้นฐาน: on, emit, removeListener
@@ -44,11 +46,15 @@ emitter.removeListener('message', handler);
 emitter.emit('message', 'second'); // no output — listener removed
 `;
 
-<NodeRunner client:visible code={eeBasicCode} node />
+export const eeBasicOut = `Hello, Alice!
+Hello, Bob!
+message: first`;
+
+<NodeRunner client:visible code={eeBasicCode} node expected={eeBasicOut} />
 
 ## once — ยิงแค่ครั้งเดียว
 
-`once` ลงทะเบียน listener ที่ลบตัวเองออกอัตโนมัติหลังจาก emission ครั้งแรก
+`once` ลงทะเบียน listener ที่ลบตัวเองอัตโนมัติหลังจากการ emit ครั้งแรก
 
 export const eeOnceCode = `
 import { EventEmitter } from 'node:events';
@@ -66,11 +72,14 @@ emitter.emit('connect'); // nothing
 console.log('listener count:', emitter.listenerCount('connect')); // 0
 `;
 
-<NodeRunner client:visible code={eeOnceCode} node />
+export const eeOnceOut = `Connected! (fires once only)
+listener count: 0`;
+
+<NodeRunner client:visible code={eeOnceCode} node expected={eeOnceOut} />
 
 ## การสร้าง custom EventEmitter class
 
-Extend `EventEmitter` เพื่อให้ class ของคุณมีความสามารถ event-driven
+extend `EventEmitter` เพื่อให้ class ของคุณเองมีความสามารถแบบ event-driven
 
 export const eeCustomCode = `
 import { EventEmitter } from 'node:events';
@@ -106,11 +115,17 @@ loader.load('beta');
 loader.load('gamma');
 `;
 
-<NodeRunner client:visible code={eeCustomCode} node />
+export const eeCustomOut = `loaded item: alpha
+loaded item: beta
+loaded item: gamma
+all done! total: 3 items
+items: alpha, beta, gamma`;
+
+<NodeRunner client:visible code={eeCustomCode} node expected={eeCustomOut} />
 
 ## Listener count และ off()
 
-`off` คือ alias ของ `removeListener` ที่เพิ่มมาใน Node 10 `listenerCount` ให้คุณตรวจสอบว่ามี listeners กี่ตัวที่ลงทะเบียนสำหรับ event หนึ่งๆ — มีประโยชน์สำหรับตรวจจับ memory leaks ที่อาจเกิดขึ้น
+`off` เป็น alias ของ `removeListener` ที่เพิ่มเข้ามาใน Node 10 `listenerCount` ช่วยให้ตรวจสอบได้ว่ามี listener ลงทะเบียนไว้กี่ตัวสำหรับ event หนึ่ง — มีประโยชน์สำหรับตรวจจับ memory leak ที่อาจเกิดขึ้น
 
 export const eeCountCode = `
 import { EventEmitter } from 'node:events';
@@ -130,21 +145,219 @@ console.log('count after off:', ee.listenerCount('event'));  // 1
 ee.emit('event'); // only handler2 runs
 `;
 
-<NodeRunner client:visible code={eeCountCode} node />
+export const eeCountOut = `count before off: 2
+count after off: 1
+handler2`;
+
+<NodeRunner client:visible code={eeCountCode} node expected={eeCountOut} />
+
+## คำเตือน listener leak
+
+`EventEmitter` มีค่าดีฟอลต์เป็น **สูงสุด 10 listener** ต่อหนึ่ง event (`defaultMaxListeners`) นี่ไม่ใช่ hard limit — มันคือ heuristic tripwire: บั๊ก `EventEmitter` อันดับ 1 ใน AI-generated code คือ listener ที่ถูกลงทะเบียน *ภายใน* loop, request handler หรือ re-render สไตล์ React ซึ่งจะเพิ่ม listener ใหม่แบบเงียบ ๆ ทุกครั้งที่เรียกแทนที่จะใช้ซ้ำตัวเดิม ถ้าไม่สังเกตเห็น นั่นคือ memory leak ที่ไม่มีขอบเขต
+
+เมื่อจำนวนเกิน max Node จะ emit `process` warning — ปกติจะพิมพ์ไปที่ stderr เท่านั้น เพื่อให้เห็นใน output ของ script เอง (และจัดการมันแบบ programmatic ได้ เช่น ส่งไปยัง log) ให้ listen `process.on('warning', ...)`:
+
+export const eeLeakCode = `
+const { EventEmitter } = require('node:events');
+
+process.on('warning', function(warning) {
+  console.log('warning name:', warning.name);
+  console.log('warning message:', warning.message);
+});
+
+var emitter = new EventEmitter();
+console.log('default max listeners:', emitter.getMaxListeners());
+
+// Adding more listeners than the default max (10) for the same event is
+// almost always a bug -- usually a listener registered inside a loop or on
+// every request instead of once at startup.
+for (var i = 0; i < 11; i++) {
+  emitter.on('data', function() {});
+}
+console.log('listener count:', emitter.listenerCount('data'));
+`;
+
+export const eeLeakOut = `default max listeners: 10
+listener count: 11
+warning name: MaxListenersExceededWarning
+warning message: Possible EventEmitter memory leak detected. 11 data listeners added to [EventEmitter]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit`;
+
+<NodeRunner client:visible code={eeLeakCode} node expected={eeLeakOut} />
+
+ถ้า 10 listener น้อยเกินไปจริง ๆ สำหรับ use case ที่ชอบธรรม (เช่น shared event bus ที่มีผู้ subscribe อิสระจำนวนมาก) ให้เพิ่ม limit อย่างชัดเจนด้วย `emitter.setMaxListeners(n)` — นั่นคือการบันทึกการตัดสินใจไว้แทนที่จะปล่อยให้เกินดีฟอลต์แบบเงียบ ๆ
+
+## events.on() และ events.once() — async iteration และ promise
+
+`events.once(emitter, name)` คืนค่า **Promise** ที่ resolve ด้วย argument ของ event เมื่อมีการ emit ครั้งแรก — ทางเลือกแบบครั้งเดียวของ `emitter.once()` ที่ใช้ callback `events.on(emitter, name)` คืนค่า **async iterable** ที่ yield ทุกการ emit เพื่อใช้กับ `for await`:
+
+export const eeOnIterCode = `
+const { EventEmitter, on, once } = require('node:events');
+
+async function main() {
+  var emitter = new EventEmitter();
+
+  // once() as a promise -- resolves with the event's args on first emission
+  var readyPromise = once(emitter, 'ready');
+  emitter.emit('ready', 'server');
+  var readyArgs = await readyPromise;
+  console.log('once() resolved with:', readyArgs);
+
+  // events.on() -- async-iterate every emission of an event
+  setImmediate(function() {
+    emitter.emit('tick', 1);
+    emitter.emit('tick', 2);
+    emitter.emit('tick', 3);
+    emitter.emit('done');
+  });
+
+  for await (const [n] of on(emitter, 'tick')) {
+    console.log('tick:', n);
+    if (n === 3) break; // must break manually -- on() never ends on its own
+  }
+  console.log('finished iterating ticks');
+}
+
+main();
+`;
+
+export const eeOnIterOut = `once() resolved with: [ 'server' ]
+tick: 1
+tick: 2
+tick: 3
+finished iterating ticks`;
+
+<NodeRunner client:visible code={eeOnIterCode} node expected={eeOnIterOut} />
+
+<Callout title="on() เก็บเป็นคิว — คุณต้อง break ออกจาก loop เอง">
+ต่างจาก async iterator ของ Readable stream, `events.on()` ไม่มีจุดจบตามธรรมชาติ เว้นแต่ emitter เอง emit `'end'`/`'close'` (ซึ่ง `events.on()` รู้จักโดยอัตโนมัติ) หรือคุณ `break` เอง ลืม break จะทำให้ loop `for await` กลายเป็น listener ถาวรที่ไม่มีวันปล่อยให้ function return
+</Callout>
+
+## captureRejections — ส่ง error ของ async listener ไปที่ 'error'
+
+listener แบบ `async` ที่ throw จะสร้าง **rejected promise ที่ `EventEmitter` ไม่ await** — โดยดีฟอลต์มันจะกลายเป็น unhandled rejection ซึ่งทำให้ process crash บน Node สมัยใหม่ (ดีฟอลต์ `--unhandled-rejections=throw`) การส่ง `captureRejections: true` ให้ constructor จะส่ง rejection นั้นไปที่ event `'error'` ของ emitter แทน ซึ่งคุณจัดการมันได้เหมือน error ทั่วไป:
+
+export const eeCaptureRejectionsCode = `
+import { EventEmitter } from 'node:events';
+
+// Without captureRejections, a listener that returns a rejected promise
+// produces an unhandled rejection that crashes the process (Node >= 15).
+// With captureRejections: true, the rejection is routed to an 'error' event
+// on the emitter instead, which you can handle like any other error.
+var emitter = new EventEmitter({ captureRejections: true });
+
+emitter.on('error', function(err) {
+  console.log('caught via error event:', err.message);
+});
+
+emitter.on('work', async function() {
+  throw new Error('async listener failed');
+});
+
+emitter.emit('work');
+console.log('emit() returned -- the throw happens later, on the microtask queue');
+
+// Give the rejection a turn to be routed before the process exits
+await new Promise(function(resolve) { setImmediate(resolve); });
+console.log('done');
+`;
+
+export const eeCaptureRejectionsOut = `emit() returned -- the throw happens later, on the microtask queue
+caught via error event: async listener failed
+done`;
+
+<NodeRunner client:visible code={eeCaptureRejectionsCode} node expected={eeCaptureRejectionsOut} />
+
+## event 'error' ที่ไม่มี listener จะ throw
+
+`'error'` เป็นชื่อ event พิเศษใน `EventEmitter`: ถ้ามันถูก emit และ **ไม่มี listener ลงทะเบียนไว้เลย** Node จะ throw error แทนที่จะทิ้งมันไปเงียบ ๆ ทำให้ process crash นี่เป็นความตั้งใจ — มันคือ event เดียวที่คุณไม่ได้รับอนุญาตให้เผลอมองข้าม
+
+export const eeErrorThrowCode = `// @expect-throw
+const { EventEmitter } = require('node:events');
+
+var emitter = new EventEmitter();
+// No 'error' listener registered.
+console.log('about to emit error with no listener...');
+emitter.emit('error', new Error('boom'));
+console.log('this line never runs');
+`;
+
+export const eeErrorThrowOut = `about to emit error with no listener...`;
+
+<NodeRunner client:visible code={eeErrorThrowCode} node expected={eeErrorThrowOut} />
+
+<Callout title="ผูก listener 'error' ไว้กับทุกอย่างที่ extend EventEmitter เสมอ">
+Socket, stream, child process และ HTTP server ล้วน extend `EventEmitter` และ emit `'error'` ได้ทั้งหมด การผูก `.on('error', ...)` ไม่ใช่ defensive coding ที่เป็นทางเลือก — ถ้าไม่มีมัน error event เดียวจะทำให้ทั้ง process crash แม้แต่ตัวที่ซ้อนอยู่ลึกสามชั้นใน pipeline ที่คุณไม่ได้เป็นเจ้าของ
+</Callout>
+
+## Mental Model
+
+export const eventsMentalModel = `flowchart TB
+  Loop["listener registered inside a loop / request handler"] -->|"each call adds a NEW listener"| Count["listenerCount keeps growing"]
+  Count -->|"exceeds getMaxListeners() (default 10)"| Warn["MaxListenersExceededWarning"]
+  Emit["emitter.emit('error', err)"] -->|"listener registered?"| Handled["'error' handler runs — process keeps going"]
+  Emit -->|"no listener registered"| Crash["Node throws — process crashes"]
+  Async["async listener throws"] -->|"captureRejections: false (default)"| Unhandled["unhandled rejection — crash"]
+  Async -->|"captureRejections: true"| Handled`;
+
+<Mermaid code={eventsMentalModel} title="listener count ที่โตขึ้นเรื่อย ๆ ทำให้เกิด warning; event 'error' ที่ไม่มี listener ทำให้ process crash; captureRejections ส่ง error ของ async listener ไปในทางเดียวกัน" />
+
+## Trade-offs
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| callback style `emitter.on()` | ใช้ได้ทุกที่ ไม่มี dependency ทำงานแบบ synchronous และคาดเดาได้ | รั่วง่าย — ลงทะเบียนซ้ำภายใน loop/handler เป็นบั๊กที่เงียบ |
+| `events.once(emitter, name)` (promise) | อ่านเหมือน call ที่ await ทั่วไป ประกอบกับ `Promise.race`/`AbortSignal` ได้ | ยิงแค่ครั้งเดียว — ไม่ใช่ตัวแทนของ listener `on()` ที่เกิดซ้ำ |
+| `events.on(emitter, name)` (async iterator) | `for await` อ่านจากบนลงล่างเหมือน stream เป็นมิตรกับ backpressure | ไม่มีจุดจบอัตโนมัติ — คุณต้อง `break` เองหรือพึ่ง event `'end'`/`'close'` |
+| `captureRejections: true` | error ของ async listener กลายเป็น event `'error'` ธรรมดาแทนที่จะ crash | ปิดโดยดีฟอลต์ — emitter ทุกตัวที่คุณสร้างต้อง opt-in เอง |
+
+## Common Misconceptions
+
+- **"listener ของ EventEmitter ทำงานแบบ asynchronous เหมือน DOM event"** — ความจริง: `.emit()` เรียกทุก listener **แบบ synchronous** ตามลำดับการลงทะเบียน ก่อนที่ `emit()` จะ return
+- **"MaxListenersExceededWarning แปลว่ามีอะไรพัง"** — ความจริง: มันเป็น heuristic warning ไม่ใช่ error — code ยังทำงานต่อ แต่มันชี้บั๊ก `EventEmitter` ที่พบบ่อยที่สุดได้อย่างถูกต้อง: listener ที่ถูกเพิ่มทุกครั้งที่เรียก function แทนที่จะเพิ่มครั้งเดียว
+- **"event `'error'` ที่ไม่มี listener จะถูกละเว้นไปเฉย ๆ เหมือน event อื่นที่ไม่มีใครฟัง"** — ความจริง: `'error'` ถูกจัดการเป็นกรณีพิเศษ — ถ้าไม่มี listener เลยมันจะถูก throw ทำให้ process crash
+- **"error ที่ถูก throw จาก `async` listener จะถูกจับโดย `emitter.on('error', ...)` โดยอัตโนมัติ"** — ความจริง: จะเกิดขึ้นก็ต่อเมื่อ emitter ถูกสร้างด้วย `captureRejections: true` เท่านั้น ไม่งั้น rejection จะ unhandled และทำให้ process crash โดยไม่เกี่ยวกับ listener `'error'` เลย
+
+## อ่านโค้ดที่ AI เขียน
+
+- `.on()` ถูกเรียกภายใน loop, request handler, class constructor ที่ถูกเรียกต่อ request หรือ re-render path — ที่ไหนก็ตามที่รันมากกว่าหนึ่งครั้งต่ออายุของ process หรือเปล่า? แต่ละครั้งที่เรียกจะเพิ่ม listener ใหม่เอี่ยมที่ไม่เคยถูกลบ
+- มีอะไรที่ extend หรือห่อ `EventEmitter` (custom class, socket, stream) ที่ไม่มี listener `'error'` เลยตลอด call chain หรือเปล่า? การ emit `'error'` ที่ไม่มีคนจับแค่ครั้งเดียวทำให้ทั้ง process crash
+- มี `async` function ถูกส่งตรงเข้า `.on()` โดยไม่มี `captureRejections: true` บน emitter และไม่มี `try/catch` ภายในหรือเปล่า? error ที่มันโยนออกมาจะกลายเป็น unhandled rejection ไม่ใช่ error ที่ถูกจับ
+- code เรียก `events.on(emitter, name)` แล้ว iterate ด้วย `for await` แต่ไม่เคย `break` หรือพึ่งเงื่อนไขจบเลยหรือเปล่า? นั่นคือ listener ที่ไม่เคยถูกเคลียร์ เป็น leak แบบเดียวกับการลืม `removeListener`
+
+<SpotTheBug code={`const { EventEmitter } = require('node:events');
+const http = require('node:http');
+
+var bus = new EventEmitter();
+
+var server = http.createServer(function(req, res) {
+  // registers a new listener on every single request
+  bus.on('request-logged', function(url) {
+    console.log('logged:', url);
+  });
+  bus.emit('request-logged', req.url);
+  res.end('ok');
+});`}>
+`bus.on('request-logged', ...)` ถูกเรียกภายใน request handler ดังนั้น listener ใหม่เอี่ยมจะถูกลงทะเบียน**ทุก request ที่เข้ามา**และไม่เคยถูกลบ หลังจาก 10 request Node จะพิมพ์ `MaxListenersExceededWarning`; หลังจากหลายพัน request process จะรั่วไหลหน่วยความจำ — closure ของ listener ทุกตัวยังมีชีวิตอยู่ และทุก `emit('request-logged', ...)` ในอนาคตจะรันทั้งหมดนั้น เพิ่มงานต่อ request ทวีคูณขึ้นเรื่อย ๆ วิธีแก้คือลงทะเบียน listener **ครั้งเดียว** นอก request handler ก่อนที่ `server.listen()` จะถูกเรียก — handler ควรเรียกแค่ `bus.emit(...)` ไม่ใช่ `bus.on(...)`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`.on()` นอก loop/handler และ listener `'error'` หนึ่งตัวบนทุกอย่างที่ emit มันได้ — สองนิสัยนี้ป้องกันความล้มเหลวของ `EventEmitter` ที่พบบ่อยที่สุดสองแบบ: listener leak แบบเงียบ และ crash-on-unhandled-error
+</Callout>
 
 export const eventsQuiz = [
   {
-    q: 'ความแตกต่างหลักระหว่าง emitter.on() และ emitter.once() คืออะไร?',
+    q: 'ความแตกต่างหลักระหว่าง emitter.on() กับ emitter.once() คืออะไร?',
     options: [
       'on() เป็น synchronous; once() เป็น asynchronous',
-      'once() ลงทะเบียน listener ที่ถูกลบออกอัตโนมัติหลัง emission ครั้งแรก',
-      'on() รับฟัง built-in events เท่านั้น; once() ใช้กับ custom events ได้',
-      'once() ยิง listener ทันทีโดยไม่รอ emit()',
+      'once() ลงทะเบียน listener ที่ถูกลบอัตโนมัติหลังการ emit ครั้งแรก',
+      'on() ฟังได้แค่ built-in event เท่านั้น; once() ใช้กับ custom event',
+      'once() เรียก listener ทันทีโดยไม่รอ emit()',
     ],
     answer: 1,
+    explain: 'once() ห่อ listener ไว้ให้เรียก removeListener กับตัวเองทันทีหลังจากรันครั้งแรก — ทุกการ emit() ในเวลาต่อมาของ event นั้นจึงไม่เหลือ listener ให้เรียกเลย',
   },
   {
-    q: 'EventEmitter listener ทำงานเมื่อไหร่เทียบกับ emitter.emit()?',
+    q: 'listener ของ EventEmitter ทำงานเมื่อไหร่เทียบกับ emitter.emit()?',
     options: [
       'แบบ asynchronous — หลังจาก call stack ปัจจุบันเคลียร์',
       'ใน microtask ถัดไป',
@@ -152,16 +365,51 @@ export const eventsQuiz = [
       'ใน setTimeout callback ถัดไป',
     ],
     answer: 2,
+    explain: 'emit() เรียก listener ที่ลงทะเบียนไว้ทุกตัวแบบ synchronous ตามลำดับการลงทะเบียน บน call stack ปัจจุบัน emit() เองจะไม่ return จนกว่า listener ทุกตัวจะรันเสร็จ (หรือ throw)',
   },
   {
     q: 'Node.js built-in class ใดบ้างที่ extend EventEmitter?',
     options: [
-      'เฉพาะ third-party libraries เท่านั้นที่ extend EventEmitter',
+      'มีแค่ไลบรารีบุคคลที่สามเท่านั้นที่ extend EventEmitter',
       'Buffer และ process เท่านั้น',
-      'http.Server, net.Socket, fs.ReadStream และอื่นๆ อีกมาก',
-      'เฉพาะ http.Server เท่านั้น',
+      'http.Server, net.Socket, fs.ReadStream และอีกมากมาย',
+      'มีแค่ http.Server เท่านั้น',
     ],
     answer: 2,
+    explain: 'EventEmitter เป็น base class ของ I/O object ส่วนใหญ่ของ Node: HTTP server และ request, TCP/net socket, stream ทั้งสี่ประเภท และ child process ล้วน extend มัน',
+  },
+  {
+    q: "เกิดอะไรขึ้นเมื่อโค้ดนี้รัน?\n\nconst { EventEmitter } = require('node:events');\nvar e = new EventEmitter();\ne.emit('error', new Error('boom'));\nconsole.log('after emit');",
+    options: [
+      '"after emit" ถูกพิมพ์ — emit() ละเว้น event ที่ไม่มี listener',
+      'ไม่มีอะไรถูกพิมพ์ — event error ถูกทิ้งไปเงียบ ๆ',
+      'error ถูก throw และ process crash ก่อนที่ "after emit" จะพิมพ์',
+      'MaxListenersExceededWarning ถูกพิมพ์ ตามด้วย "after emit"',
+    ],
+    answer: 2,
+    explain: "'error' เป็นกรณีพิเศษใน EventEmitter: การ emit มันโดยไม่มี listener เลยจะ throw error แทนที่จะไม่ทำอะไร process จะ crash ตรงจุดที่เรียก emit() ดังนั้น console.log ถัดไปจะไม่ถูกรันเลย",
+  },
+  {
+    q: "function ลงทะเบียน `bus.on('saved', handler)` ทุกครั้งที่มันถูกเรียก และ function นี้ถูกเรียกครั้งละหนึ่งครั้งต่อ HTTP request อาการที่สังเกตได้หลังจาก request ที่ 10 ขึ้นไปคืออะไร?",
+    options: [
+      'ไม่มีอะไร — Node deduplicate function listener ที่เหมือนกันให้อัตโนมัติ',
+      "MaxListenersExceededWarning และทุก emit('saved') ในอนาคตจะรัน listener ที่เพิ่มจำนวนขึ้นเรื่อย ๆ",
+      'การเรียกครั้งที่ 11 จะ throw TypeError',
+      'Node เรียก bus.setMaxListeners() ให้อัตโนมัติเพื่อเพิ่ม limit',
+    ],
+    answer: 1,
+    explain: 'การเรียก .on() แต่ละครั้งด้วย function reference ใหม่จะเพิ่ม listener ที่แยกจากกัน — Node ไม่ deduplicate ตามพฤติกรรม จะดูแค่ identity ของ function ที่เหมือนกันเป๊ะสำหรับ removeListener เท่านั้น เมื่อเกินดีฟอลต์ 10 Node จะพิมพ์ MaxListenersExceededWarning และทุก emit() ถัดไปจะรัน listener ที่สะสมไว้ทั้งหมด ไม่ใช่แค่ตัวล่าสุด',
+  },
+  {
+    q: "EventEmitter ถูกสร้างเป็น `new EventEmitter({ captureRejections: true })` มีอะไรเปลี่ยนไปกับ listener ที่ลงทะเบียนเป็น `emitter.on('work', async () => { throw new Error('x') })`?",
+    options: [
+      'ไม่มีอะไร — captureRejections มีผลกับ synchronous listener เท่านั้น',
+      'error ที่ throw กลายเป็น unhandled rejection เหมือนเดิมไม่มี option นี้',
+      "rejection ถูกส่งไปที่ event 'error' ของ emitter แทนที่จะกลายเป็น unhandled rejection",
+      'listener ทำงานแบบ synchronous แทนที่จะคืนค่า promise',
+    ],
+    answer: 2,
+    explain: "captureRejections: true ทำให้ EventEmitter await promise ใด ๆ ที่ async listener คืนค่า; ถ้ามัน reject, EventEmitter จะ emit 'error' พร้อมเหตุผลนั้นแทนที่จะปล่อยเป็น unhandled rejection ให้ process crash",
   },
 ];
 

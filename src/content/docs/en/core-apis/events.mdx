@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The backbone of Node's event-driven model
 
@@ -44,7 +46,11 @@ emitter.removeListener('message', handler);
 emitter.emit('message', 'second'); // no output — listener removed
 `;
 
-<NodeRunner client:visible code={eeBasicCode} node />
+export const eeBasicOut = `Hello, Alice!
+Hello, Bob!
+message: first`;
+
+<NodeRunner client:visible code={eeBasicCode} node expected={eeBasicOut} />
 
 ## once — fire exactly one time
 
@@ -66,7 +72,10 @@ emitter.emit('connect'); // nothing
 console.log('listener count:', emitter.listenerCount('connect')); // 0
 `;
 
-<NodeRunner client:visible code={eeOnceCode} node />
+export const eeOnceOut = `Connected! (fires once only)
+listener count: 0`;
+
+<NodeRunner client:visible code={eeOnceCode} node expected={eeOnceOut} />
 
 ## Building a custom EventEmitter class
 
@@ -106,7 +115,13 @@ loader.load('beta');
 loader.load('gamma');
 `;
 
-<NodeRunner client:visible code={eeCustomCode} node />
+export const eeCustomOut = `loaded item: alpha
+loaded item: beta
+loaded item: gamma
+all done! total: 3 items
+items: alpha, beta, gamma`;
+
+<NodeRunner client:visible code={eeCustomCode} node expected={eeCustomOut} />
 
 ## Listener count and off()
 
@@ -130,7 +145,204 @@ console.log('count after off:', ee.listenerCount('event'));  // 1
 ee.emit('event'); // only handler2 runs
 `;
 
-<NodeRunner client:visible code={eeCountCode} node />
+export const eeCountOut = `count before off: 2
+count after off: 1
+handler2`;
+
+<NodeRunner client:visible code={eeCountCode} node expected={eeCountOut} />
+
+## The listener leak warning
+
+`EventEmitter` defaults to a **maximum of 10 listeners** per event (`defaultMaxListeners`). This is not a hard limit — it's a heuristic tripwire: the #1 `EventEmitter` bug in AI-generated code is a listener registered *inside* a loop, a request handler, or a React-style re-render, which silently adds a new listener on every call instead of reusing one. Left unnoticed, that's an unbounded memory leak.
+
+When the count exceeds the max, Node emits a `process` warning — normally printed to stderr only. To surface it in a script's own output (and to handle it programmatically, e.g. shipping it to your logs), listen for `process.on('warning', ...)`:
+
+export const eeLeakCode = `
+const { EventEmitter } = require('node:events');
+
+process.on('warning', function(warning) {
+  console.log('warning name:', warning.name);
+  console.log('warning message:', warning.message);
+});
+
+var emitter = new EventEmitter();
+console.log('default max listeners:', emitter.getMaxListeners());
+
+// Adding more listeners than the default max (10) for the same event is
+// almost always a bug -- usually a listener registered inside a loop or on
+// every request instead of once at startup.
+for (var i = 0; i < 11; i++) {
+  emitter.on('data', function() {});
+}
+console.log('listener count:', emitter.listenerCount('data'));
+`;
+
+export const eeLeakOut = `default max listeners: 10
+listener count: 11
+warning name: MaxListenersExceededWarning
+warning message: Possible EventEmitter memory leak detected. 11 data listeners added to [EventEmitter]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit`;
+
+<NodeRunner client:visible code={eeLeakCode} node expected={eeLeakOut} />
+
+If 10 listeners genuinely is too few for a legitimate use case (e.g. a shared event bus with many independent subscribers), raise the limit explicitly with `emitter.setMaxListeners(n)` — that documents the decision instead of silently outgrowing the default.
+
+## events.on() and events.once() — async iteration and promises
+
+`events.once(emitter, name)` returns a **Promise** that resolves with the event's arguments on the first emission — a one-shot alternative to `emitter.once()` with a callback. `events.on(emitter, name)` returns an **async iterable** that yields every emission, for use with `for await`:
+
+export const eeOnIterCode = `
+const { EventEmitter, on, once } = require('node:events');
+
+async function main() {
+  var emitter = new EventEmitter();
+
+  // once() as a promise -- resolves with the event's args on first emission
+  var readyPromise = once(emitter, 'ready');
+  emitter.emit('ready', 'server');
+  var readyArgs = await readyPromise;
+  console.log('once() resolved with:', readyArgs);
+
+  // events.on() -- async-iterate every emission of an event
+  setImmediate(function() {
+    emitter.emit('tick', 1);
+    emitter.emit('tick', 2);
+    emitter.emit('tick', 3);
+    emitter.emit('done');
+  });
+
+  for await (const [n] of on(emitter, 'tick')) {
+    console.log('tick:', n);
+    if (n === 3) break; // must break manually -- on() never ends on its own
+  }
+  console.log('finished iterating ticks');
+}
+
+main();
+`;
+
+export const eeOnIterOut = `once() resolved with: [ 'server' ]
+tick: 1
+tick: 2
+tick: 3
+finished iterating ticks`;
+
+<NodeRunner client:visible code={eeOnIterCode} node expected={eeOnIterOut} />
+
+<Callout title="on() keeps a queue — you must break out of the loop yourself">
+Unlike a Readable stream's async iterator, `events.on()` has no natural end unless the emitter itself emits `'end'`/`'close'` (which `events.on()` recognizes automatically) or you `break`. Forgetting to break turns the `for await` loop into a permanent listener that never lets the function return.
+</Callout>
+
+## captureRejections — routing async listener errors to 'error'
+
+An `async` listener that throws produces a **rejected promise that `EventEmitter` does not await** — by default that becomes an unhandled rejection, which crashes the process on modern Node (default `--unhandled-rejections=throw`). Passing `captureRejections: true` to the constructor routes that rejection to the emitter's `'error'` event instead, where you can handle it like any other error:
+
+export const eeCaptureRejectionsCode = `
+import { EventEmitter } from 'node:events';
+
+// Without captureRejections, a listener that returns a rejected promise
+// produces an unhandled rejection that crashes the process (Node >= 15).
+// With captureRejections: true, the rejection is routed to an 'error' event
+// on the emitter instead, which you can handle like any other error.
+var emitter = new EventEmitter({ captureRejections: true });
+
+emitter.on('error', function(err) {
+  console.log('caught via error event:', err.message);
+});
+
+emitter.on('work', async function() {
+  throw new Error('async listener failed');
+});
+
+emitter.emit('work');
+console.log('emit() returned -- the throw happens later, on the microtask queue');
+
+// Give the rejection a turn to be routed before the process exits
+await new Promise(function(resolve) { setImmediate(resolve); });
+console.log('done');
+`;
+
+export const eeCaptureRejectionsOut = `emit() returned -- the throw happens later, on the microtask queue
+caught via error event: async listener failed
+done`;
+
+<NodeRunner client:visible code={eeCaptureRejectionsCode} node expected={eeCaptureRejectionsOut} />
+
+## An unhandled 'error' event throws
+
+`'error'` is a special event name in `EventEmitter`: if it is emitted and **no listener is registered for it**, Node throws the error instead of silently dropping it, crashing the process. This is deliberate — it is the one event you are not allowed to ignore by accident.
+
+export const eeErrorThrowCode = `// @expect-throw
+const { EventEmitter } = require('node:events');
+
+var emitter = new EventEmitter();
+// No 'error' listener registered.
+console.log('about to emit error with no listener...');
+emitter.emit('error', new Error('boom'));
+console.log('this line never runs');
+`;
+
+export const eeErrorThrowOut = `about to emit error with no listener...`;
+
+<NodeRunner client:visible code={eeErrorThrowCode} node expected={eeErrorThrowOut} />
+
+<Callout title="Always attach an 'error' listener to anything that extends EventEmitter">
+Sockets, streams, child processes, and HTTP servers all extend `EventEmitter` and can all emit `'error'`. Wiring up `.on('error', ...)` is not optional defensive coding — without it, a single error event crashes the entire process, even one nested three streams deep in a pipeline you don't own.
+</Callout>
+
+## Mental Model
+
+export const eventsMentalModel = `flowchart TB
+  Loop["listener registered inside a loop / request handler"] -->|"each call adds a NEW listener"| Count["listenerCount keeps growing"]
+  Count -->|"exceeds getMaxListeners() (default 10)"| Warn["MaxListenersExceededWarning"]
+  Emit["emitter.emit('error', err)"] -->|"listener registered?"| Handled["'error' handler runs — process keeps going"]
+  Emit -->|"no listener registered"| Crash["Node throws — process crashes"]
+  Async["async listener throws"] -->|"captureRejections: false (default)"| Unhandled["unhandled rejection — crash"]
+  Async -->|"captureRejections: true"| Handled`;
+
+<Mermaid code={eventsMentalModel} title="a growing listener count trips a warning; an unhandled 'error' event crashes the process; captureRejections routes async listener failures the same way" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `emitter.on()` callback style | Works everywhere, zero dependencies, synchronous and predictable | Easy to leak — re-registering inside a loop/handler is a silent bug |
+| `events.once(emitter, name)` (promise) | Reads like any other awaited call, composes with `Promise.race`/`AbortSignal` | Only fires once — not a replacement for a recurring `on()` listener |
+| `events.on(emitter, name)` (async iterator) | `for await` reads top-to-bottom like a stream; backpressure-friendly | No automatic end — you must `break` yourself or rely on an `'end'`/`'close'` event |
+| `captureRejections: true` | Async listener errors become ordinary `'error'` events instead of crashes | Off by default — every emitter you construct must opt in individually |
+
+## Common Misconceptions
+
+- **"EventEmitter listeners run asynchronously, like a DOM event"** — fact: `.emit()` calls every listener **synchronously**, in registration order, before `emit()` returns.
+- **"MaxListenersExceededWarning means something is broken"** — fact: it's a heuristic warning, not an error — the code keeps running. But it correctly flags the single most common `EventEmitter` bug: a listener added on every call to a function instead of once.
+- **"An unhandled `'error'` event just gets ignored, like any other unlistened event"** — fact: `'error'` is special-cased — with zero listeners it is thrown, crashing the process.
+- **"An `async` listener's thrown error is caught by `emitter.on('error', ...)`  automatically"** — fact: only if the emitter was constructed with `captureRejections: true`. Otherwise the rejection is unhandled and crashes the process independently of any `'error'` listener.
+
+## Reading AI-generated code
+
+- Is `.on()` called inside a loop, a request handler, a class constructor invoked per-request, or a re-render path — anywhere that runs more than once per process lifetime? Each call adds a brand-new listener that is never removed.
+- Does anything that extends or wraps `EventEmitter` (a custom class, a socket, a stream) have zero `'error'` listeners anywhere in the call chain? One unhandled `'error'` emission crashes the whole process.
+- Is an `async` function passed directly to `.on()` without `captureRejections: true` on the emitter and without an internal `try/catch`? Its thrown errors become unhandled rejections, not caught errors.
+- Does code call `events.on(emitter, name)` and iterate with `for await` but never `break` or rely on an end condition? That's a listener that never gets cleaned up, functionally the same leak as forgetting `removeListener`.
+
+<SpotTheBug code={`const { EventEmitter } = require('node:events');
+const http = require('node:http');
+
+var bus = new EventEmitter();
+
+var server = http.createServer(function(req, res) {
+  // registers a new listener on every single request
+  bus.on('request-logged', function(url) {
+    console.log('logged:', url);
+  });
+  bus.emit('request-logged', req.url);
+  res.end('ok');
+});`}>
+`bus.on('request-logged', ...)` is called inside the request handler, so a brand-new listener is registered on **every incoming request** and never removed. After 10 requests, Node prints `MaxListenersExceededWarning`; after thousands, the process leaks memory — every one of those listener closures stays alive, and every future `emit('request-logged', ...)` now runs all of them, multiplying the work per request. The fix is to register the listener **once**, outside the request handler, before `server.listen()` is called — the handler should only call `bus.emit(...)`, never `bus.on(...)`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`.on()` outside a loop/handler and one `'error'` listener on everything that can emit one — those two habits prevent the two most common `EventEmitter` failures: silent listener leaks and crash-on-unhandled-error.
+</Callout>
 
 export const eventsQuiz = [
   {
@@ -142,6 +354,7 @@ export const eventsQuiz = [
       'once() fires the listener immediately without waiting for emit()',
     ],
     answer: 1,
+    explain: 'once() wraps the listener so it calls removeListener on itself right after running once — every subsequent emit() of that event simply has no listener left to call.',
   },
   {
     q: 'When does an EventEmitter listener run relative to emitter.emit()?',
@@ -152,6 +365,7 @@ export const eventsQuiz = [
       'In the next setTimeout callback',
     ],
     answer: 2,
+    explain: 'emit() calls every registered listener synchronously, in registration order, on the current call stack. emit() itself does not return until every listener has finished running (or thrown).',
   },
   {
     q: 'Which Node.js built-in classes extend EventEmitter?',
@@ -162,6 +376,40 @@ export const eventsQuiz = [
       'Only http.Server',
     ],
     answer: 2,
+    explain: 'EventEmitter is the base class for most of Node\'s I/O objects: HTTP servers and requests, TCP/net sockets, all four stream types, and child processes all extend it.',
+  },
+  {
+    q: 'What happens when this runs?\n\nconst { EventEmitter } = require(\'node:events\');\nvar e = new EventEmitter();\ne.emit(\'error\', new Error(\'boom\'));\nconsole.log(\'after emit\');',
+    options: [
+      '"after emit" is printed — emit() ignores events with no listeners',
+      'Nothing is printed — the error event is silently dropped',
+      'The error is thrown and the process crashes before "after emit" prints',
+      'A MaxListenersExceededWarning is printed, then "after emit"',
+    ],
+    answer: 2,
+    explain: "'error' is special-cased in EventEmitter: emitting it with zero listeners throws the error instead of doing nothing. The process crashes at the emit() call, so the following console.log never executes.",
+  },
+  {
+    q: 'A function registers `bus.on(\'saved\', handler)` every time it runs, and the function is called once per HTTP request. What is the observable symptom after ~10+ requests?',
+    options: [
+      'Nothing — Node deduplicates identical listener functions automatically',
+      'A MaxListenersExceededWarning, and every future emit(\'saved\') runs an ever-growing number of listeners',
+      'The 11th call to the function throws a TypeError',
+      'Node automatically calls bus.setMaxListeners() to raise the limit',
+    ],
+    answer: 1,
+    explain: 'Each call to .on() with a new function reference adds a distinct listener — Node does not deduplicate by behavior, only exact function identity for removeListener. Past the default max of 10, Node prints MaxListenersExceededWarning, and every subsequent emit() runs all of the accumulated listeners, not just the latest one.',
+  },
+  {
+    q: 'An EventEmitter is constructed as `new EventEmitter({ captureRejections: true })`. What changes about a listener registered as `emitter.on(\'work\', async () => { throw new Error(\'x\') })`?',
+    options: [
+      'Nothing — captureRejections only affects synchronous listeners',
+      'The thrown error becomes an unhandled rejection, same as without the option',
+      "The rejection is routed to the emitter's 'error' event instead of becoming an unhandled rejection",
+      'The listener runs synchronously instead of returning a promise',
+    ],
+    answer: 2,
+    explain: "captureRejections: true makes EventEmitter await any promise an async listener returns; if it rejects, EventEmitter emits 'error' with that reason instead of leaving an unhandled rejection for the process to crash on.",
   },
 ];
 

@@ -1,6 +1,6 @@
 ---
 title: 'Core APIs'
-description: 'ภาพรวมของ globals และโมดูลหลักที่ติดมากับ Node.js: process, Buffer, fs และ EventEmitter'
+description: 'ภาพรวมของ globals และ core modules ในตัว Node.js: process, Buffer, fs และ EventEmitter'
 sidebar:
   order: 1
 ---
@@ -9,34 +9,36 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Core APIs ของ Node คืออะไร?
 
-Node.js มาพร้อม globals และโมดูลที่ติดมาในตัว (built-in) ที่สามารถใช้งานได้โดยไม่ต้องติดตั้งอะไรเพิ่ม สิ่งเหล่านี้คือ primitives ที่โปรแกรม Node.js ทุกตัวสร้างขึ้นมาบน
+Node.js มาพร้อม globals และ modules ในตัวชุดใหญ่ที่ใช้งานได้ทันทีโดยไม่ต้องติดตั้งอะไรเพิ่ม สิ่งเหล่านี้คือ primitive ที่โปรแกรม Node.js ทุกตัวถูกสร้างขึ้นมาจากมัน
 
-globals และโมดูลหลักที่โมดูลนี้จะครอบคลุม:
+globals และ modules หลักที่โมดูลนี้ครอบคลุม:
 
-- **`process`** — เข้าถึงข้อมูลของ process ที่กำลังทำงาน: environment variables, command-line arguments, working directory, platform และการควบคุม lifecycle
-- **`Buffer`** — ชิ้นส่วนของข้อมูลไบนารีดิบที่มีขนาดคงที่ มีมาก่อน typed arrays และยังคงเป็นวิธีมาตรฐานในการจัดการ bytes ใน Node streams และ networking
+- **`process`** — เข้าถึง process ที่กำลังรันอยู่: environment variables, command-line arguments, working directory, platform และการควบคุม lifecycle
+- **`Buffer`** — ก้อนข้อมูล binary ดิบที่มีความยาวคงที่ มีมาก่อน typed array และยังคงเป็นวิธีมาตรฐานในการจัดการ byte ใน stream และ networking ของ Node
 - **`node:fs` / `node:fs/promises`** — อ่าน เขียน และนำทางในระบบไฟล์ promises API ทำให้ใช้ `async/await` ได้โดยตรง
-- **`EventEmitter`** — แกนหลักของสถาปัตยกรรม event-driven ของ Node Streams, HTTP server และ library ของ third-party หลายตัวล้วน extend `EventEmitter`
+- **`EventEmitter`** — แกนหลักของสถาปัตยกรรม event-driven ของ Node stream, HTTP server และไลบรารีของบุคคลที่สามจำนวนมากล้วน extend `EventEmitter`
 
 ## โมดูลนี้ครอบคลุมอะไรบ้าง
 
 | บทเรียน | หัวข้อ |
 |--------|-------|
-| process & env | `process.argv`, `process.env`, exit codes และการตรวจจับ platform |
-| Buffer | ข้อมูลไบนารี, encoding และการจัดการระดับ byte |
-| File System | callbacks ของ `fs`, sync APIs และ interface `fs/promises` |
-| EventEmitter | custom events, listeners และ lifecycle ของ `once` / `removeListener` |
+| process & env | `process.argv`, `process.env`, exit code และการตรวจจับ platform |
+| Buffer | ข้อมูล binary, encodings และการจัดการระดับ byte |
+| File System | `fs` callback, sync API และ interface ของ `fs/promises` |
+| EventEmitter | custom event, listener และ lifecycle ของ `once` / `removeListener` |
 
 ## Built-in ใหม่ ๆ ที่ควรรู้จัก
 
-Node ดูดซับ package ยอดนิยมเข้ามาใน runtime เรื่อย ๆ:
+Node ยังคงดูดซับ package ยอดนิยมเข้ามาไว้ใน runtime อย่างต่อเนื่อง:
 
-- **`node:sqlite`** — ฐานข้อมูล SQLite แบบฝังตัว (ไม่ต้องใส่ flag ตั้งแต่ 22.13 แต่ยังเป็น **Experimental** บน Node 24 — import แล้วจะพิมพ์ `ExperimentalWarning`) ใช้เก็บ state ในเครื่อง, test และ CLI โดยไม่มี dependency
+- **`node:sqlite`** — ฐานข้อมูล SQLite แบบฝังในตัว (ปลดธงมาตั้งแต่ 22.13 แต่ยัง **Experimental** บน Node 24 — การ import จะพิมพ์ `ExperimentalWarning`) ไม่มี dependency สำหรับ local state, test และ CLI
 - **`fs.glob`** (22+) — จับคู่ไฟล์โดยไม่ต้องใช้ package `glob`
-- **`node:test`** — test runner ที่จะพูดถึงในโมดูลสุดท้าย
+- **`node:test`** — test runner ที่ครอบคลุมไปแล้วในโมดูลก่อนหน้า
 
 ```js
 import { DatabaseSync } from 'node:sqlite';
@@ -54,7 +56,7 @@ console.log(db.prepare('SELECT * FROM notes ORDER BY id').all());
 
 ## demo globals เบื้องต้น
 
-snippet ด้านล่างอ่าน globals สองตัวที่มีให้ใช้ใน Node.js process ทุกตัวโดยไม่ต้อง `require` หรือ `import`:
+snippet ด้านล่างอ่าน globals สองตัวที่มีอยู่ในทุก Node.js process โดยไม่ต้อง `require` หรือ `import` เลย:
 
 export const indexDemoCode = `
 // process.version — the running Node.js version
@@ -67,15 +69,72 @@ console.log('Chars: ' + str.length);
 console.log('Bytes (UTF-8): ' + Buffer.byteLength(str, 'utf8'));
 `;
 
-<NodeRunner client:visible code={indexDemoCode} node />
+export const indexDemoOut = `Node version: v24.13.0
+String: Hello, Node!
+Chars: 12
+Bytes (UTF-8): 12`;
+
+<NodeRunner client:visible code={indexDemoCode} node expected={indexDemoOut} />
 
 <Callout title="Globals vs modules">
-`process` และ `Buffer` คือ globals แท้จริง — ไม่ต้อง import built-ins แบบเดิมอย่าง `fs`, `path`, `events` และ `stream` import ได้ทั้งแบบมีและไม่มี prefix `node:` — `require('fs')` และ `require('node:fs')` ใช้ได้ทั้งคู่ prefix เป็นทางเลือกแต่แนะนำให้ใส่เพื่อความชัดเจน ส่วน built-ins ใหม่ ๆ มีเฉพาะชื่อแบบมี prefix เท่านั้น: `node:test` และ `node:sqlite` ไม่มีรูปแบบไม่มี prefix ดังนั้น `require('test')` จะ throw `MODULE_NOT_FOUND`
+`process` และ `Buffer` เป็น globals จริง — ไม่ต้อง import built-in รุ่นเก่าอย่าง `fs`, `path`, `events` และ `stream` สามารถ import ได้ทั้งแบบมีและไม่มี prefix `node:` — `require('fs')` และ `require('node:fs')` ใช้งานได้ทั้งคู่ prefix เป็นทางเลือกแต่แนะนำให้ใช้เพื่อความชัดเจน built-in รุ่นใหม่มีอยู่เฉพาะภายใต้ชื่อที่มี prefix เท่านั้น: `node:test` และ `node:sqlite` ไม่มีรูปแบบไม่มี prefix ดังนั้น `require('test')` จะ throw `MODULE_NOT_FOUND`
+</Callout>
+
+## Mental Model
+
+สองตัวในนี้เป็น globals จริงที่เข้าถึงได้จากทุกที่โดยไม่ต้อง import เลย อีกสองตัวเป็น modules ที่ต้อง import เข้ามาอย่างชัดเจน — และหนึ่งในนั้น (`EventEmitter`) คือ base class ที่อีกสามตัวแอบพึ่งพาอยู่
+
+export const coreApisMentalModel = `flowchart TB
+  subgraph Globals["always available, no import"]
+    process["process"]
+    Buffer["Buffer"]
+  end
+  subgraph Modules["explicit import"]
+    fs["node:fs / node:fs/promises"]
+    events["node:events — EventEmitter"]
+  end
+  events -->|"extended by"| fsStream["fs.ReadStream / fs.WriteStream"]
+  fs -->|"returns"| fsStream
+  events -->|"extended by"| httpNet["http.Server, net.Socket (later modules)"]
+  process -->|"reports on"| httpNet`;
+
+<Mermaid code={coreApisMentalModel} title="process กับ Buffer ไม่ต้อง import ส่วน fs กับ EventEmitter ต้อง import — และ EventEmitter คือ base class ที่ fs stream และ HTTP/net object ในบทหลังต่างก็ extend" />
+
+## Trade-offs
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `process` / `Buffer` เป็น globals | เข้าถึงได้จากไฟล์ไหนก็ได้โดยไม่มี friction ไม่ต้องวุ่นวายกับ import | มองเห็น dependency ได้ยากขึ้นแค่ดูผ่าน ๆ — function ที่ใช้ `process.env` ไม่มีสัญญาณระดับ import บอกว่ามันอ่าน config |
+| prefix `node:` เป็นทางเลือกสำหรับ module รุ่นเก่า (`fs`, `path`) | code เก่า (`require('fs')`) ยังทำงานได้ตลอดไป | มีการสะกดสองแบบสำหรับ module เดียวกันอยู่ใน codebase — style ไม่สม่ำเสมอ |
+| prefix `node:` บังคับสำหรับ module ใหม่ (`node:test`, `node:sqlite`) | ไม่มีทางถูกบัง (shadow) ด้วย npm package ที่ชื่อ `test` หรือ `sqlite` | ไม่มี fallback แบบไม่มี prefix — copy-paste code สไตล์เก่าอย่าง `require('sqlite')` จะ fail ด้วย `MODULE_NOT_FOUND` แทนที่จะได้ error ที่ชัดเจนกว่า |
+
+## Common Misconceptions
+
+- **"Node built-in ทุกตัวต้อง import"** — ความจริง: `process` และ `Buffer` เป็น globals; มีแค่ module อย่าง `node:fs` และ `node:events` เท่านั้นที่ต้อง `import`/`require`
+- **"prefix `node:` เป็นแค่การตกแต่ง"** — ความจริง: สำหรับ module รุ่นเก่ามันเป็นแค่ style ที่เป็นทางเลือก; สำหรับ `node:test` และ `node:sqlite` มันคือ specifier ที่ *ถูกต้องเพียงแบบเดียว* — ไม่มี `require('test')` แบบเปล่า ๆ
+- **"`node:sqlite` พร้อมใช้งานจริงเพราะมันมาพร้อม Node 24"** — ความจริง: มันยังพิมพ์ `ExperimentalWarning` ทุกครั้งที่ import บน 24.13; API ยังเปลี่ยนแปลงได้ใน semver-minor release
+
+## อ่านโค้ดที่ AI เขียน
+
+- code ที่ generate มา `require('sqlite')` หรือ `require('test')` โดยไม่มี prefix `node:` หรือเปล่า? ทั้งคู่ throw `MODULE_NOT_FOUND` — สอง module นี้ไม่มีรูปแบบไม่มี prefix ต่างจาก `fs` หรือ `path`
+- snippet ปฏิบัติต่อ `node:sqlite` เหมือนว่ามันเสถียรแล้ว (ไม่มีการจัดการ warning ใช้แบบลวก ๆ ใน ตัวอย่าง) ทั้งที่มันยังเป็น Experimental บน Node version เป้าหมายหรือเปล่า?
+- code import `Buffer` หรือ `process` จากที่ไหนสักแห่ง (`import { Buffer } from 'node:buffer'`) หรือเปล่า? แบบนี้ถูกต้องแต่ไม่จำเป็น — ตรวจดูให้ดีว่ามันไม่ได้ซ่อน typo อย่าง `bufer` ที่ linter น่าจะจับได้ถ้าใช้ global form
+
+<SpotTheBug code={`const { test } = require('test');
+
+test('adds numbers', () => {
+  console.log('ok');
+});`}>
+`node:test` ไม่มีรูปแบบไม่มี prefix — มีแค่ `require('node:test')` (หรือ `import { test } from 'node:test'`) เท่านั้นที่ resolve ได้ การเขียน `require('test')` เฉย ๆ จะ throw `Error [ERR_MODULE_NOT_FOUND]` / `MODULE_NOT_FOUND: Cannot find module 'test'` เพราะ Node ไม่ได้ลงทะเบียน `test` แบบเปล่า ๆ ไว้เป็น module specifier — มีแค่ `node:test` เท่านั้น วิธีแก้คือ `require('node:test')` (หรือ `import { test } from 'node:test'`) นี่คือกติกาเดียวกับ `node:sqlite`: built-in ใหม่เอี่ยมมีอยู่เฉพาะภายใต้ชื่อที่มี prefix เท่านั้น ต่างจาก module รุ่นเก่าอย่าง `fs` ที่สะกดได้ทั้งสองแบบ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`process` และ `Buffer` ไม่ต้อง import ส่วน core module อื่นทุกตัวต้อง — และสำหรับตัวใหม่ล่าสุด (`node:test`, `node:sqlite`) prefix `node:` เป็นข้อบังคับ ไม่ใช่แค่ style
 </Callout>
 
 export const indexQuiz = [
   {
-    q: 'อันไหนคือ Node.js global แท้จริงที่ใช้ได้โดยไม่ต้อง import?',
+    q: 'ข้อใดต่อไปนี้เป็น Node.js global จริง — ใช้งานได้โดยไม่ต้อง import?',
     options: [
       'fs',
       'path',
@@ -83,16 +142,51 @@ export const indexQuiz = [
       'http',
     ],
     answer: 2,
+    explain: 'process และ Buffer เป็น globals จริงที่ถูกฉีดเข้าไปในทุก Node.js realm ส่วน fs, path และ http เป็น modules — ต้อง import หรือ require แม้ว่ามันจะมาพร้อม Node เองก็ตาม',
   },
   {
-    q: 'prefix สมัยใหม่ที่แนะนำสำหรับการ import โมดูล built-in ของ Node.js คืออะไร?',
+    q: 'prefix สมัยใหม่ที่แนะนำสำหรับ import Node.js built-in module คืออะไร?',
     options: [
       'ไม่มี prefix — แค่ "fs"',
       'prefix "node:" — เช่น "node:fs"',
       'scope "@node/" — เช่น "@node/fs"',
-      'built-ins ไม่สามารถ import ด้วย ESM ได้',
+      'Built-in ไม่สามารถ import ด้วย ESM ได้',
     ],
     answer: 1,
+    explain: 'prefix "node:" ทำให้ชัดเจนไม่กำกวมว่า specifier นี้ resolve ไปที่ built-in ไม่ใช่ npm package มันเป็นทางเลือกสำหรับ module รุ่นเก่าอย่าง fs แต่บังคับสำหรับตัวใหม่อย่าง node:test และ node:sqlite',
+  },
+  {
+    q: "`require('test')` จะ throw อะไรบน Node 24 เมื่อ `node:test` คือ test runner ในตัว?",
+    options: [
+      'ไม่มีอะไร — มัน resolve ไปที่ node:test เหมือนที่ require("fs") resolve ไปที่ node:fs',
+      'deprecation warning แล้วก็ทำงานต่อ',
+      "MODULE_NOT_FOUND — Cannot find module 'test'",
+      'TypeError เพราะ test เป็นคำสงวน',
+    ],
+    answer: 2,
+    explain: "node:test ไม่มีรูปแบบไม่มี prefix Node ลงทะเบียน specifier เปล่า ๆ ไว้เฉพาะ built-in รุ่นเก่า (fs, path, events, ...) require('test') จะหา npm package ชื่อ 'test' ใน node_modules ไม่เจอ แล้ว throw MODULE_NOT_FOUND",
+  },
+  {
+    q: 'เกิดอะไรขึ้นครั้งแรกที่ process import node:sqlite บน Node 24.13?',
+    options: [
+      'ไม่มีอะไร — มันเสถียรมาตั้งแต่ Node 22.13',
+      'มันพิมพ์ ExperimentalWarning ไปที่ stderr แล้วก็ทำงานต่อ',
+      'มัน throw เพราะต้องใช้ flag --experimental-sqlite',
+      'มัน fallback ไปเป็น in-memory Map แบบเงียบ ๆ',
+    ],
+    answer: 1,
+    explain: 'node:sqlite ไม่ต้องใช้ flag มาตั้งแต่ 22.13 แต่ยังถูกทำเครื่องหมายเป็น Experimental บน 24.13 — ทุกครั้งที่ import จะพิมพ์ ExperimentalWarning แม้ว่า code จะทำงานปกติก็ตาม Experimental หมายความว่ารูปร่างของ API ยังเปลี่ยนได้ใน semver-minor release ไม่ได้แปลว่าต้องใช้ flag',
+  },
+  {
+    q: 'เพื่อนร่วมทีมเขียน `const Buffer = require("node:buffer").Buffer;` ไว้บนสุดของทุกไฟล์ จำเป็นหรือเปล่า?',
+    options: [
+      'จำเป็น — Buffer ไม่ได้เป็น global จริง ๆ ต้องทำแบบนี้',
+      'ไม่จำเป็น — Buffer เป็น global การ require แบบชัดเจนซ้ำซ้อนแต่ไม่เป็นอันตราย',
+      'ไม่จำเป็น — และมันจะ throw เพราะ node:buffer ไม่ได้ export Buffer',
+      'จำเป็น แต่เฉพาะไฟล์ CommonJS เท่านั้น ไม่ใช่ ESM',
+    ],
+    answer: 1,
+    explain: 'Buffer เป็น global จริง (เหมือน process) เข้าถึงได้จากไฟล์ไหนก็ได้โดยไม่ต้อง import node:buffer export Buffer ไว้ให้ด้วยสำหรับกรณีหายากที่ต้องการความชัดเจนหรืออยู่ใน realm ที่ถูก sandbox ไม่มี globals แต่การทำแบบนี้ทุกที่ก็แค่พิธีกรรมที่ไม่จำเป็น — ไม่ผิด แค่รก',
   },
 ];
 

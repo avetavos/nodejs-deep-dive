@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is a Readable stream?
 
@@ -102,10 +104,133 @@ async function main() {
 main();
 `;
 
-<NodeRunner client:visible code={readableCode} node />
+export const readableOut = `chunk: Node
+chunk: streams
+chunk: are
+chunk: powerful
+complete: Node streams are powerful`;
+
+<NodeRunner client:visible code={readableCode} node expected={readableOut} />
 
 <Callout title="Readable streams emit chunks — never buffer the whole thing">
 A Readable does not hold the entire data set. It yields one chunk at a time. If you push all chunks into an array before processing, you have rebuilt the in-memory anti-pattern that streams were designed to avoid. Process each chunk as it arrives.
+</Callout>
+
+## Object mode
+
+By default a Readable operates in **byte mode**: chunks are `Buffer`s (or strings, if `encoding` is set), and the high-water mark counts *bytes* (64 KiB by default). Passing `{ objectMode: true }` switches to **object mode**, where a chunk can be any JavaScript value — an object, a number, an array — and the high-water mark counts *objects* instead. `Readable.from(iterable)` defaults to object mode regardless of what the iterable yields:
+
+export const objectModeCode = `
+import { Readable } from 'node:stream';
+
+// Byte mode (the default for a plain Readable): highWaterMark counts bytes
+var byteStream = new Readable({ read() {} });
+console.log('byte mode highWaterMark:', byteStream.readableHighWaterMark);
+
+// Readable.from() defaults objectMode to true regardless of what it yields --
+// even for Buffers -- unless you pass { objectMode: false } yourself.
+var fromDefault = Readable.from([Buffer.from('a'), Buffer.from('b')]);
+console.log('Readable.from() default objectMode:', fromDefault.readableObjectMode);
+console.log('Readable.from() default highWaterMark:', fromDefault.readableHighWaterMark);
+
+// Explicit object mode with plain objects as chunks
+var objStream = Readable.from([{ id: 1 }, { id: 2 }], { objectMode: true });
+console.log('explicit object mode highWaterMark:', objStream.readableHighWaterMark);
+
+var received = [];
+for await (const chunk of objStream) {
+  received.push(chunk);
+}
+console.log('objects received:', JSON.stringify(received));
+`;
+
+export const objectModeOut = `byte mode highWaterMark: 65536
+Readable.from() default objectMode: true
+Readable.from() default highWaterMark: 1
+explicit object mode highWaterMark: 1
+objects received: [{"id":1},{"id":2}]`;
+
+<NodeRunner client:visible code={objectModeCode} node expected={objectModeOut} />
+
+<Callout title="Readable.from()'s default high-water mark is 1, not the object-mode default of 16">
+A plain `new Readable({ objectMode: true })` defaults to a high-water mark of 16 objects, but `Readable.from()` specifically defaults to `1` when you don't pass `highWaterMark` yourself. For most uses this difference is invisible, but it matters if you're reasoning about how many objects get buffered ahead of a slow consumer.
+</Callout>
+
+## Interop with web streams (WHATWG)
+
+Browsers and `fetch` use a different, standards-based stream API (`ReadableStream`, from the WHATWG Streams spec). Node's `Readable.toWeb()` and `Readable.fromWeb()` convert between the two, which matters whenever Node code hands data to (or receives it from) `fetch`, `Response`, or any web-standard API:
+
+export const webStreamsCode = `
+import { Readable } from 'node:stream';
+
+// Node Readable -> web ReadableStream -> Response body
+var nodeReadable = Readable.from([Buffer.from('alpha'), Buffer.from('beta'), Buffer.from('gamma')]);
+var webReadable = Readable.toWeb(nodeReadable);
+console.log('is a WHATWG ReadableStream:', webReadable instanceof ReadableStream);
+
+var response = new Response(webReadable);
+var text = await response.text();
+console.log('Response.text():', text);
+
+// The reverse: a web ReadableStream (like fetch's Response.body) -> Node Readable
+var webBody = new Response(JSON.stringify({ ok: true })).body;
+var back = Readable.fromWeb(webBody);
+var collected = '';
+for await (const chunk of back) collected += chunk;
+console.log('fromWeb collected:', collected);
+`;
+
+export const webStreamsOut = `is a WHATWG ReadableStream: true
+Response.text(): alphabetagamma
+fromWeb collected: {"ok":true}`;
+
+<NodeRunner client:visible code={webStreamsCode} node expected={webStreamsOut} />
+
+## Mental Model
+
+export const readableMentalModel = `flowchart TB
+  Source["Readable source"] -->|"attach 'data' listener"| Flowing["flowing mode -- pushed at you continuously"]
+  Source -->|"no listener / no pipe yet"| Paused["paused mode -- call .read() yourself"]
+  Source -->|"for await...of"| Iter["async iteration -- paused mode + backpressure, handled for you"]
+  Flowing -->|"consumer too slow, no pause()"| Leak["buffered chunks pile up in the consumer"]`;
+
+<Mermaid code={readableMentalModel} title="a Readable is either pushed at you (flowing/data) or pulled by you (paused/read, or for await...of) -- for await is paused mode with backpressure handled automatically" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `data` event (flowing mode) | Familiar callback style; works in both old and new code | No automatic backpressure — a slow handler that doesn't call `.pause()` lets chunks pile up in whatever it writes to |
+| `for await...of` (async iteration) | Backpressure handled automatically; reads top-to-bottom like synchronous code; errors surface as normal exceptions | Requires an `async` function; slightly more overhead per chunk than a raw `data` listener |
+| Byte mode | Matches what most sources (files, sockets) actually produce; high-water mark in bytes is meaningful | Chunk boundaries are arbitrary — a chunk may split a multi-byte character or a logical record |
+| Object mode | Chunks can be any structured value (rows, parsed JSON, custom objects) | High-water mark counts objects, not bytes — a stream of huge objects can still balloon memory even under the default limit |
+
+## Common Misconceptions
+
+- **"Attaching a `data` listener is the modern, recommended way to consume a stream"** — fact: `for await...of` is generally preferred today — it handles backpressure automatically, which a raw `data` listener does not.
+- **"A Readable created with `Readable.from()` is in byte mode unless you say otherwise"** — fact: it's the opposite — `Readable.from()` defaults to **object mode**, even when the iterable yields `Buffer`s or strings, unless you explicitly pass `{ objectMode: false }`.
+- **"web streams (`ReadableStream`) and Node streams (`Readable`) are the same API"** — fact: they are two different, only partially compatible APIs; `Readable.toWeb()`/`Readable.fromWeb()` exist specifically because you can't pass one directly where the other is expected.
+
+## Reading AI-generated code
+
+- Does a `data` listener do anything that could be slow (writing to a socket, a database, another stream) without checking a return value or applying backpressure itself? Flowing mode never stops delivering chunks on its own.
+- Does code pass a Node `Readable` directly to a `fetch`-adjacent or browser-oriented API expecting a WHATWG `ReadableStream` (or vice versa) without `Readable.toWeb()`/`fromWeb()`?
+- Does a snippet assume `Readable.from(iterable)` produces byte-mode chunks (calling `.toString()` on each with the assumption it's a `Buffer`) when the iterable actually yields plain objects or the mode was never checked?
+
+<SpotTheBug code={`const { Readable } = require('node:stream');
+const fs = require('node:fs');
+
+var dest = fs.createWriteStream('./out.txt');
+var source = Readable.from(['a very large amount of data, chunk after chunk after chunk']);
+
+source.on('data', function(chunk) {
+  dest.write(chunk); // return value ignored -- source is never paused
+});`}>
+The `data` listener calls `dest.write(chunk)` but never checks its boolean return value, and never calls `source.pause()` when it is `false`. Flowing mode keeps delivering chunks from `source` at full speed regardless of whether `dest` can keep up, so if `dest` is slower than `source` (a network socket, a slow disk, a rate-limited API), chunks queue up in `dest`'s internal buffer without bound. The fix is either to check `dest.write(chunk)`'s return value and `pause()`/`resume()` accordingly (as shown in the Writable and Backpressure lessons), or — much simpler — to replace the whole `data`/`write` pair with `source.pipe(dest)`, which does exactly that automatically.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`for await...of` is paused mode with backpressure handled for you; a raw `data` listener is flowing mode with no backpressure at all, so pair it with `.pause()`/`.resume()` yourself or use `.pipe()`/`pipeline()` instead.
 </Callout>
 
 export const readableQuiz = [
@@ -118,6 +243,7 @@ export const readableQuiz = [
       'done',
     ],
     answer: 2,
+    explain: 'end fires once a Readable has no more data to deliver. finish is a Writable-side event that fires after end() has been called and all data has been flushed.',
   },
   {
     q: 'What does Readable.from(iterable) do?',
@@ -128,6 +254,7 @@ export const readableQuiz = [
       'Buffers an entire iterable into memory before streaming',
     ],
     answer: 1,
+    explain: 'Readable.from() wraps any sync or async iterable (an array, a generator, an async generator) as a Readable stream, yielding whatever the iterable yields without buffering it all up front.',
   },
   {
     q: 'Which approach handles backpressure automatically when consuming a Readable?',
@@ -138,6 +265,40 @@ export const readableQuiz = [
       'Collecting chunks with push() into an array',
     ],
     answer: 2,
+    explain: 'for await...of internally uses paused mode and only pulls the next chunk once your loop body has finished processing the current one, which is exactly what backpressure requires. A raw data listener delivers chunks continuously with no such coordination.',
+  },
+  {
+    q: 'What does this print?\n\nconst { Readable } = require("node:stream");\nvar s = Readable.from([Buffer.from("x")]);\nconsole.log(s.readableObjectMode);',
+    options: [
+      'false — Buffers always mean byte mode',
+      'true — Readable.from() defaults to object mode regardless of what it yields',
+      'undefined — readableObjectMode does not exist',
+      'It throws because Buffers cannot be used with Readable.from',
+    ],
+    answer: 1,
+    explain: "Readable.from() sets objectMode: true by default even when the iterable yields Buffers or strings. You'd have to pass { objectMode: false } explicitly to get byte-mode behavior from it.",
+  },
+  {
+    q: 'A data listener calls a slow async database write for every chunk but never calls source.pause(). What happens under a fast source and a slow database?',
+    options: [
+      'Node automatically throttles the source to match the database speed',
+      'Chunks queue up faster than the database can absorb them, growing memory use without bound',
+      'The stream throws an error once the internal buffer is full',
+      'Nothing — flowing mode is always safe by design',
+    ],
+    answer: 1,
+    explain: 'Flowing mode (triggered by attaching a data listener) delivers chunks continuously with no regard for how fast the listener processes them. Without checking a downstream write()\'s return value and pausing, unbounded chunks can accumulate in whatever buffer the slow consumer uses.',
+  },
+  {
+    q: 'Why would you need Readable.toWeb() when calling fetch-adjacent APIs from Node code?',
+    options: [
+      'fetch does not exist in Node and toWeb() is required to enable it',
+      'A Node Readable and a WHATWG ReadableStream are different, only partially compatible APIs — toWeb() converts one into the other',
+      'toWeb() is required before you can call .pipe() on any stream',
+      'It converts a Readable into a Buffer',
+    ],
+    answer: 1,
+    explain: "Node's Readable and the browser-standard ReadableStream (used by fetch, Response, and Request) are two separate implementations of similar ideas. Readable.toWeb() and Readable.fromWeb() are the explicit conversion functions between them.",
   },
 ];
 

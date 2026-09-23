@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The problem backpressure solves
 
@@ -59,6 +61,71 @@ This pattern is verbose and error-prone. One forgotten `readable.pause()` call c
 
 You never need to manage pausing and resuming manually when using `pipe` or `pipeline`. This is one of the primary reasons to prefer them over raw event listeners.
 
+## Measuring what ignoring backpressure actually costs
+
+Talking about "unbounded memory growth" is abstract. This demo makes it concrete: the same 2,000-chunk source is drained twice into the same slow sink — once through a `data` listener that ignores `write()`'s return value, and once through `.pipe()`, which respects it. Both runs track the *peak* number of chunks buffered in the sink at once:
+
+export const unpausedCode = `
+import { Readable, Writable } from 'node:stream';
+
+function makeSource() {
+  var i = 0;
+  return new Readable({
+    objectMode: true,
+    read() {
+      if (i < 2000) { this.push('chunk' + i); i++; }
+      else this.push(null);
+    }
+  });
+}
+
+function makeSlowSink() {
+  return new Writable({
+    objectMode: true,
+    highWaterMark: 1,
+    write(chunk, enc, cb) { setImmediate(cb); } // slow relative to the fast source above
+  });
+}
+
+// --- Wrong: 'data' handler ignores write()'s return value, never pauses ---
+await new Promise(function(resolve) {
+  var source = makeSource();
+  var sink = makeSlowSink();
+  var maxBuffered = 0;
+  source.on('data', function(chunk) {
+    sink.write(chunk); // return value ignored -- source is never paused
+    if (sink.writableLength > maxBuffered) maxBuffered = sink.writableLength;
+  });
+  source.on('end', function() {
+    console.log('ignoring backpressure -- peak buffered chunks:', maxBuffered);
+    resolve();
+  });
+});
+
+// --- Right: pipe() respects write()'s return value automatically ---
+await new Promise(function(resolve) {
+  var source = makeSource();
+  var sink = makeSlowSink();
+  var maxBuffered = 0;
+  var timer = setInterval(function() {
+    if (sink.writableLength > maxBuffered) maxBuffered = sink.writableLength;
+  }, 0);
+  source.pipe(sink);
+  sink.on('finish', function() {
+    clearInterval(timer);
+    console.log('using pipe() -- peak buffered chunks:', maxBuffered);
+    resolve();
+  });
+});
+`;
+
+export const unpausedOut = `ignoring backpressure -- peak buffered chunks: 2000
+using pipe() -- peak buffered chunks: 1`;
+
+<NodeRunner client:visible code={unpausedCode} node expected={unpausedOut} />
+
+Ignoring the source entirely (never calling `.pause()`) lets every one of the 2,000 chunks queue up in the sink at once — the source never gets the signal to slow down. `.pipe()` keeps the sink's buffer at its high-water mark of 1 the entire time, because it pauses the source the instant `write()` returns `false`.
+
 ## Visualising backpressure with custom high-water marks
 
 The demo below creates a Readable and a Writable with a very small high-water mark (1 byte) to make backpressure trigger on every chunk. Watch how the readable is automatically paused and resumed.
@@ -90,10 +157,62 @@ pipeline(source, sink, function(err) {
 });
 `;
 
-<NodeRunner client:visible code={backpressureCode} node />
+export const backpressureOut = `sink writing: a
+sink writing: b
+sink writing: c
+sink writing: d
+sink writing: e
+done — pipeline handled backpressure automatically`;
+
+<NodeRunner client:visible code={backpressureCode} node expected={backpressureOut} />
 
 <Callout title="Backpressure prevents a fast source from overwhelming a slow sink">
 When the Writable buffer fills up, write() returns false. The correct response is to pause the Readable immediately and resume it only after the drain event fires. The pipe and pipeline APIs do this for you — use them instead of raw event listeners to avoid accidental memory leaks.
+</Callout>
+
+## Mental Model
+
+export const backpressureMentalModel = `flowchart TB
+  Fast["fast Readable source"] -->|"data listener, no pause()"| Ignored["chunks queue up in the sink without limit"]
+  Fast -->|".pipe() / pipeline()"| Managed["source is paused the instant write() returns false"]
+  Managed -->|"sink emits 'drain'"| Resume["source is resumed"]
+  Resume --> Managed`;
+
+<Mermaid code={backpressureMentalModel} title="ignoring write()'s signal lets a fast source flood a slow sink; pipe()/pipeline() pause the source until drain fires" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Ignoring `write()`'s return value | Simplest possible code | Unbounded memory growth the moment the source outpaces the sink — an eventual OOM crash under real load |
+| Manual pause/resume on `drain` | Full control over exactly when to slow down | Verbose, and every additional stream in a chain multiplies the chances of missing a case |
+| `.pipe()` / `pipeline()` | Backpressure handled correctly with zero manual bookkeeping | Less visibility into exactly when pausing happens — you trust the implementation |
+
+## Common Misconceptions
+
+- **"A `data` listener is safe as long as I don't `console.log` too much"** — fact: the danger isn't logging, it's writing chunks to a *slower* destination (a socket, a file, another API) without checking whether it can keep up — that's what actually accumulates in memory.
+- **"Backpressure is a Node-specific concept"** — fact: it's the general problem of a fast producer overwhelming a slow consumer — the same idea as TCP flow control, and Node streams solve it the same way (a signal to pause, and a signal to resume).
+- **"A small high-water mark means small memory usage overall"** — fact: it bounds how much *one* stream buffers, but if you ignore its `write()` signal entirely (as the demo above shows), the high-water mark is irrelevant — the caller keeps writing regardless.
+
+## Reading AI-generated code
+
+- Does a `data` listener write to (or otherwise hand off to) something that could be slow — a socket, another stream, an external API call — without ever checking that destination's own backpressure signal?
+- Does code implement a custom pump between two streams (rather than using `.pipe()`/`pipeline()`) without a `drain` listener anywhere?
+- Is there a comment claiming "handles backpressure" next to code that never calls `.pause()`, checks `write()`'s return value, or delegates to `.pipe()`/`pipeline()`?
+
+<SpotTheBug code={`const { Readable } = require('node:stream');
+const net = require('node:net');
+
+function forwardToSocket(readable, socket) {
+  readable.on('data', function(chunk) {
+    socket.write(chunk); // return value never checked, readable never paused
+  });
+}`}>
+`forwardToSocket` never checks `socket.write(chunk)`'s return value and never calls `readable.pause()`. If the network socket is slower than the readable's data rate (a common situation over a real network, versus a fast in-process source), Node keeps buffering unsent chunks in the socket's internal write buffer without limit, and memory grows until the process runs out or the connection is dropped. The fix is either the manual pause/drain pattern from earlier in this lesson, or simply `readable.pipe(socket)`, which applies that exact pattern automatically.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Backpressure is `write()`'s boolean return value telling you to slow down — ignoring it (a raw `data` listener that never checks it) is the single most common way a Node process quietly grows without bound until it crashes.
 </Callout>
 
 export const backpressureQuiz = [
@@ -106,6 +225,7 @@ export const backpressureQuiz = [
       'The chunk was discarded because it was too large',
     ],
     answer: 1,
+    explain: 'false is a flow-control signal, not an error: the chunk was still accepted and buffered, but the buffer has reached or exceeded the high-water mark, so the producer should pause until drain fires.',
   },
   {
     q: 'What event should you listen for to know when it is safe to resume writing after backpressure?',
@@ -116,6 +236,7 @@ export const backpressureQuiz = [
       'flush',
     ],
     answer: 2,
+    explain: 'drain fires once the internal buffer has emptied back below the high-water mark, signaling that it is safe to resume writing (or, on the Readable side, to resume() a paused source).',
   },
   {
     q: 'How do readable.pipe() and stream.pipeline() help with backpressure?',
@@ -126,6 +247,29 @@ export const backpressureQuiz = [
       'They drop chunks that cannot be written immediately',
     ],
     answer: 2,
+    explain: 'Both implement exactly the manual pause/drain pattern shown earlier in this lesson internally, so you never have to write it yourself.',
+  },
+  {
+    q: 'A 2,000-chunk source is drained into a slow sink two ways: (1) a data listener that calls sink.write() without checking its return value, and (2) source.pipe(sink). What is the expected peak number of chunks buffered in the sink for each?',
+    options: [
+      'Both peak at 2,000 -- write() always buffers everything regardless of how it is called',
+      '(1) peaks near 2,000 (all chunks queue up); (2) stays near the sink\'s high-water mark, since pipe() pauses the source',
+      'Both stay near the high-water mark -- Node throttles data listeners automatically',
+      '(1) throws once the buffer is full; (2) peaks near 2,000',
+    ],
+    answer: 1,
+    explain: 'A data listener puts the Readable in flowing mode with no coordination with the sink -- nothing pauses the source, so nearly all 2,000 chunks can queue up in the sink before it drains. pipe() checks write()\'s return value on every chunk and pauses the source immediately when it is false, keeping the sink\'s buffer near its high-water mark throughout.',
+  },
+  {
+    q: 'Why is a small default high-water mark (like 16 objects in object mode) not automatically enough to prevent memory problems?',
+    options: [
+      'It is always enough -- backpressure is fully automatic regardless of how you consume a stream',
+      "It only bounds what one stream buffers; if the code consuming that stream ignores write()'s signal (e.g. a data listener with no pause()), the caller keeps producing regardless of the high-water mark",
+      'The high-water mark only applies to Readable streams, never Writable ones',
+      'Object mode streams do not support high-water marks at all',
+    ],
+    answer: 1,
+    explain: "The high-water mark only changes when write() returns false -- it does not force anyone to stop calling write(). If the surrounding code (a data listener, a custom pump) never checks that return value, the high-water mark has no effect on actual memory use.",
   },
 ];
 

@@ -1,6 +1,6 @@
 ---
 title: 'Streams & I/O'
-description: 'ทำความเข้าใจว่า Stream คืออะไร ทั้งสี่ประเภท และภาพรวมของโมดูลนี้'
+description: 'ทำไม stream ถึงมีอยู่, stream สี่ประเภท และโมดูลนี้ครอบคลุมอะไรบ้าง'
 sidebar:
   order: 1
 ---
@@ -9,40 +9,42 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## ปัญหาของการโหลดข้อมูลทั้งหมดในครั้งเดียว
+## ปัญหาของการโหลดทุกอย่างในครั้งเดียว
 
-ลองนึกภาพการอ่านไฟล์ Log ขนาด 4 GB ถ้าคุณโหลดข้อมูลทั้งหมดเข้า Memory ก่อน Node จะต้องจองพื้นที่ 4 GB ก่อนที่จะอ่านบรรทัดแรกได้ด้วยซ้ำ หากเครื่องมี RAM แค่ 2 GB กระบวนการจะพังก่อนที่จะเริ่มต้น
+ลองนึกภาพการอ่านไฟล์ log ขนาด 4 GB ถ้าคุณโหลดมันทั้งหมดเข้า memory ก่อน Node ต้องจอง 4 GB ก่อนที่คุณจะดูบรรทัดเดียวได้ด้วยซ้ำ บนเครื่องที่มี RAM 2 GB process จะ crash ก่อนที่มันจะเริ่มด้วยซ้ำ
 
-Stream แก้ปัญหานี้ด้วยการประมวลผลข้อมูล **ทีละ chunk** — คุณเริ่มอ่าน chunk แรกได้เลยขณะที่ chunk ที่เหลือยังมาไม่ถึง ทำให้ Memory ใช้คงที่ไม่ว่าแหล่งข้อมูลจะใหญ่แค่ไหน
+Stream แก้ปัญหานี้ด้วยการประมวลผลข้อมูล **เป็น chunk** — คุณเริ่มอ่าน chunk แรกในขณะที่ส่วนที่เหลือยังมาไม่ถึงจากดิสก์หรือ network memory จะคงที่ไม่ว่าต้นทางจะมีขนาดใหญ่แค่ไหน
 
-แนวคิดเดียวกันนี้ใช้กับการเขียนด้วย แทนที่จะ Buffer Response ทั้งหมดใน Memory แล้วส่งในครั้งเดียว Stream จะส่ง chunk แต่ละชิ้นไปยังปลายทางทันทีที่ข้อมูลมาถึง
+แนวคิดเดียวกันนี้ใช้กับการเขียนด้วย: แทนที่จะ buffer response ทั้งหมดใน memory แล้วส่งทีเดียว stream จะส่งแต่ละ chunk ไปยังปลายทางทันทีที่มันมาถึง
 
-## สี่ประเภทของ Stream
+## Stream สี่ประเภท
 
-Node.js กำหนดประเภท Stream นามธรรมสี่ชนิดใน module `node:stream`:
+Node.js กำหนด abstract stream สี่ประเภทไว้ใน module `node:stream`:
 
 | ประเภท | ทิศทาง | ตัวอย่าง |
-|--------|---------|---------|
+|------|-----------|---------|
 | `Readable` | ข้อมูลไหล **ออก** | `fs.createReadStream`, `process.stdin` |
 | `Writable` | ข้อมูลไหล **เข้า** | `fs.createWriteStream`, `process.stdout` |
 | `Duplex` | สองทิศทาง | TCP socket (`net.Socket`) |
-| `Transform` | สองทิศทางพร้อมแปลงข้อมูล | `zlib.createGzip` (บีบอัดระหว่างทาง) |
+| `Transform` | สองทิศทางพร้อมการแปลงข้อมูล | `zlib.createGzip` (บีบอัดระหว่างทาง) |
 
-ทุก Stream ยังสืบทอดจาก `EventEmitter` ด้วย คลาสพื้นฐานของ Stream emit event มาตรฐาน (`data`, `end`, `error`, `drain`, `finish`) ที่คุณแนบ handler ได้
+ทุก stream ก็เป็น `EventEmitter` ด้วย stream base class จะ emit event มาตรฐาน (`data`, `end`, `error`, `drain`, `finish`) ที่คุณผูก handler เข้าไปได้
 
-## สิ่งที่โมดูลนี้จะสอน
+## โมดูลนี้ครอบคลุมอะไรบ้าง
 
 | บทเรียน | หัวข้อ |
-|---------|--------|
-| Readable Streams | events `data`/`end`/`error`, `Readable.from`, async iteration |
-| Writable Streams | `write()`, `end()`, และ event `drain` |
-| Pipe & Pipeline | เชื่อม Stream ด้วย `.pipe()` และ `stream.pipeline()` |
-| Backpressure | คืออะไร สำคัญอย่างไร และ Pipeline จัดการอย่างไร |
+|--------|-------|
+| Readable Streams | event `data`/`end`/`error`, `Readable.from`, async iteration |
+| Writable Streams | `write()`, `end()` และ event `drain` |
+| Pipe & Pipeline | การเชื่อม stream ด้วย `.pipe()` และ `stream.pipeline()` |
+| Backpressure | มันคืออะไร ทำไมสำคัญ และ pipeline จัดการมันอย่างไร |
 
-## ลองใช้ Stream ครั้งแรก
+## มองภาพแรกของ streaming
 
-Demo ด้านล่างใช้ `Readable.from` สร้าง Readable Stream จาก Array ของ String แล้วอ่านทีละ chunk ด้วย `for await` สังเกตว่าไม่มีการเก็บ Array ทั้งหมดไว้ใน Buffer — แต่ละรายการถูก yield เมื่อต้องการเท่านั้น
+demo ด้านล่างใช้ `Readable.from` เพื่อสร้าง readable stream จาก array ของ string แล้วบริโภคมันทีละ chunk ด้วย `for await` สังเกตว่าไม่มี array เต็ม ๆ ถูกเก็บไว้ใน buffer เลย — แต่ละ item ถูก yield ตามความต้องการ
 
 export const streamsIndexCode = `
 const { Readable } = require('node:stream');
@@ -61,25 +63,75 @@ async function main() {
 main();
 `;
 
-<NodeRunner client:visible code={streamsIndexCode} node />
+export const streamsIndexOut = `chunk: "hello"
+chunk: " "
+chunk: "streaming"
+chunk: " "
+chunk: "world"
+assembled: hello streaming world`;
+
+<NodeRunner client:visible code={streamsIndexCode} node expected={streamsIndexOut} />
 
 <Callout title="Stream ประมวลผลข้อมูลทีละ chunk">
-แทนที่จะโหลดไฟล์หรือ Response ทั้งหมดเข้า Memory Stream ช่วยให้คุณเริ่มประมวลผล chunk แรกได้ทันทีขณะที่ส่วนที่เหลือยังมาไม่ถึง ทำให้การใช้ Memory คงที่ไม่ว่าข้อมูลจะมีขนาดเท่าไร
+แทนที่จะโหลดไฟล์หรือ response ทั้งหมดเข้า memory stream ให้คุณเริ่มประมวลผล chunk แรกได้ในขณะที่ส่วนที่เหลือยังมาไม่ถึง — ทำให้การใช้ memory คงที่ไม่ว่าข้อมูลทั้งหมดจะมีขนาดเท่าไหร่
+</Callout>
+
+## Mental Model
+
+export const streamsIndexMentalModel = `flowchart LR
+  Readable["Readable — data flows OUT"] -->|".pipe() / pipeline()"| Writable["Writable — data flows IN"]
+  Readable -->|"through a"| Transform["Transform — reshapes each chunk"]
+  Transform --> Writable
+  Duplex["Duplex — both directions independently"]
+  All["Readable, Writable, Duplex, Transform"] -->|"all extend"| EE["EventEmitter"]`;
+
+<Mermaid code={streamsIndexMentalModel} title="ข้อมูลไหลจาก Readable ผ่าน Transform (ถ้ามี) เข้าสู่ Writable — stream ทุกประเภทก็เป็น EventEmitter ด้วย" />
+
+## Trade-offs
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| Streaming (แบบ chunk) | การใช้ memory คงที่ไม่ว่าข้อมูลทั้งหมดจะมีขนาดเท่าไหร่; เริ่มประมวลผลได้ก่อนที่ต้นทางจะเสร็จ | มีชิ้นส่วนที่ต้องจัดการมากกว่าการเรียก `readFile()` ครั้งเดียว — event หรือ async iteration, backpressure, การส่งต่อ error |
+| โหลดทุกอย่างเข้า memory ก่อน | code ง่ายที่สุดเท่าที่จะทำได้ — ไม่ต้อง wire event ผลลัพธ์ทั้งหมดพร้อมใช้ทันที | peak memory scale ตามขนาด input; input ที่ใหญ่พอจะทำให้ process crash ตรง ๆ |
+
+## Common Misconceptions
+
+- **"Stream เร็วกว่าการอ่านทั้งไฟล์เสมอ"** — ความจริง: stream ประหยัด *memory* ไม่จำเป็นต้องเร็วกว่าในแง่ wall-clock สำหรับไฟล์ที่พอดีกับ RAM `readFile()` อาจง่ายกว่าและเร็วพอ ๆ กัน
+- **"stream ทุกตัวต้องมี `data` event listener เพื่อให้ output ออกมา"** — ความจริง: `for await...of` (async iteration) บริโภค Readable ได้โดยไม่แตะ event `data` เลย และจัดการ backpressure ให้อัตโนมัติไปด้วย
+- **"Transform stream กับ Duplex stream คือสิ่งเดียวกัน"** — ความจริง: ทั้งคู่เป็นสองทิศทาง แต่ output ของ `Transform` ได้มาจาก input ของมัน (ฝั่งหนึ่งป้อนอีกฝั่ง); ฝั่ง readable และ writable ของ `Duplex` เป็นอิสระต่อกัน — TCP socket อ่านและเขียนข้อมูลที่ไม่เกี่ยวข้องกันในแต่ละฝั่ง
+
+## อ่านโค้ดที่ AI เขียน
+
+- code เรียก `fs.readFileSync()` หรือ `fs.readFile()` เพื่อโหลดไฟล์แค่จะเขียนมันกลับออกไปหรือส่งต่อไปที่อื่นทันทีหรือเปล่า ทั้งที่ stream (หรือ `pipeline`) จะไม่เก็บทั้งไฟล์ไว้ใน memory เลย?
+- snippet ผูก `data` listener กับ Readable โดยไม่เคยตรวจ backpressure ปลายทางเลย สมมติว่าพฤติกรรม pause/resume อัตโนมัติของ `.pipe()` จะเกิดขึ้นทั้งที่ไม่ได้เรียก `.pipe()` จริง ๆ หรือเปล่า?
+- code ปฏิบัติต่อ `Transform` และ `Duplex` ราวกับใช้แทนกันได้ — extend `Duplex` ทั้งที่เจตนาจริงคือ "รับ X เข้ามา สร้าง Y ที่ได้มาออกไป" (ซึ่งคือ `Transform`) หรือเปล่า?
+
+<SpotTheBug code={`const fs = require('node:fs');
+
+// Loads the whole file into memory just to copy it elsewhere
+var data = fs.readFileSync('./huge-input.log');
+fs.writeFileSync('./huge-output.log', data);`}>
+โค้ดนี้อ่านทั้งไฟล์เข้า `Buffer` เดียวใน memory ก่อนที่จะเขียนมันกลับออกไป ทั้งที่ไม่มีอะไรตรงนี้ต้องตรวจสอบหรือแปลงเนื้อหาเลย — สำหรับไฟล์ log ขนาดหลายกิกะไบต์ นี่อาจทำให้ memory ที่มีอยู่หมดหรือแค่เปลืองเปล่า ๆ `fs.createReadStream('./huge-input.log').pipe(fs.createWriteStream('./huge-output.log'))` (หรือ `pipeline` ของ `stream/promises` ที่ครอบคลุมทีหลังในโมดูลนี้) จะ copy ไฟล์เป็น chunk ที่มีขอบเขตโดยไม่เคยถือมากกว่าหนึ่ง chunk ใน memory เลย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+stream ประมวลผลข้อมูลเป็น chunk ที่มีขอบเขตแทนที่จะโหลดทั้งหมดในครั้งเดียว — stream ทุกประเภทเป็น `EventEmitter` และ `for await...of` คือวิธีที่สะอาดที่สุดในการบริโภคมันโดยไม่ต้องจัดการ backpressure เอง
 </Callout>
 
 export const streamsIndexQuiz = [
   {
-    q: 'ทำไม Stream จึงดีกว่าการโหลดไฟล์ทั้งหมดเข้า Memory?',
+    q: 'ทำไมจึงนิยม stream มากกว่าการโหลดทั้งไฟล์เข้า memory?',
     options: [
-      'Stream เร็วกว่าเสมอเนื่องจาก CPU Cache',
-      'Stream ทำให้การใช้ Memory คงที่โดยไม่ขึ้นกับขนาดไฟล์',
-      'Stream ขจัดความจำเป็นในการจัดการ Error',
-      'Stream ทำงานบน Thread แยกต่างหาก',
+      'stream เร็วกว่าเสมอเพราะ CPU caching',
+      'stream ทำให้การใช้ memory มีขอบเขตไม่ว่าไฟล์จะขนาดเท่าไหร่',
+      'stream ทำให้ไม่ต้องจัดการ error เลย',
+      'stream รันบน thread แยก',
     ],
     answer: 1,
+    explain: 'stream ประมวลผลข้อมูลเป็น chunk ที่มีขอบเขต ดังนั้นการใช้ memory จึงคงที่โดยประมาณไม่ว่าต้นทางจะใหญ่แค่ไหน การโหลดทุกอย่างเข้า memory ก่อนทำให้ peak memory scale ตรงตามขนาด input',
   },
   {
-    q: 'Stream ชนิดใดใน Node.js ที่แปลงข้อมูลระหว่างทาง?',
+    q: 'stream ประเภทใดของ Node.js ที่แปลงข้อมูลขณะที่มันผ่าน?',
     options: [
       'Readable',
       'Writable',
@@ -87,9 +139,10 @@ export const streamsIndexQuiz = [
       'Transform',
     ],
     answer: 3,
+    explain: 'Transform คือ Duplex stream ที่ฝั่ง writable ป้อนฝั่ง readable หลังจากใช้การแปลงบางอย่าง (บีบอัด, encode, ทำเป็นตัวพิมพ์ใหญ่, ...) ส่วน Duplex ธรรมดามีฝั่ง readable และ writable ที่เป็นอิสระต่อกันและไม่เกี่ยวข้องกัน',
   },
   {
-    q: 'คลาสพื้นฐานที่ Stream ทั้งสี่ประเภทสืบทอดมาคืออะไร?',
+    q: 'stream ทั้งสี่ประเภทของ Node.js extend base class ใด?',
     options: [
       'Buffer',
       'EventEmitter',
@@ -97,6 +150,29 @@ export const streamsIndexQuiz = [
       'Worker',
     ],
     answer: 1,
+    explain: 'Readable, Writable, Duplex และ Transform ล้วน extend EventEmitter ซึ่งเป็นเหตุผลที่ stream ทุกตัว emit event อย่าง data, end, error, drain และ finish ที่คุณผูก handler ได้',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n\nconst { Readable } = require("node:stream");\nvar s = Readable.from(["a", "b"]);\nconsole.log(typeof s.on);',
+    options: [
+      "'undefined' — Readable.from() คืนค่า iterable ธรรมดา ไม่ใช่ stream",
+      "'function' — stream ทุกตัว รวมถึงตัวที่สร้างจาก Readable.from เป็น EventEmitter",
+      "'object'",
+      'มัน throw',
+    ],
+    answer: 1,
+    explain: 'Readable.from() คืนค่า Readable stream instance จริง ๆ และ stream ทุกประเภท extend EventEmitter ดังนั้น .on จึงเป็น function เสมอบนมัน — คุณ listen data, end, error และอื่น ๆ ได้แม้บน stream ที่สร้างจาก array ธรรมดา',
+  },
+  {
+    q: 'function หนึ่งอ่านไฟล์ขนาด 2 GB ด้วย fs.readFileSync() แล้วเขียนไปยัง path อื่นทันทีด้วย fs.writeFileSync() ความเสี่ยงหลักคืออะไร?',
+    options: [
+      'writeFileSync เขียนไฟล์ที่ใหญ่กว่า 1 GB ไม่ได้',
+      'process ถือ 2 GB ทั้งหมดไว้ใน memory พร้อมกัน ซึ่งอาจทำให้ crash บน host ที่ memory จำกัด',
+      'readFileSync ตัดทอนไฟล์ที่ใหญ่กว่า 1 GB แบบเงียบ ๆ',
+      'ไม่มีความเสี่ยงเลย — นี่คือรูปแบบที่แนะนำสำหรับไฟล์ขนาดใหญ่',
+    ],
+    answer: 1,
+    explain: 'sync fs call ทั้งสองถือเนื้อหาไฟล์ทั้งหมดเป็น buffer เดียวใน memory สำหรับไฟล์ 2 GB นั่นคือการจอง 2 GB ซึ่งอาจเกิน memory ที่มีบน container ที่จำกัดหรือทำให้ process crash ตรง ๆ stream (หรือ pipeline) ไม่เคยถือมากกว่าหนึ่ง chunk ที่มีขอบเขตในแต่ละครั้ง',
   },
 ];
 

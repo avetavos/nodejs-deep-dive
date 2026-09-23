@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## fs module สามรูปแบบ
 
@@ -117,6 +119,87 @@ demo().catch(console.error);
 
 <NodeRunner client:visible code={fsStatCode} node />
 
+## fs/promises เทียบกับ sync — การ block event loop
+
+`readFileSync` ไม่ได้แค่ "อ่านไฟล์ช้ากว่า" — มัน **รันจนจบก่อนที่สิ่งอื่นใดใน process จะรันได้** รวมถึง timer ที่ถูกตั้งไว้แล้วด้วย delay `0` ms `readFile` (แบบ promise) ส่งงานอ่านออกไปแล้ว return ทันที ปล่อยให้ code synchronous ที่เหลือ — และ event loop — เดินหน้าต่อไปได้ในขณะที่การอ่านเกิดขึ้นเบื้องหลัง:
+
+export const fsBlockingCode = `
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+
+var path = '/tmp/node-deep-dive-block-demo.txt';
+writeFileSync(path, 'x'.repeat(5_000_000)); // ~5 MB — big enough to take real time to read
+
+// --- Sync: readFileSync runs to completion before anything else can --
+// a pending timer cannot fire mid-read, no matter how short its delay ---
+var timerFired = false;
+setTimeout(function() { timerFired = true; }, 0);
+var syncData = readFileSync(path, 'utf8');
+console.log('sync read length:', syncData.length);
+console.log('timer fired before readFileSync returned:', timerFired); // always false
+
+// --- Async: readFile returns a pending Promise immediately -- the very
+// next line of synchronous code always runs before the read settles ---
+var order = [];
+readFile(path, 'utf8').then(function() { order.push('read settled'); });
+order.push('next line ran before the read settled');
+console.log(order.join(' | '));
+
+await readFile(path, 'utf8'); // let any pending read finish before cleanup
+unlinkSync(path);
+`;
+
+export const fsBlockingOut = `sync read length: 5000000
+timer fired before readFileSync returned: false
+next line ran before the read settled`;
+
+<NodeRunner client:visible code={fsBlockingCode} node expected={fsBlockingOut} />
+
+<Callout title="ใน server, readFileSync ตัวเดียวหยุดทุก request ที่กำลังทำงานอยู่">
+การอ่านแบบ blocking เพียงไม่กี่มิลลิวินาทีมองไม่เห็นใน script เดี่ยว ๆ แต่ใน server ที่จัดการ request พร้อมกันหลายตัว call เดียวกันนั้นจะแช่แข็ง**ทุก**การเชื่อมต่อ — ไม่มี request ไหนถูกรับ ไม่มี response ไหนถูกส่ง ไม่มี timer ไหนทำงานได้ — จนกว่าการอ่านจะเสร็จ นี่คือเหตุผลที่ `node:fs/promises` (หรือ callback API) เป็นกฎสำหรับ server code และ `readFileSync` สงวนไว้สำหรับงาน startup ครั้งเดียวก่อน `server.listen()`
+</Callout>
+
+## readFile เทียบกับ stream สำหรับไฟล์ขนาดใหญ่ — memory
+
+`readFile()` (sync หรือ promise) จอง **buffer หนึ่งก้อนที่เก็บทั้งไฟล์** สำหรับไฟล์ขนาด 50 MB นั่นหมายถึงการจอง 50 MB หนึ่งครั้ง เก็บไว้ใน memory จนกว่าคุณจะใช้เสร็จ stream กลับส่งมอบไฟล์เป็น chunk ที่มีขอบเขต — ดีฟอลต์ไม่เกิน `highWaterMark` (64 KiB) ต่อครั้ง — ดังนั้นการใช้ memory จึงคงที่โดยประมาณไม่ว่าไฟล์จะขนาดเท่าไหร่:
+
+export const fsStreamMemoryCode = `
+import { writeFileSync, unlinkSync, createReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+
+var path = '/tmp/node-deep-dive-large.bin';
+writeFileSync(path, Buffer.alloc(50 * 1024 * 1024)); // 50 MB fixture, all zero bytes
+
+// readFile: one allocation the size of the whole file
+var whole = await readFile(path);
+console.log('readFile() loaded bytes in one buffer:', whole.length);
+
+// stream: delivered in bounded highWaterMark-sized chunks, one at a time
+var chunkCount = 0;
+var maxChunk = 0;
+var total = 0;
+await new Promise(function(resolve, reject) {
+  createReadStream(path)
+    .on('data', function(chunk) { chunkCount++; total += chunk.length; if (chunk.length > maxChunk) maxChunk = chunk.length; })
+    .on('end', resolve)
+    .on('error', reject);
+});
+console.log('stream delivered bytes across', chunkCount, 'chunks');
+console.log('largest single chunk (bytes):', maxChunk);
+console.log('total bytes match:', total === whole.length);
+
+unlinkSync(path);
+`;
+
+export const fsStreamMemoryOut = `readFile() loaded bytes in one buffer: 52428800
+stream delivered bytes across 800 chunks
+largest single chunk (bytes): 65536
+total bytes match: true`;
+
+<NodeRunner client:visible code={fsStreamMemoryCode} node expected={fsStreamMemoryOut} />
+
+สำหรับไฟล์ 50 MB `readFile` ต้องการการจอง 50 MB ที่ต่อเนื่องกันหนึ่งก้อน; stream ไม่เคยถือมากกว่า 64 KiB ต่อครั้ง — ความแตกต่างที่สำคัญเมื่อไฟล์อาจมีขนาดหลายกิกะไบต์ หรือเมื่อ request หลายร้อยตัวกำลังอ่านไฟล์พร้อมกัน
+
 ## Glob และการเคลียร์ handle ใน Node สมัยใหม่
 
 API ใหม่สองตัวช่วยปลด dependency เก่า: `fs.glob` (stable ใน Node 22+) แทน package `glob` และ file handle รองรับ `await using` (Node 24+) จึงปิดตัวเองได้:
@@ -156,6 +239,56 @@ console.log(config.port);
 
 อย่าเรียก `readFileSync` ใน request handler, route callback หรือ function ใดที่ถูกเรียกหลังจาก server เริ่มทำงาน
 
+## Mental Model
+
+export const fsMentalModel = `flowchart TB
+  Call["fs call"] --> Sync["readFileSync / writeFileSync"]
+  Call --> Async["readFile / writeFile (fs/promises)"]
+  Sync -->|"runs to completion, no one else can run"| Blocks["blocks the event loop — every other request waits"]
+  Async -->|"handed to the threadpool, returns a pending Promise"| Free["event loop keeps handling other work"]
+  Blocks -->|"acceptable"| Startup["CLI scripts / before server.listen()"]
+  Free -->|"required"| Server["server request handlers"]`;
+
+<Mermaid code={fsMentalModel} title="fs call แบบ sync รันจนจบและ block ทุกอย่าง; fs call แบบ async ส่งงานไปที่ threadpool แล้ว return ทันที" />
+
+## Trade-offs
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `fs` sync (`readFileSync`) | code ง่ายที่สุด — ไม่มี callback ไม่มี await ไม่มีการไป-กลับกับ threadpool | block ทั้ง process ตลอดระยะเวลาของ call — ยอมรับไม่ได้เมื่อ server เริ่มรับ request แล้ว |
+| `fs/promises` (`readFile`) | ไม่เคย block event loop; ประกอบกับ `async/await` ได้ | มีการไป-กลับกับ threadpool เพิ่มอีกหนึ่งครั้งต่อ call — latency สูงกว่า sync เล็กน้อยสำหรับ call เดี่ยวใน script ที่ไม่มีการทำงานพร้อมกัน |
+| `readFile()` ทั้งไฟล์ | code ง่ายที่สุดเท่าที่จะทำได้ — buffer เดียว ไม่ต้อง wire event | การใช้ memory scale ตามขนาดไฟล์; ไฟล์ 1 GB ต้องการ buffer 1 GB |
+| `createReadStream()` | memory คงที่ไม่ว่าไฟล์ขนาดเท่าไหร่; เริ่มประมวลผลได้ก่อนที่ไฟล์จะอ่านเสร็จ | code มากกว่า — คุณต้องจัดการ `'data'`/`'end'`/`'error'` เอง (หรือใช้ `pipeline` ที่ครอบคลุมในโมดูล streams) |
+
+## Common Misconceptions
+
+- **"readFileSync ก็แค่ readFile ที่ช้ากว่า"** — ความจริง: ความแตกต่างไม่ใช่ความเร็ว แต่คือ `readFileSync` block *ทั้ง process* — ไม่มี timer, ไม่มี request อื่น, ไม่มี I/O callback ไหนทำงานได้จนกว่ามันจะ return
+- **"readFileSync แบบเร็ว ๆ ไม่เป็นไรเพราะใช้แค่ไม่กี่มิลลิวินาที"** — ความจริง: มิลลิวินาทีเหล่านั้นถูกขโมยไปจากทุก request ที่ server กำลังจัดการอยู่ ณ ขณะนั้น ไม่ใช่แค่ตัวที่ทำให้เกิดการอ่าน
+- **"readFile() กับ stream ใช้ memory พอ ๆ กันเพราะอ่านไฟล์เดียวกัน"** — ความจริง: `readFile()` ถือทั้งไฟล์เป็น buffer เดียว; stream ถือ chunk `highWaterMark` (ดีฟอลต์ 64 KiB) อย่างมากหนึ่งอันต่อครั้ง ไม่ขึ้นกับขนาดไฟล์ทั้งหมด
+
+## อ่านโค้ดที่ AI เขียน
+
+- route handler หรือ function ใดก็ตามที่ถูกเรียกหลัง `server.listen()` ใช้ `readFileSync`, `writeFileSync` หรือ `existsSync` หรือเปล่า? ตัวไหนก็ตามในนี้ block ทุก request ที่กำลังทำงานพร้อมกันตลอดระยะเวลาของ call
+- code โหลดไฟล์ที่อาจมีขนาดใหญ่หรือมาจากผู้ใช้ด้วย `readFile()` เข้า buffer เดียว แทนที่จะ stream มัน ทั้งที่ไฟล์จะถูกส่งต่อหรือประมวลผลทีละ chunk อยู่แล้วหรือเปล่า?
+- file handle ที่เปิดด้วย `fs.open()`/`fsPromises.open()` ถูกปิดในทุกเส้นทางที่ออก รวมถึง error ที่ถูก throw หรือเปล่า — หรือ `await using` (Node 24+) จะทำให้มันเกิดขึ้นอัตโนมัติได้?
+
+<SpotTheBug code={`import { readFileSync } from 'node:fs';
+import http from 'node:http';
+
+var server = http.createServer(function(req, res) {
+  // reads the config file from disk on every single request
+  var config = JSON.parse(readFileSync('./config.json', 'utf8'));
+  res.end(JSON.stringify({ port: config.port }));
+});
+
+server.listen(3000);`}>
+`readFileSync` รันภายใน request handler ดังนั้น**ทุก request ที่เข้ามา** block ทั้ง event loop ตลอดระยะเวลาของการอ่านดิสก์ — ไม่มี request อื่นถูกรับหรือตอบกลับได้ในขณะที่มันทำงานอยู่ แม้แต่ตัวที่ไม่เกี่ยวข้องกับ route นี้เลย วิธีแก้คืออ่าน config ครั้งเดียวตอน startup (ก่อน `server.listen()` ที่ sync call ยอมรับได้) แล้วใช้ object ที่ parse แล้วซ้ำจากตัวแปรในทุก request หรือใช้ `readFile` ของ `fs/promises` พร้อม in-memory cache เล็ก ๆ ถ้าไฟล์เปลี่ยนได้ตอน runtime
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ใช้ `fs/promises` กับทุกอย่างที่รันหลัง `server.listen()`, ใช้ `fs` sync เฉพาะตอน startup เท่านั้น — การอ่านแบบ blocking ไม่ได้แค่ทำให้ request ที่เรียกมันช้าลง แต่มันแช่แข็งทุก request อื่นที่ process กำลังจัดการอยู่
+</Callout>
+
 export const fsQuiz = [
   {
     q: 'ทำไมควรหลีกเลี่ยง fs.readFileSync ใน server request handler?',
@@ -166,6 +299,7 @@ export const fsQuiz = [
       'ทำงานได้เฉพาะบน Linux เท่านั้น',
     ],
     answer: 1,
+    explain: 'readFileSync รันจนจบบน JS thread เดียวก่อนที่สิ่งอื่นใดจะรันได้ — request ที่กำลังทำงานอยู่ตัวอื่น, timer และ I/O callback ทุกตัวต้องรอมัน ไม่ว่าดิสก์จะเร็วแค่ไหนก็ตาม',
   },
   {
     q: 'fs.writeFile ทำอะไรถ้าไฟล์ปลายทางมีอยู่แล้ว?',
@@ -176,6 +310,7 @@ export const fsQuiz = [
       'สร้าง backup และเขียนไปยังไฟล์ใหม่',
     ],
     answer: 2,
+    explain: 'writeFile แทนที่เนื้อหาทั้งหมดของไฟล์ที่มีอยู่เสมอ ใช้ appendFile ถ้าต้องการเพิ่มต่อจากสิ่งที่มีอยู่แล้วแทนที่จะเขียนทับ',
   },
   {
     q: 'import ใดที่ให้ promise-based fs API?',
@@ -186,6 +321,40 @@ export const fsQuiz = [
       'import fs from "node:fs/async"',
     ],
     answer: 1,
+    explain: '"node:fs/promises" คือ module แบบ promise โดยเฉพาะ "node:fs" ก็ expose namespace fs.promises สำหรับ function ชุดเดียวกันด้วย แต่การ import submodule โดยตรงเป็นรูปแบบที่นิยมและแนะนำมากกว่า',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n\nvar timerFired = false;\nsetTimeout(() => { timerFired = true; }, 0);\nvar data = readFileSync(path, "utf8");\nconsole.log(timerFired);',
+    options: [
+      'true — 0 ms แปลว่า timer ทำงานทันที',
+      'false — readFileSync รันจนจบเสมอก่อนที่ timer callback จะได้คิว',
+      'ขึ้นอยู่กับขนาดไฟล์',
+      'undefined — timerFired ยังไม่ถูกกำหนดค่า',
+    ],
+    answer: 1,
+    explain: 'setTimeout callback จะทำงานได้ก็ต่อเมื่อ code synchronous ปัจจุบันทำงานเสร็จและ event loop มาถึง timers phase readFileSync เป็น synchronous — มันไม่เคยคืนควบคุมเลย — ดังนั้น timer ไม่ว่า delay จะสั้นแค่ไหนก็ทำงานไม่ได้จนกว่า readFileSync จะ return แล้ว',
+  },
+  {
+    q: 'ไฟล์ขนาด 200 MB ถูกอ่านครั้งหนึ่งด้วย fs.readFile() และอีกครั้งด้วย fs.createReadStream() ข้อความไหนเกี่ยวกับการใช้ memory ถูกต้อง?',
+    options: [
+      'ใช้ memory เท่ากันเพราะอ่าน byte เดียวกัน',
+      'readFile() ต้องการการจองประมาณ 200 MB หนึ่งครั้ง; stream ต้องการ chunk highWaterMark (ดีฟอลต์ 64 KiB) ประมาณหนึ่งอันต่อครั้ง',
+      'stream ใช้ memory มากกว่าเพราะ overhead ของ event `data` หลายครั้ง',
+      'readFile() ใช้ memory น้อยกว่าเพราะไม่มี event listener',
+    ],
+    answer: 1,
+    explain: 'readFile() (sync หรือ promise) ต้องถือทั้งไฟล์เป็น buffer เดียวก่อนที่จะ return ได้ ดังนั้น peak memory จึง scale ตามขนาดไฟล์ stream ส่งมอบไฟล์เป็นชิ้นที่มีขอบเขต highWaterMark ดังนั้นการใช้ memory จึงคงที่โดยประมาณไม่ว่าไฟล์จะใหญ่แค่ไหน',
+  },
+  {
+    q: "มีอะไรผิดปกติกับการเรียก readFileSync('./config.json') ภายใน HTTP request handler ที่รันทุก request?",
+    options: [
+      'ไม่มีอะไรผิด ตราบใดที่ไฟล์มีขนาดเล็ก',
+      'มัน throw MODULE_NOT_FOUND ในการเรียกครั้งที่สอง',
+      'มัน block ทุก request ที่กำลังทำงานพร้อมกันตลอดระยะเวลาของการอ่านแต่ละครั้ง ในทุก request',
+      'มันทำงานได้แค่ครั้งแรกที่ server เริ่มทำงานเท่านั้น',
+    ],
+    answer: 2,
+    explain: 'ปัญหาไม่ใช่ความถูกต้อง แต่คือ concurrency: ทุก call ภายใน handler block ทั้ง event loop ดังนั้นภายใต้ traffic จริง request ที่กำลังทำงานอยู่ตัวอื่นทุกตัวจะถูกหน่วงด้วยการอ่านดิสก์ทุกครั้ง วิธีแก้คืออ่าน config ครั้งเดียวตอน startup แล้วใช้ค่าที่ parse แล้วซ้ำ',
   },
 ];
 

@@ -1,6 +1,6 @@
 ---
 title: Buffer
-description: 'การทำงานกับข้อมูลไบนารีใน Node.js ด้วย Buffer: Buffer.from, encodings, byte length และการ slice'
+description: 'การทำงานกับข้อมูล binary ใน Node.js ด้วย Buffer: Buffer.from, encodings, byte length และ slicing'
 sidebar:
   order: 3
 ---
@@ -9,20 +9,22 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ทำไม Buffer ถึงมีอยู่
 
-JavaScript strings ถูกเก็บภายในเป็น **UTF-16** — สอง bytes ต่อ code point ใน Basic Multilingual Plane ซึ่งใช้ได้ดีสำหรับข้อความ แต่งาน networking และ filesystem จัดการ raw bytes: TCP packet, ภาพ JPEG หรือ binary protocol frame ไม่มี encoding ในตัว
+JavaScript string ถูกเก็บภายในเป็น **UTF-16** — สองไบต์ต่อหนึ่ง code point ใน Basic Multilingual Plane นั่นก็โอเคสำหรับข้อความ แต่งาน networking และ filesystem ต้องจัดการกับ byte ดิบ: TCP packet, ภาพ JPEG หรือ binary protocol frame ไม่มี encoding โดยธรรมชาติ
 
-`Buffer` คือคำตอบของ Node: ลำดับของ bytes ที่มีขนาดคงที่ ที่ expose เป็น Uint8Array subclass มีมาก่อน typed arrays และยังคงเป็น type มาตรฐานที่คุณจะเห็นใน Node's streams, HTTP, crypto และ fs APIs
+`Buffer` คือคำตอบของ Node: ลำดับ byte ที่มีความยาวคงที่ ถูก expose เป็น subclass ของ Uint8Array มันมีมาก่อน typed array และยังเป็น type มาตรฐานที่คุณจะเห็นตลอดใน stream, HTTP, crypto และ fs API ของ Node
 
-<Callout title="Strings เป็น UTF-16 ใน JS; Buffer จัดการ raw bytes">
-JavaScript `string` ที่มี 4 ตัวอักษรอาจใช้ 4, 8 หรือมากกว่า bytes ขึ้นอยู่กับ encoding `Buffer` แยกแนวคิด "กี่ตัวอักษร" ออกจาก "กี่ bytes บน wire" ใช้ `Buffer.byteLength(str, encoding)` เสมอ — ไม่ใช่ `str.length` — เมื่อต้องการ byte size ของ string
+<Callout title="String เป็น UTF-16 ใน JS; Buffer จัดการ byte ดิบ">
+JavaScript `string` ที่มี 4 ตัวอักษรอาจใช้พื้นที่ 4, 8 หรือมากกว่านั้นเป็นไบต์ ขึ้นอยู่กับ encoding `Buffer` แยกแนวคิดของ "กี่ตัวอักษร" ออกจาก "กี่ไบต์บนสาย" ให้ใช้ `Buffer.byteLength(str, encoding)` เสมอ — ไม่ใช่ `str.length` — เมื่อต้องการขนาดไบต์ของ string
 </Callout>
 
 ## การสร้าง Buffer
 
-วิธีที่แนะนำคือ `Buffer.from()` ส่วน constructor `new Buffer()` เป็น deprecated (`DEP0005`) — ยังใช้งานได้และจะพิมพ์ `DeprecationWarning` ออกมา แต่อย่าใช้ในโค้ดใหม่
+วิธีที่แนะนำคือ `Buffer.from()` constructor `new Buffer()` ถูก deprecate แล้ว (`DEP0005`) — มันยังทำงานได้และพิมพ์ `DeprecationWarning` แต่อย่าใช้ใน code ใหม่เด็ดขาด
 
 export const bufferFromCode = `
 // From a string (UTF-8 by default)
@@ -40,7 +42,55 @@ var buf3 = Buffer.alloc(4);
 console.log('buf3 (zeroed):', buf3);  // <Buffer 00 00 00 00>
 `;
 
-<NodeRunner client:visible code={bufferFromCode} node />
+export const bufferFromOut = `buf1: <Buffer 48 65 6c 6c 6f>
+buf1 length: 5
+buf2: <Buffer de ad be ef>
+buf2 length: 4
+buf3 (zeroed): <Buffer 00 00 00 00>`;
+
+<NodeRunner client:visible code={bufferFromCode} node expected={bufferFromOut} />
+
+## Buffer.alloc vs Buffer.allocUnsafe
+
+`Buffer.alloc(size)` zero-fill หน่วยความจำก่อนส่งมอบให้คุณ — ปลอดภัย แต่เสียต้นทุนเขียนทับทุกไบต์ `Buffer.allocUnsafe(size)` ข้าม zero-fill นั้นไปและให้ byte ที่นั่งอยู่ในพื้นที่ memory pool นั้นอยู่แล้วมาให้คุณเลย — เร็วกว่า แต่ byte เหล่านั้นอาจเป็น **อะไรก็ได้** รวมถึงเศษข้อมูลที่หลงเหลือจาก buffer ที่ถูกปล่อยไปก่อนหน้านี้ (request body เก่า, เนื้อหาไฟล์เก่า, ความลับเก่า)
+
+<Callout title="allocUnsafe ปลอดภัยก็ต่อเมื่อคุณเขียนทับทุกไบต์ก่อนอ่านมัน">
+`allocUnsafe` เป็นกับดักตัวจริงใน AI-generated code: มันหน้าตาเหมือน `alloc` เป๊ะใน diff รันได้ปกติในเครื่อง local (pool มักจะถูก zero อยู่แล้วบน process ใหม่) แล้วก็รั่วไหลข้อมูล heap เก่าใน production เมื่อ pool ถูกนำกลับมาใช้ใหม่ ใช้มันเฉพาะตอนที่คุณกำลังจะ `.fill()` หรือเขียนทับทุกไบต์เองทันที (เช่น เป็น scratch buffer ที่ส่งตรงไปยัง `fs.read()`)
+</Callout>
+
+export const bufferAllocUnsafeCode = `
+var safe = Buffer.alloc(8);
+console.log('alloc(8):', safe); // always zeroed — deterministic
+
+var unsafe = Buffer.allocUnsafe(8);
+console.log('allocUnsafe(8) length:', unsafe.length);
+console.log('allocUnsafe(8) is a Buffer:', Buffer.isBuffer(unsafe));
+// unsafe's contents are NOT printed here — they are whatever bytes were
+// already in that memory region and are not guaranteed to be the same
+// from one run (or one machine) to the next.
+
+// The safe pattern: fill or fully overwrite before use
+unsafe.fill(0);
+console.log('after fill(0):', unsafe);
+console.log('now equal to alloc(8):', unsafe.equals(safe));
+`;
+
+export const bufferAllocUnsafeOut = `alloc(8): <Buffer 00 00 00 00 00 00 00 00>
+allocUnsafe(8) length: 8
+allocUnsafe(8) is a Buffer: true
+after fill(0): <Buffer 00 00 00 00 00 00 00 00>
+now equal to alloc(8): true`;
+
+<NodeRunner client:visible code={bufferAllocUnsafeCode} node expected={bufferAllocUnsafeOut} />
+
+ตัวอย่างประกอบเท่านั้น — byte จริงด้านล่างจะแตกต่างกันทุกครั้งที่รัน ซึ่งนั่นคือประเด็นทั้งหมด:
+
+```js
+// @skip-verify nondeterministic memory contents — illustrates allocUnsafe's danger, not something with a fixed expected output
+var mystery = Buffer.allocUnsafe(8);
+console.log(mystery);
+// <Buffer 00 00 00 00 8f 12 40 55>  <- or anything else. Never rely on this.
+```
 
 ## Encodings: utf8, hex, base64
 
@@ -60,9 +110,50 @@ var decoded = Buffer.from(b64, 'base64').toString('utf8');
 console.log('decoded:', decoded);
 `;
 
-<NodeRunner client:visible code={encodingsCode} node />
+export const encodingsOut = `utf8  : Node.js
+hex   : 4e6f64652e6a73
+base64: Tm9kZS5qcw==
+decoded: Node.js`;
 
-## Byte length vs string length
+<NodeRunner client:visible code={encodingsCode} node expected={encodingsOut} />
+
+## base64url — encoding ที่ปลอดภัยสำหรับ URL/cookie/header
+
+base64 มาตรฐานอาจมี `+`, `/` และ padding `=` ต่อท้าย — ทั้งสามตัวต้อง escape ใน URL, cookie หรือ HTTP header `base64url` (Node 15.7+) คือ encoding เดียวกันแต่ใช้ alphabet ที่ปลอดภัยสำหรับ URL (`-`/`_` แทน `+`/`/`) และไม่มี padding ซึ่งเป็น format เดียวกับที่ JWT ใช้สำหรับส่วน header และ payload
+
+export const base64urlCode = `
+function b64url(obj) {
+  return Buffer.from(JSON.stringify(obj)).toString('base64url');
+}
+
+// A JWT-shaped payload: header.payload (signature omitted for this demo)
+var header = b64url({ alg: 'HS256', typ: 'JWT' });
+var payload = b64url({ sub: '1234567890', name: 'Ada' });
+console.log('header:', header);
+console.log('payload:', payload);
+console.log('token:', header + '.' + payload + '.SIGNATURE');
+
+// base64url is safe to drop straight into a URL, cookie, or header value —
+// it never produces +, /, or trailing = padding.
+var raw = Buffer.from([0xff, 0xff, 0xbe]);
+console.log('standard base64:', raw.toString('base64')); // contains + and /
+console.log('base64url      :', raw.toString('base64url')); // - and _ instead, no padding
+
+// Round-trip
+var decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+console.log('decoded payload:', decoded);
+`;
+
+export const base64urlOut = `header: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
+payload: eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkYSJ9
+token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkYSJ9.SIGNATURE
+standard base64: //++
+base64url      : __--
+decoded payload: { sub: '1234567890', name: 'Ada' }`;
+
+<NodeRunner client:visible code={base64urlCode} node expected={base64urlOut} />
+
+## Byte length เทียบกับ string length
 
 export const byteLengthCode = `
 // ASCII: 1 char = 1 byte
@@ -81,11 +172,18 @@ console.log('emoji .length:', emoji.length);
 console.log('emoji bytes (utf8):', Buffer.byteLength(emoji, 'utf8'));
 `;
 
-<NodeRunner client:visible code={byteLengthCode} node />
+export const byteLengthOut = `ascii chars: 5
+ascii bytes: 5
+thai chars: 6
+thai bytes (utf8): 18
+emoji .length: 7
+emoji bytes (utf8): 9`;
 
-## Slicing และ copying
+<NodeRunner client:visible code={byteLengthCode} node expected={byteLengthOut} />
 
-`buf.slice(start, end)` (หรือ `buf.subarray`) คืน view ไปยัง memory เดียวกัน — การแก้ไข slice จะแก้ไข original ด้วย ใช้ `Buffer.from(slice)` เพื่อได้ copy อิสระ
+## การ Slice และ copy
+
+`buf.slice(start, end)` (หรือ `buf.subarray`) คืนค่า view ของ memory เดียวกัน — แก้ไข slice ก็แก้ไขต้นฉบับด้วย ใช้ `Buffer.from(slice)` เพื่อได้ copy อิสระ
 
 export const sliceCode = `
 var buf = Buffer.from('Hello, World!');
@@ -103,38 +201,176 @@ console.log('copy:', copy.toString());   // world
 console.log('buf unchanged:', buf.toString());
 `;
 
-<NodeRunner client:visible code={sliceCode} node />
+export const sliceOut = `slice: Hello
+buf after mutation: Jello, World!
+copy: world
+buf unchanged: Jello, World!`;
+
+<NodeRunner client:visible code={sliceCode} node expected={sliceOut} />
+
+## StringDecoder: ถอดรหัสตัวอักษร multi-byte ที่ถูกตัดข้าม chunk
+
+network stream ส่งมอบ byte เป็น chunk ตามที่ OS หยิบยื่นมาให้ — มันไม่รู้เลยว่าขอบเขตของตัวอักษร UTF-8 อยู่ตรงไหน ถ้าตัวอักษร multi-byte (เช่นตัวอักษรไทยส่วนใหญ่ที่ใช้ 3 ไบต์ต่อตัวใน UTF-8) ถูกตัดข้ามสอง chunk การเรียก `.toString('utf8')` บนแต่ละ chunk **แยกกัน** จะทำให้มันเสียหาย: แต่ละครึ่งเป็น byte sequence ที่ไม่สมบูรณ์ ทั้งสองครึ่งจึงถอดรหัสออกมาเป็นตัวอักษรทดแทนของ Unicode (`�`)
+
+`StringDecoder` จาก `node:string_decoder` แก้ปัญหานี้: มัน buffer ไบต์ที่ตกค้างไม่สมบูรณ์และต่อเข้ากับ chunk ถัดไป ทำให้ตัวอักษร multi-byte จะถูกถอดรหัสก็ต่อเมื่อมันสมบูรณ์แล้วเท่านั้น
+
+export const stringDecoderCode = `
+const { StringDecoder } = require('node:string_decoder');
+
+var thai = 'สวัสดี'; // 6 Thai characters
+var full = Buffer.from(thai, 'utf8');
+console.log('full string:', thai);
+console.log('total bytes:', full.length);
+
+// Split the buffer mid-character to simulate a chunk boundary landing
+// inside a multi-byte sequence, as can happen with any network stream.
+var splitAt = 4;
+var chunk1 = full.subarray(0, splitAt);
+var chunk2 = full.subarray(splitAt);
+
+console.log('--- naive: toString() per chunk ---');
+console.log('chunk1.toString():', JSON.stringify(chunk1.toString('utf8')));
+console.log('chunk2.toString():', JSON.stringify(chunk2.toString('utf8')));
+console.log('naive concat:', chunk1.toString('utf8') + chunk2.toString('utf8'));
+
+console.log('--- correct: StringDecoder buffers partial characters ---');
+var decoder = new StringDecoder('utf8');
+var result = decoder.write(chunk1);
+result += decoder.write(chunk2);
+result += decoder.end();
+console.log('decoded:', result);
+console.log('matches original:', result === thai);
+`;
+
+export const stringDecoderOut = `full string: สวัสดี
+total bytes: 18
+--- naive: toString() per chunk ---
+chunk1.toString(): "ส�"
+chunk2.toString(): "��ัสดี"
+naive concat: ส���ัสดี
+--- correct: StringDecoder buffers partial characters ---
+decoded: สวัสดี
+matches original: true`;
+
+<NodeRunner client:visible code={stringDecoderCode} node expected={stringDecoderOut} />
+
+## Mental Model
+
+export const bufferMentalModel = `flowchart LR
+  A["Buffer.alloc(n)"] -->|"zero-fills first"| Z["all bytes 0x00 — safe to read immediately"]
+  B["Buffer.allocUnsafe(n)"] -->|"skips zero-fill"| G["whatever was in the memory pool — must overwrite before reading"]
+  G -->|".fill() or write every byte"| Z
+  S["multi-byte char split across two chunks"] -->|"toString() per chunk"| Corrupt["each half is incomplete -> replacement character"]
+  S -->|"StringDecoder.write() per chunk"| Correct["partial bytes carried to next chunk -> correct string"]`;
+
+<Mermaid code={bufferMentalModel} title="alloc แลก zero-fill write เพื่อความปลอดภัย; allocUnsafe แลกความปลอดภัยเพื่อความเร็ว; StringDecoder คือทางแก้สำหรับขอบเขต chunk ที่ตัดตัวอักษรขาด" />
+
+## Trade-offs
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `Buffer.alloc(n)` | ปลอดภัยเสมอ — memory ที่ zero แบบ deterministic | เสียต้นทุน zero-fill แม้ว่าคุณกำลังจะเขียนทับทุกอย่างอยู่แล้วก็ตาม |
+| `Buffer.allocUnsafe(n)` | ข้าม zero-fill — เร็วกว่าใน hot path | เนื้อหายังไม่ถูกกำหนดจนกว่าคุณจะเขียนทับ; ลืมทำแล้วรั่วไหลข้อมูล heap เก่า |
+| view จาก `.slice()`/`.subarray()` | zero-copy — ไม่มีการจอง memory ใหม่ | แก้ไข view ก็แก้ไข buffer ต้นฉบับด้วย ซึ่งพลาดได้ง่ายโดยไม่ตั้งใจ |
+| `.toString()` ต่อ chunk | code ง่ายที่สุดเท่าที่จะทำได้ | ทำให้ตัวอักษร multi-byte ที่ถูกตัดข้าม chunk เสียหายแบบเงียบ ๆ |
+| `StringDecoder` | ถูกต้องข้ามขอบเขต chunk | มี object เพิ่มอีกหนึ่งตัวที่ต้องพกไปกับ code จัดการ stream ของคุณ |
+
+## Common Misconceptions
+
+- **"`Buffer.allocUnsafe` ก็แค่ `Buffer.alloc` ที่เร็วกว่า"** — ความจริง: มันเร็วกว่าเพราะข้ามการ zero memory; byte ที่ได้กลับมาคือข้อมูลที่หลงเหลืออยู่ ไม่ใช่ zero จนกว่าคุณจะเขียนทับมันเอง
+- **"base64 กับ base64url คือสิ่งเดียวกันแค่ชื่อต่างกัน"** — ความจริง: base64url แทน `-`/`_` ด้วย `+`/`/` และตัด padding ออก โดยเฉพาะเพื่อให้ผลลัพธ์ปลอดภัยสำหรับฝังใน URL, cookie หรือ header โดยไม่ต้อง escape
+- **"`chunk.toString('utf8')` ปลอดภัยเสมอสำหรับ text stream"** — ความจริง: มันปลอดภัยก็ต่อเมื่อขอบเขต chunk ไม่เคยตัดตัวอักษร multi-byte — ซึ่ง network stream ไม่สามารถรับประกันได้
+- **"`buf.slice()` คืนค่า copy เหมือน `Array.prototype.slice()`"** — ความจริง: `Buffer#slice`/`#subarray` คืนค่า **view** เหนือ memory เดียวกัน; แก้ไข slice ก็แก้ไขต้นฉบับด้วย
+
+## อ่านโค้ดที่ AI เขียน
+
+- `Buffer.allocUnsafe()` ถูกใช้ในที่ที่ buffer ถูกอ่าน (log, ส่งออก, hash) ก่อนที่ทุกไบต์จะถูกเขียนหรือ `.fill()` อย่างชัดเจนหรือเปล่า?
+- stream handler เรียก `chunk.toString('utf8')` บนแต่ละ chunk แยกกัน แทนที่จะสะสมด้วย `Buffer.concat()` หรือถอดรหัสด้วย `StringDecoder` หรือเปล่า? แบบนี้จะพังทันทีที่ตัวอักษร multi-byte (ไทย, emoji, CJK) คร่อมขอบเขต chunk
+- code คำนวณขนาด string ด้วย `str.length` แทนที่จะเป็น `Buffer.byteLength(str, 'utf8')` ก่อนจอง buffer ขนาดคงที่หรือตั้งค่า header `Content-Length` หรือเปล่า? input ที่ไม่ใช่ ASCII จะล้นหรือถูกตัดทอน
+- JWT หรือ URL token ถูกสร้างด้วย `base64` มาตรฐานแทนที่จะเป็น `base64url` ซึ่งต้อง escape `+`/`/`/`=` ด้วยมือและพลาดง่ายหรือเปล่า?
+
+<SpotTheBug code={`const { Transform } = require('node:stream');
+
+class Uppercase extends Transform {
+  _transform(chunk, encoding, callback) {
+    // chunk is a raw Buffer — this decodes each piece independently
+    var text = chunk.toString('utf8');
+    callback(null, text.toUpperCase());
+  }
+}`}>
+`_transform` รับ `Buffer` chunk ดิบโดยไม่มีการรับประกันว่าขอบเขต chunk จะเคารพขอบเขตตัวอักษร UTF-8 การเรียก `chunk.toString('utf8')` บนแต่ละ chunk แยกกันจะทำให้ตัวอักษร multi-byte (ไทย, emoji, CJK) ที่บังเอิญถูกตัดข้ามสอง chunk เสียหาย — ความล้มเหลวแบบเดียวกับที่แสดงใน demo `StringDecoder` ด้านบน ที่แต่ละครึ่งถอดรหัสออกมาเป็น `�` แทนที่จะเป็นตัวอักษรจริง วิธีแก้คือเก็บ instance ของ `StringDecoder` ไว้ใน class (`this._decoder = new StringDecoder('utf8')`) แล้วเรียก `this._decoder.write(chunk)` ใน `_transform` บวกกับ `this._decoder.end()` ใน `_flush` เพื่อ flush ไบต์ที่ตกค้างท้ายสุด
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`Buffer.alloc` ปลอดภัยโดยดีฟอลต์ และ `Buffer.allocUnsafe` คือการแลกความปลอดภัยเพื่อความเร็วอย่างจงใจ; การถอดรหัส byte ดิบเป็นข้อความเฉพาะข้ามตัวอักษรที่สมบูรณ์เท่านั้น — ไม่ใช่ต่อ chunk ขนาดคงที่ — คือสิ่งที่ `StringDecoder` (และ Transform stream ที่สร้างบนมัน) มีไว้เพื่อรับประกัน
+</Callout>
 
 export const bufferQuiz = [
   {
-    q: 'ทำไม Buffer.byteLength(str) ถึงมักต่างจาก str.length?',
+    q: 'ทำไม Buffer.byteLength(str) มักแตกต่างจาก str.length?',
     options: [
-      'Buffer นับ null terminators; strings ไม่นับ',
-      'str.length นับ UTF-16 code units; Buffer.byteLength นับ bytes ใน encoding ที่เลือก',
-      'มีค่าเท่ากันเสมอสำหรับ ASCII',
-      'Buffer.byteLength นับ bits ไม่ใช่ bytes',
+      'Buffer นับ null terminator; string ไม่นับ',
+      'str.length นับ UTF-16 code unit; Buffer.byteLength นับ byte ใน encoding ที่เลือก',
+      'มันเท่ากันเสมอสำหรับ ASCII',
+      'Buffer.byteLength นับ bit ไม่ใช่ byte',
     ],
     answer: 1,
+    explain: 'str.length รายงานจำนวน UTF-16 code unit ที่ JavaScript ใช้ภายใน ซึ่งไม่เหมือนกับจำนวน byte ที่ string จะใช้เมื่อถูก encode (ส่วนใหญ่คือ UTF-8) สำหรับ ASCII ตัวเลขทั้งสองบังเอิญตรงกัน แต่สำหรับภาษาไทย, emoji หรือข้อความที่ไม่ใช่ภาษาละตินมันจะต่างกัน',
   },
   {
-    q: 'Buffer.from("deadbeef", "hex") ให้ผลลัพธ์อะไร?',
+    q: 'Buffer.from("deadbeef", "hex") สร้างอะไรออกมา?',
     options: [
       'Buffer ที่มีตัวอักษร ASCII d, e, a, d, b, e, e, f',
-      'Buffer ขนาด 4 bytes ที่ decode จาก hex string',
+      'Buffer ขนาด 4 byte ที่ถอดรหัสจาก hex string',
       'error — hex ไม่ใช่ encoding ที่ถูกต้องสำหรับ Buffer.from',
-      'Buffer ขนาด 8 bytes หนึ่ง byte ต่อหนึ่ง hex character',
+      'Buffer ขนาด 8 byte หนึ่งตัวต่อหนึ่งตัวอักษร hex',
     ],
     answer: 1,
+    explain: 'hex เป็น encoding ที่ถูกต้องสำหรับ Buffer: hex digit สองตัวรวมกันเป็นหนึ่ง byte ดังนั้น hex string 8 ตัวอักษรจึงสร้าง Buffer ขนาด 4 byte <Buffer de ad be ef>',
   },
   {
-    q: 'เกิดอะไรขึ้นเมื่อคุณแก้ไข slice ที่ได้จาก buf.slice()?',
+    q: 'เกิดอะไรขึ้นเมื่อคุณแก้ไข slice ที่คืนค่ามาจาก buf.slice()?',
     options: [
-      'slice เป็น copy อิสระ — original ไม่ถูกกระทบ',
-      'ทั้ง slice และ original buffer ถูกแก้ไข',
-      'เกิด error — Buffer slices เป็น read-only',
-      'แค่ original เท่านั้นที่ถูกแก้ไข',
+      'slice เป็น copy อิสระ — ต้นฉบับไม่ได้รับผลกระทบ',
+      'ทั้ง slice และ buffer ต้นฉบับถูกแก้ไข',
+      'มัน throw error — Buffer slice เป็น read-only',
+      'มีแค่ต้นฉบับเท่านั้นที่ถูกแก้ไข',
     ],
     answer: 1,
+    explain: 'buf.slice() (เหมือน buf.subarray()) คืนค่า view เหนือ memory เดียวกันกับ buffer ต้นฉบับ ไม่ใช่ copy การเขียนผ่าน slice จะเขียนทะลุไปถึงต้นฉบับด้วย',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n\nvar safe = Buffer.alloc(4);\nvar unsafe = Buffer.allocUnsafe(4);\nconsole.log(safe.equals(Buffer.from([0, 0, 0, 0])));',
+    options: [
+      'true — alloc() zero-fill เสมอ จึงรับประกันว่าเท่ากับ buffer ที่เป็น 0 ทั้งหมด',
+      'false — alloc() ไม่ zero-fill',
+      'มัน throw — Buffer.equals ต้องการ encoding เดียวกัน',
+      'ขึ้นอยู่กับ allocUnsafe(4) ซึ่งถูกเทียบด้วย',
+    ],
+    answer: 0,
+    explain: 'การเปรียบเทียบเกี่ยวข้องแค่กับ safe (จาก Buffer.alloc(4)) ซึ่งเอกสาร Node.js รับประกันว่า zero-fill เสมอ — บรรทัดนี้มีคำตอบที่ deterministic ไม่ว่า allocUnsafe(4) จะมีค่าอะไรก็ตาม',
+  },
+  {
+    q: 'UTF-8 byte stream ส่งตัวอักษรไทยขนาด 3 ไบต์โดยแบ่งเป็น 2 ไบต์ใน chunk หนึ่งและ 1 ไบต์ใน chunk ถัดไป `chunk.toString(\'utf8\')` บนแต่ละ chunk แยกกันให้ผลอะไร?',
+    options: [
+      'ตัวอักษรที่ถูกต้อง ถูกประกอบกลับให้อัตโนมัติ',
+      'มัน throw error สำหรับ UTF-8 ที่ไม่ถูกต้อง',
+      'ตัวอักษรทดแทนสองตัว (�) — แต่ละ chunk เป็น byte sequence ที่ไม่สมบูรณ์ในตัวมันเอง',
+      'chunk แรกถูก buffer ไว้จนกว่า chunk ที่สองจะมาถึง แล้วสร้างตัวอักษรที่ถูกต้อง',
+    ],
+    answer: 2,
+    explain: '.toString() ไม่มีความจำระหว่างการเรียกแต่ละครั้ง — มันถอดรหัส byte ที่ได้รับตรง ๆ ครึ่งที่ไม่สมบูรณ์สองครึ่งของตัวอักษร UTF-8 หนึ่งตัวต่างก็ถอดรหัสเป็นตัวอักษรทดแทน U+FFFD StringDecoder ถูกสร้างมาเฉพาะเพื่อพก byte ที่ตกค้างไม่สมบูรณ์ไปยังการเรียก .write() ครั้งถัดไปแทน',
+  },
+  {
+    q: 'encoding ใดคือตัวเลือกที่ถูกต้องสำหรับฝัง token ตรง ๆ ใน URL query string โดยไม่ต้อง escape ด้วยมือ?',
+    options: [
+      'hex',
+      'base64',
+      'base64url',
+      'utf8',
+    ],
+    answer: 2,
+    explain: 'base64url ใช้ alphabet ที่ปลอดภัยสำหรับ URL (- และ _ แทน + และ /) และไม่มี padding ดังนั้นผลลัพธ์จึงไม่ต้อง percent-encode เพื่ออยู่รอดใน URL, cookie หรือ header value base64 มาตรฐานอาจมี +, / และ = ซึ่งทั้งหมดต้อง escape ใน URL',
   },
 ];
 

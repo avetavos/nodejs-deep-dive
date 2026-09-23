@@ -1,6 +1,6 @@
 ---
 title: 'Pipe & Pipeline'
-description: 'การเชื่อม Stream ด้วย .pipe() และการใช้ stream.pipeline() เพื่อจัดการ error อย่างปลอดภัย'
+description: 'การเชื่อม stream ด้วย .pipe() และการใช้ stream.pipeline() เพื่อจัดการ error อย่างปลอดภัย'
 sidebar:
   order: 4
 ---
@@ -9,10 +9,12 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## readable.pipe(writable)
 
-`.pipe()` เชื่อม Readable เข้ากับ Writable โดยตรงและจัดการการไหลของข้อมูลระหว่างกันโดยอัตโนมัติ รองรับ backpressure: เมื่อ writable บอกว่า buffer เต็ม (โดยคืนค่า `false` จาก `write()`) pipe จะ pause readable และ resume เมื่อ `drain`
+`.pipe()` เชื่อม Readable เข้ากับ Writable โดยตรง จัดการ flow ของข้อมูลระหว่างกันให้อัตโนมัติ มันจัดการ backpressure ด้วย: เมื่อ writable ส่งสัญญาณว่า buffer เต็ม (โดยคืน `false` จาก `write()`) pipe จะ pause readable แล้ว resume มันตอน `drain`
 
 ```js
 const fs = require('node:fs');
@@ -25,7 +27,7 @@ const writable = fs.createWriteStream('./output.txt');
 readable.pipe(writable);
 ```
 
-คุณสามารถ chain `.pipe()` ผ่าน Transform Stream เพื่อสร้าง processing pipeline:
+คุณเชื่อม `.pipe()` ต่อกันผ่าน Transform stream เพื่อสร้าง processing pipeline ได้:
 
 ```js
 const fs = require('node:fs');
@@ -40,7 +42,7 @@ fs.createReadStream('./file.txt')
 
 ## ปัญหาของ .pipe()
 
-`.pipe()` มีข้อบกพร่องที่ทราบกันดี: **ไม่ส่งต่อ error** ถ้า Stream ใดใน chain emit event `error` Stream อื่นจะไม่ถูกทำลายหรือปิดโดยอัตโนมัติ ส่งผลให้มี file handle ที่ยังเปิดอยู่และ memory leak
+`.pipe()` มีข้อบกพร่องที่รู้กันดี: **มันไม่ส่งต่อ error** ถ้า stream ตัวใดใน chain emit event `error` stream ตัวอื่นจะไม่ถูก destroy หรือปิดอัตโนมัติ คุณจะเจอ file handle ที่เปิดค้างและ memory leak
 
 ```js
 // @skip-verify illustrative fragment: readable/writable continue the example above
@@ -55,11 +57,11 @@ readable.on('error', function(err) {
 
 ## stream.pipeline() — ทางเลือกที่ปลอดภัย
 
-`stream.pipeline(...streams, callback)` ถูกเพิ่มใน Node 10 เพื่อแก้ปัญหานี้โดยเฉพาะ:
+`stream.pipeline(...streams, callback)` ถูกเพิ่มเข้ามาใน Node 10 เพื่อแก้ปัญหานี้โดยเฉพาะ มัน:
 
-1. เชื่อม Stream ทั้งหมดแบบ end-to-end
-2. ส่งต่อ error จาก Stream ใดก็ได้ไปยัง callback
-3. ทำลาย Stream ทุกตัวใน chain โดยอัตโนมัติเมื่อเกิด error
+1. เชื่อม stream ทั้งหมดเข้าด้วยกันตั้งแต่ต้นจนจบ
+2. ส่งต่อ error จาก stream ใดก็ตามไปยัง callback
+3. destroy stream ทั้งหมดใน chain อัตโนมัติเมื่อเกิด error
 
 ```js
 const { pipeline } = require('node:stream');
@@ -80,28 +82,158 @@ pipeline(
 );
 ```
 
-Node 15+ ยังมี `stream/promises` ที่ให้ใช้กับ `await` ได้:
+Node 15+ ก็มี `stream/promises` ให้ด้วย ซึ่งให้เวอร์ชันที่เป็นมิตรกับ `await` — ไม่มี callback และเป็น rejected promise ธรรมดาเมื่อเกิด error:
 
-```js
-const { pipeline } = require('node:stream/promises');
-const fs = require('node:fs');
-const zlib = require('node:zlib');
+export const streamPromisesCode = `
+import { pipeline } from 'node:stream/promises';
+import { Readable, Writable } from 'node:stream';
+import { createGzip, createGunzip } from 'node:zlib';
 
-fs.writeFileSync('./input.txt', 'hello world'); // demo fixture
+var source = Readable.from(['hello world, compressed and decompressed via a stream/promises pipeline']);
+var chunks = [];
+var sink = new Writable({
+  write(chunk, encoding, callback) { chunks.push(chunk); callback(); }
+});
 
-(async () => {
-  await pipeline(
-    fs.createReadStream('./input.txt'),
-    zlib.createGzip(),
-    fs.createWriteStream('./input.txt.gz')
-  );
-  console.log('done');
-})();
-```
+await pipeline(source, createGzip(), createGunzip(), sink);
+console.log('round-tripped:', Buffer.concat(chunks).toString());
+console.log('pipeline() resolved -- no callback needed with stream/promises');
+`;
 
-## Demo ที่รันได้
+export const streamPromisesOut = `round-tripped: hello world, compressed and decompressed via a stream/promises pipeline
+pipeline() resolved -- no callback needed with stream/promises`;
 
-Demo ด้านล่างสร้าง in-memory pipeline สั้นๆ: Readable source ส่งสาม string, Transform แปลงแต่ละ chunk เป็นตัวพิมพ์ใหญ่, และ Writable รวบรวมผลลัพธ์
+<NodeRunner client:visible code={streamPromisesCode} node expected={streamPromisesOut} />
+
+## ยกเลิก pipeline ด้วย AbortSignal
+
+`pipeline()` (ทั้งแบบ callback และ promise) รับ `options.signal` ได้ การ abort มัน — เพราะ client หลุดการเชื่อมต่อ, request timeout หรือผู้ใช้ยกเลิก — จะ destroy ทุก stream ใน chain ทันทีแทนที่จะปล่อยให้ source ที่ช้าทำงานต่อไปโดยไม่มีประโยชน์:
+
+export const pipelineAbortCode = `
+import { pipeline } from 'node:stream/promises';
+import { Readable, Writable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
+
+async function* slowSource() {
+  for (let i = 0; i < 20; i++) {
+    await delay(10); // simulate a slow upstream (network, DB cursor, ...)
+    yield String(i);
+  }
+}
+
+var controller = new AbortController();
+var sink = new Writable({
+  write(chunk, enc, cb) { cb(); }
+});
+
+// Simulates a client disconnect or a request timeout arriving mid-stream
+setTimeout(function() { controller.abort(); }, 30);
+
+try {
+  await pipeline(Readable.from(slowSource()), sink, { signal: controller.signal });
+  console.log('pipeline finished normally');
+} catch (err) {
+  console.log('pipeline aborted:', err.name);
+}
+`;
+
+export const pipelineAbortOut = `pipeline aborted: AbortError`;
+
+<NodeRunner client:visible code={pipelineAbortCode} node expected={pipelineAbortOut} />
+
+## Transform stream: การแปลงรูปร่างข้อมูลระหว่างทาง
+
+ตัวอย่าง uppercase ด้านบนคือ `Transform` ที่ง่ายที่สุดเท่าที่จะเป็นไปได้: chunk เข้าหนึ่งอัน chunk ออกหนึ่งอัน `Transform` เปลี่ยน *รูปร่าง* ของข้อมูลได้ง่ายพอ ๆ กัน — เช่น เปลี่ยน stream ของ object ให้เป็น newline-delimited JSON (format ที่นิยมสำหรับ log และ streaming API) โดยรันเป็น **object mode** ที่ฝั่ง input และ byte mode ที่ฝั่ง output:
+
+export const jsonLinesCode = `
+import { Transform, Readable } from 'node:stream';
+
+var toJsonLines = new Transform({
+  objectMode: true, // accepts JS objects as input chunks
+  transform(obj, encoding, callback) {
+    callback(null, JSON.stringify(obj) + '\\n'); // emits strings/bytes as output
+  }
+});
+
+var source = Readable.from([{ id: 1 }, { id: 2 }, { id: 3 }], { objectMode: true });
+
+var out = '';
+source.pipe(toJsonLines);
+for await (const chunk of toJsonLines) {
+  out += chunk;
+}
+console.log(out.trim());
+`;
+
+export const jsonLinesOut = `{"id":1}
+{"id":2}
+{"id":3}`;
+
+<NodeRunner client:visible code={jsonLinesCode} node expected={jsonLinesOut} />
+
+## .destroy() และ finished() — การเคลียร์ทุกเส้นทาง
+
+ช่องโหว่การส่งต่อ error ของ `.pipe()` (ด้านบน) หมายความว่า *คุณ* ต้องรับผิดชอบ destroy ทุก stream ใน chain เมื่อตัวใดตัวหนึ่งเกิด error `stream.finished(stream, callback)` ให้ callback หนึ่งตัวที่ยิงแค่ครั้งเดียว ไม่ว่า stream จะจบแบบสำเร็จ, error หรือถูก destroy — วิธีที่เชื่อถือได้ในการรู้ว่า "stream นี้จบแล้ว ไม่ทางใดก็ทางหนึ่ง":
+
+export const destroyFinishedCode = `
+import { Readable, Writable, finished } from 'node:stream';
+
+var source = Readable.from((function* () {
+  yield 'a'; yield 'b'; throw new Error('source broke');
+})());
+
+var sink = new Writable({ write(chunk, enc, cb) { cb(); } });
+
+finished(sink, function(err) {
+  console.log('sink finished callback, err:', err ? err.message : null);
+});
+
+source.on('error', function(err) {
+  console.log('source error:', err.message);
+  sink.destroy(err); // propagate manually -- .pipe() alone would not do this
+});
+
+source.pipe(sink);
+`;
+
+export const destroyFinishedOut = `source error: source broke
+sink finished callback, err: source broke`;
+
+<NodeRunner client:visible code={destroyFinishedCode} node expected={destroyFinishedOut} />
+
+<Callout title="pipeline() เรียก destroy() และ finished() ให้คุณ">
+ทุกอย่างใน demo ด้านบน — การ listen error ของ source, การ destroy sink, การรู้ว่า sink จบจริง ๆ เมื่อไหร่ — คือสิ่งที่ `pipeline()` ทำภายในให้กับทุก stream ใน chain พอดี ใช้รูปแบบที่ทำเองก็ต่อเมื่อคุณมีเหตุผลที่จะไม่ใช้ `pipeline()`
+</Callout>
+
+## Duplex และ compose()
+
+`Duplex` stream มีฝั่ง readable และ writable ที่เป็นอิสระต่อกัน — TCP socket คือตัวอย่างคลาสสิก: สิ่งที่คุณเขียนกับสิ่งที่คุณอ่านเป็นข้อมูลที่ไม่เกี่ยวข้องกัน `stream.compose(...streams)` (Node 16.9+) ต่อยอดแนวคิดนี้ไปอีกขั้น: มันเชื่อม stream แบบ `Transform` หลายตัวเข้าเป็น `Duplex` เดียว ทำให้ pipeline หลายขั้นตอนถูกส่งต่อและ pipe เข้าได้เหมือน stream ตัวหนึ่ง:
+
+export const composeCode = `
+import { Transform, Readable, compose } from 'node:stream';
+
+var upper = new Transform({ transform(chunk, enc, cb) { cb(null, chunk.toString().toUpperCase()); } });
+var addBang = new Transform({ transform(chunk, enc, cb) { cb(null, chunk.toString() + '!'); } });
+
+// compose() fuses two Transforms into one Duplex -- one unit you can pipe into
+var combined = compose(upper, addBang);
+var source = Readable.from(['node', 'streams']);
+
+var out = '';
+source.pipe(combined);
+for await (const chunk of combined) {
+  out += chunk;
+}
+console.log('composed result:', out);
+`;
+
+export const composeOut = `composed result: NODE!STREAMS!`;
+
+<NodeRunner client:visible code={composeCode} node expected={composeOut} />
+
+## Runnable demo
+
+demo ด้านล่างสร้าง pipeline สั้น ๆ ใน memory: Readable source สร้าง string สามตัว, Transform ทำให้แต่ละ chunk เป็นตัวพิมพ์ใหญ่ และ Writable เก็บผลลัพธ์
 
 export const pipelineCode = `
 const { Readable, Transform, Writable, pipeline } = require('node:stream');
@@ -131,35 +263,89 @@ pipeline(source, upper, sink, function(err) {
 });
 `;
 
-<NodeRunner client:visible code={pipelineCode} node />
+export const pipelineOut = `result: HELLO WORLD STREAMS`;
+
+<NodeRunner client:visible code={pipelineCode} node expected={pipelineOut} />
 
 <Callout title="ใช้ pipeline() แทน .pipe() เพื่อจัดการ error และ cleanup อย่างถูกต้อง">
-stream.pipeline() ส่งต่อ error โดยอัตโนมัติและทำลาย Stream ทุกตัวใน chain การใช้ .pipe() ทำให้คุณต้องแนบ error listener และทำลาย Stream แต่ละตัวเอง — ทำผิดได้ง่าย นำไปสู่ file handle leak และ Memory เติบโต
+stream.pipeline() ส่งต่อ error และ destroy stream ทั้งหมดใน chain ให้อัตโนมัติ การใช้ .pipe() ทำให้คุณต้องรับผิดชอบผูก error listener และ destroy แต่ละ stream เอง — พลาดง่าย นำไปสู่ file handle leak และ memory ที่โตขึ้น
+</Callout>
+
+## Mental Model
+
+export const pipelineMentalModel = `flowchart TB
+  Pipe[".pipe(writable)"] -->|"error on any stream"| Gap["NOT propagated -- you must listen + destroy() manually"]
+  Pipeline["pipeline(...streams, cb)"] -->|"error on any stream"| Auto["all streams destroyed automatically, cb(err) called"]
+  PipelinePromise["stream/promises pipeline(...)"] -->|"error on any stream"| Reject["all streams destroyed, promise rejects"]
+  Pipeline -->|"options.signal"| Abort["AbortSignal cancels the whole chain early"]
+  Compose["compose(t1, t2, ...)"] -->|"fuses"| OneDuplex["a single Duplex you can pipe like any stream"]`;
+
+<Mermaid code={pipelineMentalModel} title="pipe() ปล่อยการส่งต่อ error ให้เป็นหน้าที่คุณ; pipeline() (callback หรือ promise) ทำให้อัตโนมัติและรับ AbortSignal เพื่อยกเลิกก่อนได้" />
+
+## Trade-offs
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `.pipe()` | เชื่อม stream สองตัวด้วย code บรรทัดเดียวที่น้อยที่สุด | ไม่มีการส่งต่อ error หรือ cleanup อัตโนมัติ — leak หรือค้างถ้าคุณลืม wire เอง |
+| `pipeline()` (callback) | ส่งต่อ error และ cleanup อัตโนมัติทั้ง chain | style callback — ซ้อนเพิ่มอีกชั้นถ้าคุณอยู่ใน async/await code อยู่แล้ว |
+| `pipeline()` ของ `stream/promises` | รับประกันเหมือน callback form แต่ `await` ได้และประกอบกับ `try/catch`/`Promise.all` ได้ | ต้องการ `async` context |
+| `pipeline()` พร้อม `AbortSignal` | ยกเลิกทั้ง chain ก่อนได้เมื่อ timeout หรือ client หลุด ปล่อย resource ทันที | การ abort แสดงเป็น rejected promise/callback error — ผู้เรียกทุกคนต้องจัดการเส้นทางนั้น ไม่ใช่แค่เส้นทาง error ปกติ |
+| `compose()` | เปลี่ยน pipeline หลายขั้นตอนให้เป็น `Duplex` ที่ใช้ซ้ำได้หนึ่งตัว export, test และ pipe ได้เหมือน stream ทั่วไป | เพิ่มชั้นของความอ้อม — error และ backpressure ยังไหลผ่านทุก stream ภายในอยู่ดี แค่ถูกห่อไว้ |
+
+## Common Misconceptions
+
+- **"`.pipe()` กับ `pipeline()` ใช้แทนกันได้ — pipeline แค่ชื่อใหม่กว่า"** — ความจริง: `.pipe()` ไม่เคยส่งต่อ error ระหว่าง stream; `pipeline()` ถูกเพิ่มเข้ามาเพื่อแก้ปัญหานั้นโดยเฉพาะ บวกกับ cleanup อัตโนมัติและ (ภายหลัง) การรองรับ `AbortSignal`
+- **"`pipeline()` ที่ถูก abort จะแค่หยุดเงียบ ๆ"** — ความจริง: มัน destroy ทุก stream ใน chain และ callback จะยิง (หรือ promise reject) ด้วย `AbortError` — คุณยังต้องจัดการเส้นทางนั้นอยู่ดี
+- **"`compose()` สร้าง stream ชนิดใหม่"** — ความจริง: มันคืนค่า `Duplex` ธรรมดา — interface เดียวกับ TCP socket — ที่บังเอิญถูกสร้างขึ้นโดยเชื่อม Transform เข้าด้วยกันภายใน
+
+## อ่านโค้ดที่ AI เขียน
+
+- code ใช้ `.pipe()` เชื่อม stream มากกว่าหนึ่งตัวโดยไม่มี `error` listener บนตัวไหนเลยหรือเปล่า? นั่นคือ leak ที่รับประกันได้ทันทีที่ stream ใด ๆ ใน chain fail
+- snippet สร้าง `pipeline()` (หรือเวอร์ชัน `stream/promises`) ที่รับ input จากผู้ใช้โดยไม่มี `AbortSignal`/timeout เลยหรือเปล่า ทำให้ client ที่ช้าหรือค้างยึด resource ไว้ไม่มีกำหนด?
+- code implement การแปลงข้อมูลหลายขั้นตอนเป็นการเรียก `.pipe()` แยกกันหลายครั้งพร้อม error handling ที่ wire แยกกันทีละอัน ทั้งที่ `compose()` จะแสดงแนวคิดเดียวกันเป็นหน่วยเดียวที่ test ได้และใช้ซ้ำได้หรือเปล่า?
+
+<SpotTheBug code={`const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+function compressFile(src, dest) {
+  fs.createReadStream(src)
+    .pipe(zlib.createGzip())
+    .pipe(fs.createWriteStream(dest));
+}
+
+compressFile('./input.txt', './input.txt.gz');`}>
+ไม่มี stream ตัวไหนในสามตัวของ `.pipe()` chain นี้ที่มี `error` listener ถ้า `input.txt` ไม่มีอยู่ หรือดิสก์เต็มระหว่างเขียน หรือ gzip เจอ input ที่เสียหาย stream นั้นจะ emit `'error'` — และเพราะ `.pipe()` ไม่ส่งต่อ error stream ตัวอื่นใน chain จะไม่ถูก destroy เลย file descriptor ของ read stream (หรือไฟล์ปลายทางที่เขียนไม่เสร็จ) อาจรั่ว วิธีแก้คือ `stream.pipeline(fs.createReadStream(src), zlib.createGzip(), fs.createWriteStream(dest), function(err) { if (err) { /* handle it */ } })` ซึ่ง destroy ทุก stream ใน chain อัตโนมัติเมื่อเกิด error ใด ๆ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`.pipe()` ไม่เคยส่งต่อ error ระหว่าง stream — ใช้ `pipeline()` (หรือรูปแบบ `stream/promises` ของมัน) ทุกที่ และส่ง `AbortSignal` ไปด้วยเมื่อ pipeline ควรยกเลิกได้
 </Callout>
 
 export const pipelineQuiz = [
   {
-    q: 'ปัญหาหลักของการใช้ readable.pipe(writable) เพียงอย่างเดียวคืออะไร?',
+    q: 'ปัญหาหลักของการใช้ readable.pipe(writable) เพียงลำพังคืออะไร?',
     options: [
-      'ไม่รองรับ backpressure',
-      'ใช้ได้เฉพาะกับ file stream',
-      'Error ไม่ถูกส่งต่อไปยัง Stream อื่นใน chain โดยอัตโนมัติ',
-      'ทำงาน synchronous และ block event loop',
+      'มันไม่จัดการ backpressure',
+      'มันใช้ได้แค่กับ file stream เท่านั้น',
+      'error ไม่ถูกส่งต่อไปยัง stream อื่นใน chain อัตโนมัติ',
+      'มันรันแบบ synchronous และ block event loop',
     ],
     answer: 2,
+    explain: '.pipe() จัดการ backpressure ให้อัตโนมัติจริง — ช่องโหว่ที่มีเอกสารระบุไว้คือการส่งต่อ error ถ้า stream ตัวหนึ่งใน .pipe() chain error ตัวอื่นจะถูกทิ้งให้เปิดอยู่ เว้นแต่คุณจะ listen และ destroy เอง',
   },
   {
-    q: 'เกิดอะไรขึ้นเมื่อ Stream ใดใน stream.pipeline() chain emit error?',
+    q: 'เกิดอะไรขึ้นเมื่อ stream ใดใน chain ของ stream.pipeline() emit error?',
     options: [
-      'เฉพาะ Stream นั้นปิด Stream อื่นยังทำงานต่อ',
-      'Error ถูกเพิกเฉย',
-      'Stream ทุกตัวใน chain ถูกทำลายโดยอัตโนมัติและ callback รับ error',
-      'Pipeline retry การทำงานที่ล้มเหลว',
+      'มีแค่ stream นั้นปิด ตัวอื่นทำงานต่อ',
+      'error ถูกละเว้นไปเงียบ ๆ',
+      'stream ทั้งหมดใน chain ถูก destroy อัตโนมัติและ callback ได้รับ error',
+      'pipeline ลองทำ operation ที่ล้มเหลวใหม่',
     ],
     answer: 2,
+    explain: 'นี่คือสิ่งที่ pipeline() ถูกสร้างมาเพื่อรับประกัน: error จาก stream ใดก็ตามใน chain จะ destroy stream อื่นทุกตัวและแสดงผลครั้งเดียวผ่าน callback (หรือ rejected promise กับ stream/promises)',
   },
   {
-    q: 'Stream ชนิดใดที่วางกลาง pipeline เพื่อแปลงข้อมูลระหว่างทางได้?',
+    q: 'stream ประเภทใดวางตรงกลาง pipeline เพื่อแปลงข้อมูลระหว่างทางได้?',
     options: [
       'Readable',
       'Writable',
@@ -167,6 +353,40 @@ export const pipelineQuiz = [
       'Duplex',
     ],
     answer: 2,
+    explain: 'Transform ถูกออกแบบมาโดยเฉพาะให้วางระหว่าง Readable กับ Writable แปลงรูปร่างแต่ละ chunk ขณะที่มันผ่านไป Duplex ธรรมดาก็ pipe เข้าและอ่านออกได้ในทางเทคนิค แต่สองฝั่งของมันเป็นอิสระต่อกันโดยการออกแบบ ไม่ได้เชื่อมกัน',
+  },
+  {
+    q: 'pipeline() ถูกเรียกด้วย { signal: controller.signal } และ controller.abort() ถูกเรียกขณะข้อมูลยังไหลอยู่ เกิดอะไรขึ้น?',
+    options: [
+      'ไม่มีอะไรเกิดขึ้นจนกว่า chunk ปัจจุบันจะประมวลผลเสร็จ แล้วก็จบตามปกติ',
+      'stream ทุกตัวใน pipeline ถูก destroy และ callback/promise ได้รับ AbortError',
+      'มีแค่ stream แรกใน chain ที่ถูก destroy',
+      'signal ถูกละเว้นเว้นแต่ทุก stream จะรองรับ AbortSignal อย่างชัดเจน',
+    ],
+    answer: 1,
+    explain: 'pipeline() wire AbortSignal ให้ destroy stream ทุกตัวใน chain ทันทีที่มันยิง และ operation จบลงด้วย AbortError -- รับประกัน cleanup แบบเดียวกับที่ pipeline() ให้คุณตอน stream emit error',
+  },
+  {
+    q: 'compose(transform1, transform2) คืนค่าอะไร?',
+    options: [
+      'array ของสอง transform',
+      'Duplex stream ตัวเดียวที่ทำงานเหมือน transform1 ถูก pipe เข้า transform2',
+      'Promise ที่ resolve เมื่อ transform ทั้งสองเสร็จ',
+      'ไม่มีอะไร — compose() ใช้ได้แค่กับ stream สามตัวขึ้นไป',
+    ],
+    answer: 1,
+    explain: 'compose() เชื่อม stream แบบ Transform หลายตัวเข้าเป็น Duplex เดียว: การเขียนเข้าไปจะป้อน stream แรก และการอ่านออกมาจะอ่าน output ของ stream สุดท้าย โดยทุกอย่างระหว่างกลางถูก wire กันไว้ภายใน',
+  },
+  {
+    q: 'stream สามตัวถูกเชื่อมด้วย .pipe().pipe() และไม่มีตัวไหนมี error listener stream ตรงกลาง error ผลที่เป็นไปได้มากที่สุดคืออะไร?',
+    options: [
+      'ทั้ง chain ถูก destroy อัตโนมัติ เหมือน pipeline()',
+      'มีแค่ stream ตรงกลางที่ได้รับผลกระทบ process ทำงานต่อได้ถูกต้อง',
+      'stream อีกสองตัวยังเปิดอยู่ (อาจ leak file handle / memory) เพราะ .pipe() ไม่ส่งต่อ error และ error อาจทำให้ process crash ในฐานะ event "error" ที่ไม่มีคนจัดการ',
+      'Node retry stream ตรงกลางให้อัตโนมัติ',
+    ],
+    answer: 2,
+    explain: ".pipe() ไม่เคยส่งต่อ error ระหว่าง stream ที่มันเชื่อม stream ต้นทางและปลายทางจะถูกทิ้งให้เปิดอยู่ (resource leak) และเพราะไม่มีอะไร listen 'error' บน stream ที่ล้มเหลว event 'error' ที่ไม่มีคนจัดการนั้นจะ throw และอาจทำให้ process crash -- พฤติกรรม unhandled 'error' แบบเดียวกับที่ครอบคลุมในบท EventEmitter เพราะ stream ทุกตัวเป็น EventEmitter",
   },
 ];
 

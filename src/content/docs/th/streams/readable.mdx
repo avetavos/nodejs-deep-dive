@@ -1,6 +1,6 @@
 ---
 title: 'Readable Streams'
-description: 'การใช้ข้อมูลด้วย events data/end/error, Readable.from และ async iteration'
+description: 'การบริโภคข้อมูลด้วย event data/end/error, Readable.from และ async iteration'
 sidebar:
   order: 2
 ---
@@ -9,21 +9,23 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## Readable Stream คืออะไร?
+## Readable stream คืออะไร?
 
-`Readable` คือ Stream ที่สามารถดึงข้อมูลออกมาได้ ตัวอย่างใน Node ได้แก่ `fs.createReadStream` (อ่านไฟล์), `process.stdin` (รับ Input จาก Terminal) และ body ของ HTTP request คุณยังสร้าง Readable ของตัวเองได้ด้วย `Readable.from` หรือการ extend คลาส `Readable`
+`Readable` คือ stream ที่ข้อมูลถูกบริโภคได้ ตัวอย่างในตัวของ Node ได้แก่ `fs.createReadStream` (อ่านไฟล์), `process.stdin` (input จาก terminal) และ HTTP request body คุณสร้าง readable source ของตัวเองได้ด้วย `Readable.from` หรือ extend `Readable`
 
-Readable Stream ทำงานใน 2 โหมด:
+Readable stream ทำงานในสองโหมด:
 
-- **Flowing mode** — event `data` จะ fire อย่างต่อเนื่องเมื่อ chunk มาถึง คุณแนบ listener `data` เพื่อเข้าสู่โหมดนี้
-- **Paused mode** — chunk จะสะสมจนกว่าคุณจะเรียก `.read()` อย่างชัดเจน นี่คือโหมดเริ่มต้นก่อนที่จะแนบ listener หรือ pipe
+- **Flowing mode** — event `data` จะยิงต่อเนื่องขณะ chunk มาถึง คุณผูก listener `data` เพื่อเข้าสู่โหมดนี้
+- **Paused mode** — chunk จะสะสมไว้จนกว่าคุณจะเรียก `.read()` เอง นี่คือดีฟอลต์จนกว่าคุณจะผูก listener หรือ pipe
 
-แนวทางที่สะอาดที่สุดในปัจจุบันคือใช้ **async iteration** ด้วย `for await...of` ซึ่งจัดการ paused mode และ backpressure โดยอัตโนมัติ
+วิธีที่สะอาดที่สุดในปัจจุบันคือ **async iteration** ด้วย `for await...of` ซึ่งจัดการ paused mode และ backpressure ให้อัตโนมัติ
 
-## Events `data`, `end`, และ `error`
+## event `data`, `end` และ `error`
 
-API แบบ event-based แบบดั้งเดิมมีมาก่อน async iteration แต่ยังสำคัญต้องเข้าใจเพราะ API ของ Node จำนวนมากยังคง emit event เหล่านี้:
+event-based API แบบดั้งเดิมมีมาก่อน async iteration มันยังคงสำคัญที่ต้องเข้าใจเพราะ Node API จำนวนมากยัง emit event เหล่านี้อยู่:
 
 ```js
 const fs = require('node:fs');
@@ -43,13 +45,13 @@ stream.on('error', function(err) {
 });
 ```
 
-- `data` — fire ทุกครั้งที่มี chunk พร้อม chunk จะเป็น `Buffer` โดยค่าเริ่มต้น หรือ string หากตั้ง `encoding`
-- `end` — fire ครั้งเดียวเมื่อไม่มีข้อมูลเหลือให้อ่าน
-- `error` — fire หากเกิดข้อผิดพลาด (ไม่มีไฟล์, สิทธิ์ถูกปฏิเสธ ฯลฯ)
+- `data` — ยิงทุกครั้งที่มี chunk พร้อมใช้ chunk เป็น `Buffer` โดยดีฟอลต์ หรือ string ถ้าตั้ง `encoding` ไว้
+- `end` — ยิงครั้งเดียวเมื่อไม่มีข้อมูลให้บริโภคแล้ว
+- `error` — ยิงถ้ามีอะไรผิดพลาด (ไฟล์หาย, permission ถูกปฏิเสธ ฯลฯ)
 
 ## Readable.from
 
-`Readable.from(iterable)` แปลง iterable ใดก็ได้ทั้ง sync และ async ให้เป็น Readable Stream มีประโยชน์สำหรับการทดสอบและการ wrap แหล่งข้อมูลใน Memory:
+`Readable.from(iterable)` แปลง sync หรือ async iterable ใด ๆ ให้เป็น Readable stream มีประโยชน์สำหรับ testing และห่อ in-memory data source:
 
 ```js
 const { Readable } = require('node:stream');
@@ -57,11 +59,11 @@ const { Readable } = require('node:stream');
 const stream = Readable.from(['chunk1', 'chunk2', 'chunk3']);
 ```
 
-iterable สามารถเป็น plain array, generator function หรือ async generator ทำให้คุณสร้างข้อมูลแบบ lazy ได้อย่างสะอาด
+iterable นั้นเป็น array ธรรมดา, generator function หรือ async generator ก็ได้ — ให้วิธีที่สะอาดในการสร้างข้อมูลแบบ lazy
 
 ## Async iteration ด้วย `for await`
 
-ตั้งแต่ Node 10+ Readable Stream ทุกตัวรองรับ async iterator protocol หมายความว่าคุณใช้ `for await...of` ภายใน async function ได้:
+ตั้งแต่ Node 10+ Readable stream ทุกตัว implement async iterator protocol นั่นหมายความว่าคุณบริโภคมันด้วย `for await...of` ภายใน async function ได้:
 
 ```js
 async function processStream(stream) {
@@ -71,11 +73,11 @@ async function processStream(stream) {
 }
 ```
 
-แนวทางนี้อ่านง่ายกว่า event listener จัดการ backpressure โดยอัตโนมัติ และแสดง error เป็น exception ที่ `try/catch` รับได้
+วิธีนี้อ่านง่ายกว่า event listener จัดการ backpressure ให้อัตโนมัติ และแสดง error เป็น thrown exception ที่ `try/catch` ของคุณจับได้
 
-## Demo ที่รันได้
+## Runnable demo
 
-Demo ด้านล่างสร้าง Readable จาก async generator แล้วใช้ `for await` อ่าน generator yield แต่ละอันแทน chunk ที่มาถึงแบบ async
+demo ด้านล่างสร้าง Readable จาก async generator แล้วบริโภคมันด้วย `for await` แต่ละ yield ของ generator แทนหนึ่ง chunk ที่มาถึงแบบ asynchronous
 
 export const readableCode = `
 const { Readable } = require('node:stream');
@@ -102,15 +104,138 @@ async function main() {
 main();
 `;
 
-<NodeRunner client:visible code={readableCode} node />
+export const readableOut = `chunk: Node
+chunk: streams
+chunk: are
+chunk: powerful
+complete: Node streams are powerful`;
 
-<Callout title="Readable Stream emit ทีละ chunk — อย่า Buffer ทั้งหมด">
-Readable ไม่ได้เก็บข้อมูลทั้งหมด แต่ yield ทีละ chunk หากคุณเก็บทุก chunk ใส่ array ก่อนประมวลผล คุณก็สร้าง anti-pattern การใช้ Memory ที่ Stream ออกแบบมาเพื่อหลีกเลี่ยง ประมวลผลแต่ละ chunk ทันทีที่มาถึง
+<NodeRunner client:visible code={readableCode} node expected={readableOut} />
+
+<Callout title="Readable stream emit chunk — ไม่เคย buffer ทั้งหมด">
+Readable ไม่ได้ถือข้อมูลทั้งชุด มัน yield ทีละ chunk ถ้าคุณ push ทุก chunk เข้า array ก่อนประมวลผล คุณก็สร้าง in-memory anti-pattern ที่ stream ถูกออกแบบมาเพื่อหลีกเลี่ยงขึ้นมาใหม่ จงประมวลผลแต่ละ chunk ทันทีที่มันมาถึง
+</Callout>
+
+## Object mode
+
+โดยดีฟอลต์ Readable ทำงานใน **byte mode**: chunk เป็น `Buffer` (หรือ string ถ้าตั้ง `encoding`) และ high-water mark นับเป็น *byte* (ดีฟอลต์ 64 KiB) การส่ง `{ objectMode: true }` จะสลับไปเป็น **object mode** ที่ chunk เป็นค่า JavaScript อะไรก็ได้ — object, ตัวเลข, array — และ high-water mark นับเป็น *object* แทน `Readable.from(iterable)` ดีฟอลต์เป็น object mode ไม่ว่า iterable จะ yield อะไรก็ตาม:
+
+export const objectModeCode = `
+import { Readable } from 'node:stream';
+
+// Byte mode (the default for a plain Readable): highWaterMark counts bytes
+var byteStream = new Readable({ read() {} });
+console.log('byte mode highWaterMark:', byteStream.readableHighWaterMark);
+
+// Readable.from() defaults objectMode to true regardless of what it yields --
+// even for Buffers -- unless you pass { objectMode: false } yourself.
+var fromDefault = Readable.from([Buffer.from('a'), Buffer.from('b')]);
+console.log('Readable.from() default objectMode:', fromDefault.readableObjectMode);
+console.log('Readable.from() default highWaterMark:', fromDefault.readableHighWaterMark);
+
+// Explicit object mode with plain objects as chunks
+var objStream = Readable.from([{ id: 1 }, { id: 2 }], { objectMode: true });
+console.log('explicit object mode highWaterMark:', objStream.readableHighWaterMark);
+
+var received = [];
+for await (const chunk of objStream) {
+  received.push(chunk);
+}
+console.log('objects received:', JSON.stringify(received));
+`;
+
+export const objectModeOut = `byte mode highWaterMark: 65536
+Readable.from() default objectMode: true
+Readable.from() default highWaterMark: 1
+explicit object mode highWaterMark: 1
+objects received: [{"id":1},{"id":2}]`;
+
+<NodeRunner client:visible code={objectModeCode} node expected={objectModeOut} />
+
+<Callout title="high-water mark ดีฟอลต์ของ Readable.from() คือ 1 ไม่ใช่ 16 ของ object mode ทั่วไป">
+`new Readable({ objectMode: true })` ธรรมดาดีฟอลต์เป็น high-water mark 16 object แต่ `Readable.from()` ดีฟอลต์เป็น `1` โดยเฉพาะเมื่อคุณไม่ได้ส่ง `highWaterMark` เอง สำหรับการใช้งานส่วนใหญ่ความต่างนี้มองไม่เห็น แต่มันสำคัญถ้าคุณกำลังคิดว่ามี object กี่ตัวถูก buffer ไว้ล่วงหน้าก่อนถึง consumer ที่ช้า
+</Callout>
+
+## Interop กับ web streams (WHATWG)
+
+Browser และ `fetch` ใช้ stream API ที่ต่างออกไป ซึ่งเป็นมาตรฐาน (`ReadableStream` จาก WHATWG Streams spec) `Readable.toWeb()` และ `Readable.fromWeb()` ของ Node แปลงไปมาระหว่างสองแบบนี้ ซึ่งสำคัญเมื่อไหร่ก็ตามที่ code ของ Node ส่งข้อมูลให้ (หรือรับจาก) `fetch`, `Response` หรือ web-standard API ใด ๆ:
+
+export const webStreamsCode = `
+import { Readable } from 'node:stream';
+
+// Node Readable -> web ReadableStream -> Response body
+var nodeReadable = Readable.from([Buffer.from('alpha'), Buffer.from('beta'), Buffer.from('gamma')]);
+var webReadable = Readable.toWeb(nodeReadable);
+console.log('is a WHATWG ReadableStream:', webReadable instanceof ReadableStream);
+
+var response = new Response(webReadable);
+var text = await response.text();
+console.log('Response.text():', text);
+
+// The reverse: a web ReadableStream (like fetch's Response.body) -> Node Readable
+var webBody = new Response(JSON.stringify({ ok: true })).body;
+var back = Readable.fromWeb(webBody);
+var collected = '';
+for await (const chunk of back) collected += chunk;
+console.log('fromWeb collected:', collected);
+`;
+
+export const webStreamsOut = `is a WHATWG ReadableStream: true
+Response.text(): alphabetagamma
+fromWeb collected: {"ok":true}`;
+
+<NodeRunner client:visible code={webStreamsCode} node expected={webStreamsOut} />
+
+## Mental Model
+
+export const readableMentalModel = `flowchart TB
+  Source["Readable source"] -->|"attach 'data' listener"| Flowing["flowing mode -- pushed at you continuously"]
+  Source -->|"no listener / no pipe yet"| Paused["paused mode -- call .read() yourself"]
+  Source -->|"for await...of"| Iter["async iteration -- paused mode + backpressure, handled for you"]
+  Flowing -->|"consumer too slow, no pause()"| Leak["buffered chunks pile up in the consumer"]`;
+
+<Mermaid code={readableMentalModel} title="Readable ถูกดันข้อมูลใส่คุณ (flowing/data) หรือคุณดึงมันเอง (paused/read หรือ for await...of) — for await คือ paused mode ที่จัดการ backpressure ให้อัตโนมัติ" />
+
+## Trade-offs
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| event `data` (flowing mode) | style callback ที่คุ้นเคย ใช้ได้ทั้ง code เก่าและใหม่ | ไม่มี backpressure อัตโนมัติ — handler ที่ช้าและไม่เรียก `.pause()` จะปล่อยให้ chunk สะสมในสิ่งที่มันเขียนไป |
+| `for await...of` (async iteration) | จัดการ backpressure ให้อัตโนมัติ; อ่านจากบนลงล่างเหมือน code synchronous; error แสดงเป็น exception ปกติ | ต้องการ `async` function; overhead ต่อ chunk มากกว่า `data` listener ธรรมดาเล็กน้อย |
+| Byte mode | ตรงกับสิ่งที่ต้นทางส่วนใหญ่ (ไฟล์, socket) สร้างขึ้นจริง; high-water mark เป็นไบต์มีความหมาย | ขอบเขต chunk เป็นไปตามอำเภอใจ — chunk อาจตัดตัวอักษร multi-byte หรือ record เชิงตรรกะขาด |
+| Object mode | chunk เป็นค่าที่มีโครงสร้างอะไรก็ได้ (แถวข้อมูล, JSON ที่ parse แล้ว, custom object) | high-water mark นับ object ไม่ใช่ byte — stream ของ object ขนาดใหญ่ยังทำให้ memory บวมได้แม้อยู่ใต้ limit ดีฟอลต์ |
+
+## Common Misconceptions
+
+- **"การผูก `data` listener คือวิธีบริโภค stream ที่ทันสมัยและแนะนำ"** — ความจริง: `for await...of` เป็นที่นิยมกว่าในปัจจุบัน — มันจัดการ backpressure ให้อัตโนมัติ ซึ่ง `data` listener ธรรมดาไม่ทำ
+- **"Readable ที่สร้างด้วย `Readable.from()` เป็น byte mode เว้นแต่คุณจะระบุอย่างอื่น"** — ความจริง: ตรงกันข้าม — `Readable.from()` ดีฟอลต์เป็น **object mode** แม้ว่า iterable จะ yield `Buffer` หรือ string ก็ตาม เว้นแต่คุณจะส่ง `{ objectMode: false }` อย่างชัดเจน
+- **"web stream (`ReadableStream`) กับ Node stream (`Readable`) คือ API เดียวกัน"** — ความจริง: มันเป็นสอง API ที่แตกต่างกัน เข้ากันได้แค่บางส่วน `Readable.toWeb()`/`Readable.fromWeb()` มีอยู่ก็เพราะคุณส่งตัวหนึ่งตรง ๆ ไปในที่ที่ต้องการอีกตัวไม่ได้
+
+## อ่านโค้ดที่ AI เขียน
+
+- `data` listener ทำอะไรที่อาจช้า (เขียนไปยัง socket, database, stream อื่น) โดยไม่ตรวจ return value หรือใช้ backpressure เองหรือเปล่า? flowing mode ไม่เคยหยุดส่ง chunk ด้วยตัวเอง
+- code ส่ง Node `Readable` ตรง ๆ ไปยัง API ที่เกี่ยวกับ `fetch` หรือฝั่ง browser ที่คาดหวัง WHATWG `ReadableStream` (หรือกลับกัน) โดยไม่ใช้ `Readable.toWeb()`/`fromWeb()` หรือเปล่า?
+- snippet สมมติว่า `Readable.from(iterable)` สร้าง chunk แบบ byte mode (เรียก `.toString()` บนแต่ละตัวโดยคิดว่าเป็น `Buffer`) ทั้งที่ iterable ให้ plain object จริง ๆ หรือไม่เคยตรวจโหมดเลยหรือเปล่า?
+
+<SpotTheBug code={`const { Readable } = require('node:stream');
+const fs = require('node:fs');
+
+var dest = fs.createWriteStream('./out.txt');
+var source = Readable.from(['a very large amount of data, chunk after chunk after chunk']);
+
+source.on('data', function(chunk) {
+  dest.write(chunk); // return value ignored -- source is never paused
+});`}>
+`data` listener เรียก `dest.write(chunk)` แต่ไม่เคยตรวจ boolean ที่มัน return และไม่เคยเรียก `source.pause()` เมื่อมันเป็น `false` flowing mode จะส่ง chunk จาก `source` ต่อไปด้วยความเร็วเต็มที่ไม่ว่า `dest` จะตามทันหรือไม่ ดังนั้นถ้า `dest` ช้ากว่า `source` (network socket, disk ที่ช้า, API ที่ถูกจำกัด rate) chunk จะสะสมใน buffer ภายในของ `dest` โดยไม่มีขอบเขต วิธีแก้คือตรวจ return value ของ `dest.write(chunk)` แล้ว `pause()`/`resume()` ตามนั้น (ตามที่แสดงในบท Writable และ Backpressure) หรือ — ง่ายกว่ามาก — แทนที่คู่ `data`/`write` ทั้งหมดด้วย `source.pipe(dest)` ซึ่งทำสิ่งนั้นให้อัตโนมัติ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`for await...of` คือ paused mode ที่จัดการ backpressure ให้คุณ; `data` listener ธรรมดาคือ flowing mode ที่ไม่มี backpressure เลย ดังนั้นให้จับคู่มันกับ `.pause()`/`.resume()` เองหรือใช้ `.pipe()`/`pipeline()` แทน
 </Callout>
 
 export const readableQuiz = [
   {
-    q: 'Event ใดที่ fire เมื่อ Readable Stream ไม่มีข้อมูลส่งอีกแล้ว?',
+    q: 'event ใดยิงเมื่อ Readable stream ไม่มีข้อมูลให้ส่งอีกแล้ว?',
     options: [
       'finish',
       'close',
@@ -118,26 +243,62 @@ export const readableQuiz = [
       'done',
     ],
     answer: 2,
+    explain: 'end ยิงครั้งเดียวเมื่อ Readable ไม่มีข้อมูลให้ส่งอีกแล้ว finish เป็น event ฝั่ง Writable ที่ยิงหลัง end() ถูกเรียกและข้อมูลทั้งหมดถูก flush แล้ว',
   },
   {
     q: 'Readable.from(iterable) ทำอะไร?',
     options: [
-      'อ่านไฟล์และคืนค่าเป็น string',
-      'แปลง iterable ใดก็ได้ให้เป็น Readable Stream',
-      'สร้างปลายทาง Writable สำหรับ iterable',
-      'Buffer iterable ทั้งหมดใน Memory ก่อน stream',
+      'อ่านไฟล์และคืนค่าเนื้อหาเป็น string',
+      'แปลง iterable ใด ๆ ให้เป็น Readable stream',
+      'สร้างปลายทางที่เขียนได้สำหรับ iterable',
+      'buffer iterable ทั้งหมดเข้า memory ก่อนที่จะ stream',
     ],
     answer: 1,
+    explain: 'Readable.from() ห่อ sync หรือ async iterable ใด ๆ (array, generator, async generator) ให้เป็น Readable stream โดย yield สิ่งที่ iterable ให้มาโดยไม่ buffer ทั้งหมดล่วงหน้า',
   },
   {
-    q: 'แนวทางใดจัดการ backpressure โดยอัตโนมัติเมื่ออ่าน Readable?',
+    q: 'วิธีใดจัดการ backpressure ให้อัตโนมัติเมื่อบริโภค Readable?',
     options: [
-      'แนบ event listener ของ data',
+      'ผูก data event listener',
       'เรียก stream.read() ใน loop',
       'ใช้ for await...of ภายใน async function',
-      'เก็บ chunk ด้วย push() ใส่ array',
+      'เก็บ chunk ด้วย push() เข้า array',
     ],
     answer: 2,
+    explain: 'for await...of ใช้ paused mode ภายในและดึง chunk ถัดไปก็ต่อเมื่อ loop body ของคุณประมวลผล chunk ปัจจุบันเสร็จแล้ว ซึ่งเป็นสิ่งที่ backpressure ต้องการพอดี data listener ธรรมดาส่ง chunk ต่อเนื่องโดยไม่มีการประสานงานแบบนี้',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n\nconst { Readable } = require("node:stream");\nvar s = Readable.from([Buffer.from("x")]);\nconsole.log(s.readableObjectMode);',
+    options: [
+      'false — Buffer หมายถึง byte mode เสมอ',
+      'true — Readable.from() ดีฟอลต์เป็น object mode ไม่ว่ามันจะ yield อะไร',
+      'undefined — readableObjectMode ไม่มีอยู่',
+      'มัน throw เพราะ Buffer ใช้กับ Readable.from ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'Readable.from() ตั้ง objectMode: true เป็นดีฟอลต์แม้ iterable จะ yield Buffer หรือ string คุณต้องส่ง { objectMode: false } อย่างชัดเจนเพื่อให้ได้พฤติกรรม byte mode จากมัน',
+  },
+  {
+    q: 'data listener เรียก database write แบบ async ที่ช้าสำหรับทุก chunk แต่ไม่เคยเรียก source.pause() เกิดอะไรขึ้นภายใต้ source ที่เร็วและ database ที่ช้า?',
+    options: [
+      'Node ปรับความเร็ว source ให้ตรงกับ database ให้อัตโนมัติ',
+      'chunk สะสมเร็วกว่าที่ database จะรับได้ ทำให้การใช้ memory โตขึ้นโดยไม่มีขอบเขต',
+      'stream throw error ทันทีที่ internal buffer เต็ม',
+      'ไม่มีอะไรเกิดขึ้น — flowing mode ปลอดภัยเสมอโดยการออกแบบ',
+    ],
+    answer: 1,
+    explain: 'flowing mode (ที่เกิดจากการผูก data listener) ส่ง chunk ต่อเนื่องโดยไม่สนใจว่า listener ประมวลผลเร็วแค่ไหน ถ้าไม่ตรวจ return value ของ write() ปลายทางแล้ว pause chunk ที่ไม่มีขอบเขตจะสะสมใน buffer ของ consumer ที่ช้าได้',
+  },
+  {
+    q: 'ทำไมคุณถึงต้องใช้ Readable.toWeb() เมื่อเรียก API ที่เกี่ยวกับ fetch จาก code ของ Node?',
+    options: [
+      'fetch ไม่มีอยู่ใน Node และ toWeb() จำเป็นต้องใช้เพื่อเปิดใช้งานมัน',
+      'Node Readable กับ WHATWG ReadableStream เป็น API ที่ต่างกัน เข้ากันได้แค่บางส่วน — toWeb() แปลงตัวหนึ่งเป็นอีกตัว',
+      'toWeb() ต้องเรียกก่อนที่คุณจะเรียก .pipe() บน stream ใดก็ได้',
+      'มันแปลง Readable ให้เป็น Buffer',
+    ],
+    answer: 1,
+    explain: 'Readable ของ Node กับ ReadableStream มาตรฐานของ browser (ที่ fetch, Response และ Request ใช้) เป็นสอง implementation ที่แยกกันของแนวคิดคล้ายกัน Readable.toWeb() และ Readable.fromWeb() คือ function แปลงที่ชัดเจนระหว่างทั้งสอง',
   },
 ];
 

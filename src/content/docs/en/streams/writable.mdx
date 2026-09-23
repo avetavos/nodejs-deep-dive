@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is a Writable stream?
 
@@ -75,6 +77,43 @@ function writeWithDrain(writable, chunks) {
 
 This is the manual pattern that `pipe` and `pipeline` handle for you automatically. Understanding it explains why those higher-level APIs exist.
 
+## Measuring highWaterMark, write(), and writableLength
+
+`writable.writableLength` reports exactly how many bytes (or objects, in object mode) are currently buffered and not yet flushed to the underlying destination. Watching it alongside `write()`'s return value makes the high-water mark concrete instead of abstract:
+
+export const hwmCode = `
+import { Writable } from 'node:stream';
+
+var sink = new Writable({
+  highWaterMark: 10, // bytes -- tiny on purpose so backpressure triggers fast
+  write(chunk, encoding, callback) {
+    setImmediate(callback); // simulate an async destination
+  }
+});
+
+console.log('highWaterMark:', sink.writableHighWaterMark);
+
+var okFirst = sink.write('12345'); // 5 bytes, still under 10
+console.log('write() #1 returned:', okFirst, '| writableLength:', sink.writableLength);
+
+var okSecond = sink.write('1234567890'); // pushes past the high-water mark
+console.log('write() #2 returned:', okSecond, '| writableLength:', sink.writableLength);
+
+sink.once('drain', function() {
+  console.log('drain fired -- writableLength now:', sink.writableLength);
+  sink.end();
+});
+`;
+
+export const hwmOut = `highWaterMark: 10
+write() #1 returned: true | writableLength: 5
+write() #2 returned: false | writableLength: 15
+drain fired -- writableLength now: 0`;
+
+<NodeRunner client:visible code={hwmCode} node expected={hwmOut} />
+
+Notice `writableLength` reaches 15 — *above* the high-water mark of 10. The high-water mark is a threshold that flips `write()`'s return value to `false`, not a hard cap: Node still accepts and buffers the chunk you just wrote, and it becomes your responsibility to stop calling `write()` until `drain` fires.
+
 ## Runnable demo
 
 The demo creates a custom Writable that logs each chunk to the console, simulating a slow sink. It then writes three chunks and closes the stream.
@@ -98,10 +137,67 @@ sink.write('beta');
 sink.end('gamma');
 `;
 
-<NodeRunner client:visible code={writableCode} node />
+export const writableOut = `sink received: alpha
+sink received: beta
+sink received: gamma
+stream finished`;
+
+<NodeRunner client:visible code={writableCode} node expected={writableOut} />
 
 <Callout title="Respect the return value of write() for flow control">
 When writable.write() returns false, the destination buffer is full. Stop writing immediately and wait for the drain event before sending more data. Ignoring this signal causes the Node process to buffer unlimited data in memory, eventually causing an out-of-memory crash.
+</Callout>
+
+## Mental Model
+
+export const writableMentalModel = `flowchart TB
+  Write["writable.write(chunk)"] -->|"below high-water mark"| True["returns true -- keep writing"]
+  Write -->|"at or above high-water mark"| False["returns false -- buffer is full"]
+  False -->|"you must"| Pause["stop writing"]
+  Pause -->|"wait for"| Drain["'drain' event"]
+  Drain -->|"safe to"| Write
+  End["writable.end()"] -->|"once all buffered data is flushed"| Finish["'finish' event"]`;
+
+<Mermaid code={writableMentalModel} title="write()'s boolean return value is the whole backpressure contract: false means stop and wait for drain before writing again" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Manual `write()`/`drain` handling | Full control over exactly when and how much to buffer | Verbose and easy to get wrong — one missed check and memory grows without bound |
+| `.pipe()` / `pipeline()` | Handles the write()/drain dance for you automatically | Less direct control; you consume the higher-level API's error/completion contract instead of rolling your own |
+| Checking `writableLength` directly | Gives an exact, real-time buffered-byte (or object) count for monitoring/logging | One more thing to read correctly — it means nothing without also knowing the current `writableHighWaterMark` |
+
+## Common Misconceptions
+
+- **"The high-water mark is a hard limit on how much writable can buffer"** — fact: it's a soft threshold that flips `write()`'s return value to `false`; Node still accepts and buffers the chunk that pushed you over it.
+- **"`write()` returning `false` means the write failed"** — fact: the chunk was still accepted and will still be flushed; `false` is purely a signal to slow down, not an error.
+- **"`finish` and `close` mean the same thing"** — fact: `finish` fires once all buffered data has been flushed after `end()`; `close` fires when the underlying resource (a file descriptor, a socket) has actually been released, which can happen at a different time.
+
+## Reading AI-generated code
+
+- Does code call `writable.write()` in a loop without ever checking its boolean return value or listening for `drain`?
+- Does a custom `Writable`'s `write(chunk, encoding, callback)` implementation forget to call `callback()` on every code path (including error paths), which stalls the stream forever waiting for a callback that never comes?
+- Does code assume `end()` completing means the destination file/socket is fully closed, when it should wait for `finish` (data flushed) or `close` (resource released) depending on what it actually needs to know?
+
+<SpotTheBug code={`const { Writable } = require('node:stream');
+const fs = require('node:fs');
+
+var dest = fs.createWriteStream('./output.log');
+
+function writeAll(lines) {
+  for (var i = 0; i < lines.length; i++) {
+    dest.write(lines[i] + '\\n'); // return value never checked
+  }
+  dest.end();
+}
+
+writeAll(new Array(1000000).fill('a log line'));`}>
+`writeAll` calls `dest.write()` in a tight loop without ever checking its return value or pausing when it returns `false`. If the destination (a disk, a network socket) cannot keep up with a million synchronous `write()` calls, Node keeps buffering every chunk in memory regardless, and the process can OOM before `end()` is even reached. The fix is the manual pattern from earlier in this lesson — check `write()`'s return value and pause via `writable.once('drain', next)` — or, more simply, replace the whole loop with a Readable wrapping `lines` piped into `dest`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`write()`'s boolean return value is the entire backpressure contract — `false` means stop and wait for `drain`, and `writableLength` tells you exactly how much is buffered right now.
 </Callout>
 
 export const writableQuiz = [
@@ -114,6 +210,7 @@ export const writableQuiz = [
       'a Promise that resolves when drained',
     ],
     answer: 2,
+    explain: 'write() returns false once the internal buffer reaches or exceeds the high-water mark. This is a synchronous, immediate signal — no Promise involved.',
   },
   {
     q: 'Which event fires after writable.end() is called and all data has been flushed?',
@@ -124,6 +221,7 @@ export const writableQuiz = [
       'finish',
     ],
     answer: 3,
+    explain: 'finish fires once end() has been called and every buffered chunk has actually been written to the underlying destination. end is a Readable-side event, not a Writable one.',
   },
   {
     q: 'What is the correct action when writable.write() returns false?',
@@ -134,6 +232,40 @@ export const writableQuiz = [
       'Destroy the stream and create a new one',
     ],
     answer: 2,
+    explain: 'false means the internal buffer is at or above the high-water mark. The correct response is to stop calling write() and wait for the drain event before resuming, exactly what pipe() and pipeline() do internally.',
+  },
+  {
+    q: 'A Writable has highWaterMark: 10 (bytes). After one write() call with a 15-byte chunk, what does writableLength report, and what did write() return?',
+    options: [
+      'writableLength: 10 (capped at the high-water mark), write() returned true',
+      'writableLength: 15, write() returned false',
+      'writableLength: 0 because the chunk was rejected, write() returned false',
+      'writableLength: 15, write() returned true because it was a single call',
+    ],
+    answer: 1,
+    explain: 'The high-water mark is a threshold for the boolean return value, not a hard cap on buffering -- the full 15-byte chunk is still accepted and counted in writableLength, and because 15 exceeds the 10-byte high-water mark, write() returns false.',
+  },
+  {
+    q: "A custom Writable's write(chunk, encoding, callback) throws an exception instead of calling callback() on an error path. What is the observable symptom?",
+    options: [
+      'Node automatically calls callback(err) for you',
+      'The stream silently drops the chunk and continues normally',
+      'The stream stalls indefinitely, since nothing signals that the write finished or failed',
+      'The process crashes immediately with a clear error message pointing at the missing callback',
+    ],
+    answer: 2,
+    explain: "Writable's internal state machine waits for callback to be invoked before processing the next chunk or emitting finish. If an error path returns without calling it (whether via a thrown exception that isn't caught internally, or simply a forgotten call), the stream can hang waiting for a callback that never arrives.",
+  },
+  {
+    q: 'What is the difference between the finish and close events on a Writable?',
+    options: [
+      'They are aliases for the same event',
+      'finish fires when all buffered data has been flushed after end(); close fires when the underlying resource has actually been released, which can be a separate moment',
+      'close always fires before finish',
+      'finish only exists on Readable streams',
+    ],
+    answer: 1,
+    explain: "finish is about data: everything written before end() has been flushed to the underlying system. close is about the resource itself (a file descriptor, a socket) being released, which for something like fs.createWriteStream happens after finish, not simultaneously with it.",
   },
 ];
 

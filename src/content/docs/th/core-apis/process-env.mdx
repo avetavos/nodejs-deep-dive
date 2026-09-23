@@ -1,6 +1,6 @@
 ---
 title: 'process & env'
-description: 'การใช้งาน process.argv, process.env, process.cwd(), process.exit() และ process.platform ใน Node.js'
+description: 'การใช้ process.argv, process.env, process.cwd(), process.exit() และ process.platform ใน Node.js'
 sidebar:
   order: 2
 ---
@@ -9,29 +9,31 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
-## object process
+## process object
 
-`process` คือ global object ที่ให้โปรแกรมของคุณเข้าถึง Node.js process ที่กำลังทำงาน ใช้งานได้ทุกที่ — ไม่ต้อง import
+`process` เป็น global object ที่ให้โปรแกรมของคุณเข้าถึง Node.js process ที่กำลังทำงานอยู่ มันใช้งานได้ทุกที่ — ไม่ต้อง import
 
-property และ method ที่ใช้บ่อยที่สุด:
+property/method ที่ใช้บ่อยที่สุด:
 
-| Property / Method | สิ่งที่ให้ |
+| Property / Method | สิ่งที่ได้รับ |
 |---|---|
-| `process.argv` | Array ของ command-line arguments |
-| `process.env` | Object ของ environment variables |
+| `process.argv` | array ของ command-line arguments |
+| `process.env` | object ของ environment variables |
 | `process.cwd()` | string ของ current working directory |
-| `process.exit(code)` | ยุติ process ด้วย exit code |
-| `process.platform` | string ของ OS platform (`'linux'`, `'darwin'`, `'win32'`) |
-| `process.version` | string ของ Node.js version (เช่น `'v20.11.0'`) |
+| `process.exit(code)` | สิ้นสุด process ด้วย exit code |
+| `process.platform` | string platform ของ OS (`'linux'`, `'darwin'`, `'win32'`) |
+| `process.version` | string version ของ Node.js (เช่น `'v20.11.0'`) |
 
 ## process.argv — command-line arguments
 
-`process.argv` คือ array เสมอ สองตัวแรกมีค่าตายตัว:
+`process.argv` เป็น array เสมอ สององค์ประกอบแรกคงที่:
 
-- `argv[0]` — path ไปยัง `node` binary
+- `argv[0]` — path ไปยัง binary `node`
 - `argv[1]` — path ไปยัง script ที่กำลังรัน
-- `argv[2]` เป็นต้นไป — arguments ที่คุณระบุจริงๆ
+- `argv[2]` เป็นต้นไป — argument จริงของคุณ
 
 export const argvCode = `
 // Run as: node index.js hello world
@@ -49,7 +51,7 @@ console.log('Arg count:', args.length);
 
 ## process.env — environment variables
 
-`process.env` คือ plain object ที่มี keys และ values เป็น strings ถูก populate จาก shell environment ตอนเริ่ม process
+`process.env` เป็น plain object ที่ key และ value เป็น string ทั้งหมด มันถูกเติมข้อมูลจาก shell environment ตอน process เริ่มทำงาน
 
 export const envCode = `
 // Read a variable (returns undefined if not set)
@@ -67,9 +69,51 @@ console.log('Total env vars:', keys.length);
 
 <NodeRunner client:visible code={envCode} node />
 
-### โหลดไฟล์ .env โดยไม่ต้องใช้ dotenv
+### ทุกค่าเป็น string — กับดัก PORT > 1024
 
-ตั้งแต่ Node 22 runtime โหลด env file ได้เอง — จาก CLI ด้วย `--env-file` หรือจากโค้ดด้วย `process.loadEnvFile()`:
+ทุก key และ value ใน `process.env` เป็น **string** แม้ shell จะตั้งค่าให้ดูเหมือนตัวเลขหรือ boolean ก็ตาม `PORT=3000` ใน environment จะให้ `process.env.PORT === '3000'` ไม่ใช่ `3000` relational operator (`<`, `>`) จะ coerce string operand เป็นตัวเลขให้อัตโนมัติ แต่ `===` และ `+` ไม่ทำ — ความไม่ตรงกันนี้เป็นหนึ่งในบั๊ก `process.env` ที่พบบ่อยที่สุด:
+
+export const envStringsCode = `
+process.env.PORT = '3000'; // set here only to make this demo self-contained
+
+console.log('typeof PORT:', typeof process.env.PORT);
+
+// Trap 1: strict equality never coerces
+console.log('PORT === 3000:', process.env.PORT === 3000);       // false -- string !== number
+console.log('PORT === "3000":', process.env.PORT === '3000');   // true
+
+// Trap 2: + concatenates strings instead of adding numbers
+console.log('PORT + 1:', process.env.PORT + 1);                 // "30001"
+console.log('Number(PORT) + 1:', Number(process.env.PORT) + 1); // 3001 -- convert first
+
+// Relational operators DO coerce to number...
+console.log('PORT > 1024:', process.env.PORT > 1024); // true
+
+// ...but an unset variable coerces to NaN, and every comparison with NaN
+// is false -- silently, with no error, instead of telling you it's missing.
+delete process.env.PORT;
+console.log('unset PORT > 1024:', process.env.PORT > 1024);   // false, NOT an error
+console.log('Number(unset PORT):', Number(process.env.PORT)); // NaN
+`;
+
+export const envStringsOut = `typeof PORT: string
+PORT === 3000: false
+PORT === "3000": true
+PORT + 1: 30001
+Number(PORT) + 1: 3001
+PORT > 1024: true
+unset PORT > 1024: false
+Number(unset PORT): NaN`;
+
+<NodeRunner client:visible code={envStringsCode} node expected={envStringsOut} />
+
+<Callout title="แปลงก่อนเปรียบเทียบหรือคำนวณเสมอ">
+ใช้ `Number(process.env.PORT)` (หรือ `parseInt(process.env.PORT, 10)`) ก่อนเปรียบเทียบด้วย `===` หรือใช้ `+` และตรวจดูว่าผลลัพธ์ไม่ใช่ `NaN` — env var ที่ไม่ได้ตั้งค่าหรือรูปแบบผิดจะ fail แบบเงียบ ๆ ไม่งั้น แทนที่จะ crash ดัง ๆ ที่คุณจะสังเกตเห็นได้ตอน development
+</Callout>
+
+### โหลดไฟล์ .env โดยไม่ใช้ dotenv
+
+ตั้งแต่ Node 22 runtime โหลดไฟล์ env ได้เอง — จาก CLI ด้วย `--env-file` หรือจาก code ด้วย `process.loadEnvFile()`:
 
 ```bash
 node --env-file=.env src/app.js
@@ -85,8 +129,8 @@ console.log(process.env.PORT);
 unlinkSync('.env');
 ```
 
-<Callout title="อ่าน config จาก process.env ไม่ใช่ hardcode">
-อย่า hardcode secrets, ports หรือ host names ใน source code อ่านจาก `process.env` ตอนเริ่มต้น นี่คือหลักการ 12-Factor App ที่ทำให้ deploy code เดียวกันไปยัง development, staging และ production ได้โดยเปลี่ยนแค่ environment variables — ไม่ต้องแก้ code
+<Callout title="อ่าน config จาก process.env ไม่ใช่ hardcode ค่า">
+อย่า hardcode ความลับ, port หรือชื่อ host ใน source code เด็ดขาด อ่านค่าเหล่านั้นจาก `process.env` ตอน startup แนวทางนี้ตาม 12-Factor App principle และทำให้ deploy code เดียวกันไปยัง development, staging และ production ได้โดยเปลี่ยนแค่ environment variables — ไม่ต้องแก้ code เลย
 </Callout>
 
 ## process.cwd() และ process.platform
@@ -109,9 +153,9 @@ console.log('arch:', process.arch);
 
 ## process.exit()
 
-`process.exit(code)` ยุติ process ทันที ตามแบบแผน:
-- Exit code `0` หมายถึงสำเร็จ
-- code ที่ไม่ใช่ศูนย์ (มักเป็น `1`) หมายถึงล้มเหลว
+`process.exit(code)` สิ้นสุด process ทันที ตามธรรมเนียม:
+- exit code `0` แปลว่าสำเร็จ
+- exit code ที่ไม่ใช่ 0 (โดยทั่วไปคือ `1`) แปลว่าล้มเหลว
 
 ```js
 // @expect-throw
@@ -122,31 +166,201 @@ if (!process.env.DATABASE_URL) {
 }
 ```
 
-การเรียก `process.exit()` คือการหยุดแบบทันที — มันข้าม async callbacks ที่ค้างอยู่ **และ** `finally` blocks ที่ยังอยู่บน call stack ด้วย ควรใช้ `process.exitCode` แทน (เช่น `process.exitCode = 1`) แล้วปล่อยให้ process จบเองตามธรรมชาติ — วิธีนี้จะให้โอกาส pending I/O, `finally` blocks และการปิดตัวแบบ graceful (เช่น `server.close()`) ได้ทำงานจริง
+การเรียก `process.exit()` คือการหยุดแบบทันที — มันข้าม pending async callback **และ** `finally` block ใด ๆ ที่ยังอยู่บน call stack แนะนำให้ตั้งค่า `process.exitCode` แทน (เช่น `process.exitCode = 1`) แล้วปล่อยให้ process จบตามธรรมชาติ — นั่นให้โอกาส pending I/O, `finally` block และ graceful shutdown (เช่น `server.close()`) ได้ทำงาน
+
+export const exitCodeCode = `
+process.exitCode = 1; // tentative -- overwritten below once cleanup finishes
+
+console.log('exitCode set to 1 (tentative)');
+
+setImmediate(function() {
+  console.log('setImmediate callback ran -- exitCode does NOT skip pending callbacks');
+  process.exitCode = 0; // cleanup succeeded -- exit 0 once the loop naturally drains
+});
+`;
+
+export const exitCodeOut = `exitCode set to 1 (tentative)
+setImmediate callback ran -- exitCode does NOT skip pending callbacks`;
+
+<NodeRunner client:visible code={exitCodeCode} node expected={exitCodeOut} />
+
+export const hardExitCode = `// @expect-throw
+console.log('about to hard-exit with process.exit(1)');
+process.exit(1);
+setImmediate(function() {
+  console.log('this NEVER prints -- process.exit() skips pending callbacks');
+});
+`;
+
+export const hardExitOut = `about to hard-exit with process.exit(1)`;
+
+<NodeRunner client:visible code={hardExitCode} node expected={hardExitOut} />
+
+`setImmediate` ตัวเดียวกัน แต่ผลลัพธ์ต่างกันสองแบบ: `process.exitCode` ปล่อยให้มันทำงานก่อน process จะจบ; `process.exit()` ตัดมันทิ้งกลางคัน
+
+## Signals และ graceful shutdown
+
+Orchestrator (Docker, Kubernetes, `systemd`, `Ctrl+C` ใน terminal) หยุด process ด้วยการส่ง signal ไม่ใช่การฆ่าทิ้งตรง ๆ: `SIGTERM` คือการขอแบบสุภาพ `SIGINT` คือสิ่งที่ `Ctrl+C` ส่งมา Node ให้คุณดักจับทั้งสองด้วย `process.on()` เพื่อทำงานที่ค้างอยู่ให้เสร็จ — หยุดรับการเชื่อมต่อใหม่ ปล่อยให้ request ที่มีอยู่เสร็จ ปิดการเชื่อมต่อฐานข้อมูล — ก่อนที่จะจบจริง ๆ:
+
+export const sigtermCode = `
+// Keeps the event loop alive long enough for the signal to actually be
+// delivered -- with nothing else pending, Node can exit(0) before the
+// signal ever arrives. The handler clears it once it runs.
+var keepAlive = setTimeout(function() {}, 5000);
+
+process.on('SIGTERM', function() {
+  clearTimeout(keepAlive);
+  console.log('SIGTERM received -- closing server gracefully');
+  console.log('cleanup done, exiting 0');
+  process.exit(0);
+});
+
+console.log('server started (simulated)');
+// In production this signal comes from the orchestrator; here we send it to
+// ourselves to make the demo self-contained and deterministic.
+process.kill(process.pid, 'SIGTERM');
+console.log('this line runs synchronously -- the signal handler fires after it');
+`;
+
+export const sigtermOut = `server started (simulated)
+this line runs synchronously -- the signal handler fires after it
+SIGTERM received -- closing server gracefully
+cleanup done, exiting 0`;
+
+<NodeRunner client:visible code={sigtermCode} node expected={sigtermOut} />
+
+<Callout title="ไม่มี SIGTERM handler แล้ว Docker/k8s จะฆ่าคุณหลัง timeout">
+ถ้าไม่มี listener `SIGTERM` จะสิ้นสุด process ทันที — request ใดก็ตามที่กำลังถูกจัดการอยู่ ณ ขณะนั้นจะถูกตัดกลางคัน Kubernetes ให้ grace period กับ pod (ดีฟอลต์ 30 วินาที) ระหว่าง `SIGTERM` กับ `SIGKILL` แบบเด็ดขาด ใช้ช่วงเวลานั้นเรียก `server.close()` (หยุดรับการเชื่อมต่อใหม่ ปล่อยให้ตัวที่ค้างอยู่เสร็จ) และปิด database pool ใด ๆ ก่อนที่จะเรียก `process.exit(0)` เอง
+</Callout>
+
+## process.nextTick — มันอยู่ตรงไหนใน event loop
+
+`process.nextTick(fn)` เข้าคิว `fn` ให้ทำงาน **ก่อน** ที่ event loop จะไปยัง phase ถัดไป — ก่อนแม้แต่ microtask อื่น (promise callback) ที่เข้าคิวไว้ก่อนหน้า มันถูกครอบคลุมอย่างละเอียด พร้อมลำดับเต็มเทียบกับ `Promise`, `setImmediate` และ `setTimeout` ใน [Microtasks & Macrotasks](/nodejs/th/event-loop-async/microtasks-macrotasks/) สรุปสั้น ๆ ที่เกี่ยวข้องตรงนี้: `process` คือที่ที่ `nextTick` อาศัยอยู่ แต่จริง ๆ แล้วมันเป็น primitive ของ event loop ไม่ใช่ feature เฉพาะของ `process` — มันอยู่บน `process` ด้วยเหตุผลทางประวัติศาสตร์ (มันมีมาก่อน `queueMicrotask`)
+
+## prefix node: — ทบทวน
+
+ตามที่ครอบคลุมไปแล้วใน[ภาพรวม](/nodejs/th/core-apis/)ของโมดูลนี้ `process` ไม่ต้อง import เลย — มันเป็น global จริง เหมือน `Buffer` module ทุกตัวที่ใช้ในหน้านี้ (`node:util`, `node:fs`, `node:child_process`) สามารถ import ได้ทั้งมีและไม่มี prefix `node:` *ถ้า* มันเป็น module รุ่นเก่า; built-in ใหม่เอี่ยมอย่าง `node:test` และ `node:sqlite` resolve ได้เฉพาะที่มี prefix เท่านั้น เมื่อคุณเห็น `require('util')` ใน code เก่า มันเทียบเท่ากับ `require('node:util')` — prefix เป็น convention เพื่อความชัดเจน ไม่ใช่การเปลี่ยนพฤติกรรม สำหรับอะไรก็ตามที่มีมาก่อนมัน
+
+## การ parse CLI และการจัดสไตล์ terminal: util.parseArgs และ util.styleText
+
+`node:util` มาพร้อม utility เล็ก ๆ สองตัวที่ลดความจำเป็นในการใช้ npm package ยอดนิยมสำหรับ CLI tool ง่าย ๆ `parseArgs` (stable ตั้งแต่ 20.x) แทน `yargs`/`minimist` สำหรับการ parse flag ตรงไปตรงมา:
+
+export const parseArgsCode = `
+import { parseArgs } from 'node:util';
+
+// Normally read from process.argv.slice(2); hardcoded here to keep the demo deterministic
+var fakeArgv = ['--name', 'Ada', '--verbose', '--count', '3'];
+
+var { values } = parseArgs({
+  args: fakeArgv,
+  options: {
+    name: { type: 'string' },
+    verbose: { type: 'boolean' },
+    count: { type: 'string' },
+  },
+});
+
+console.log(values);
+`;
+
+export const parseArgsOut = `[Object: null prototype] { name: 'Ada', verbose: true, count: '3' }`;
+
+<NodeRunner client:visible code={parseArgsCode} node expected={parseArgsOut} />
+
+`styleText` (stable ตั้งแต่ 22.x) เพิ่ม ANSI color/style code ให้ string — แทน `chalk`/`picocolors` สำหรับกรณีพื้นฐาน มันตรวจสอบอัตโนมัติว่า stream ปลายทางรองรับสีจริงหรือไม่ และ **คืนค่า string เปล่าไม่เปลี่ยนแปลงถ้าไม่รองรับ** (piped output, log file, CI runner ส่วนใหญ่):
+
+export const styleTextCode = `
+import { styleText } from 'node:util';
+
+var msg = styleText('green', 'OK');
+console.log(JSON.stringify(msg));
+// When stdout is not a TTY (as in this verified output, and in CI logs),
+// styleText skips the ANSI codes entirely -- the string comes back unchanged.
+console.log('length with codes:', msg.length, 'vs plain length:', 'OK'.length);
+`;
+
+export const styleTextOut = `"OK"
+length with codes: 2 vs plain length: 2`;
+
+<NodeRunner client:visible code={styleTextCode} node expected={styleTextOut} />
+
+## Mental Model
+
+export const processEnvMentalModel = `flowchart TB
+  Env["process.env.PORT"] -->|"always"| Str["a string, never a number"]
+  Str -->|"=== or arithmetic"| Trap["silent bug: false / string concat"]
+  Str -->|"Number() first"| Safe["correct comparison/arithmetic"]
+  Exit1["process.exitCode = n"] -->|"lets pending callbacks + finally run"| Natural["process exits naturally"]
+  Exit2["process.exit(n)"] -->|"cuts off immediately"| Hard["pending callbacks + finally skipped"]
+  Sig["SIGTERM / SIGINT"] -->|"no listener"| Immediate["process dies immediately, mid-request"]
+  Sig -->|"process.on(signal, ...)"| Graceful["finish in-flight work, then exit(0)"]`;
+
+<Mermaid code={processEnvMentalModel} title="process.env เป็น string เสมอ; exitCode ปล่อยให้งานที่ค้างทำเสร็จก่อนในขณะที่ exit() ตัดมันทิ้ง; signal ที่ไม่มีคนจัดการฆ่า process ทันที ส่วนที่จัดการแล้วจบแบบ graceful" />
+
+## Trade-offs
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| อ่าน config ผ่าน `process.env` | code เดียวกัน deploy ได้ทุก environment (12-Factor); ไม่ต้อง rebuild สำหรับ config ใหม่ | ทุกอย่างเป็น string — ค่าตัวเลข/boolean ทุกตัวต้องแปลงและ validate อย่างชัดเจน |
+| `process.exitCode = n` | pending I/O, timer และ `finally` block ได้ทำงาน; ดีฟอลต์ที่ปลอดภัยกว่า | ต้องการให้ event loop drain จริง ๆ — handle ที่ค้างอยู่จะทำให้ process ไม่จบ |
+| `process.exit(n)` | รับประกันการสิ้นสุดทันที มีประโยชน์เมื่อมีอะไรค้างจริง ๆ | ข้าม `finally` block และ pending callback แบบไม่มีเงื่อนไข — รวมถึงตัวที่ flush log หรือปิดการเชื่อมต่อ |
+| จัดการ `SIGTERM` เอง | request ที่ค้างอยู่ได้เสร็จ; การเชื่อมต่อปิดอย่างสะอาด | เพิ่ม code เส้นทาง shutdown ที่พลาดง่าย (ต้องเรียก `exit()` จริง ๆ ในที่สุด ไม่งั้น grace period ของ orchestrator หมดแล้วมันจะ `SIGKILL` คุณอยู่ดี) |
+
+## Common Misconceptions
+
+- **"process.env.PORT > 1024 ไม่ปลอดภัยเพราะ PORT เป็น string"** — ความจริง: relational operator (`<`/`>`) coerce string operand เป็นตัวเลขให้อัตโนมัติ; กับดักจริง ๆ คือ `===` (ไม่ coerce เลย) และ `+` (concatenate string แทนที่จะบวก)
+- **"process.exit() กับการตั้ง process.exitCode ทำสิ่งเดียวกัน แค่ syntax ต่างกัน"** — ความจริง: `exitCode` ปล่อยให้ event loop drain ตามธรรมชาติ — pending callback และ `finally` block ได้ทำงาน; `exit()` สิ้นสุดทันที ข้ามทั้งสองอย่าง
+- **"ถ้าไม่มี signal handler Kubernetes จะรอให้ process ของฉันทำ request ปัจจุบันเสร็จ"** — ความจริง: ถ้าไม่มี listener `SIGTERM` พฤติกรรมดีฟอลต์จะสิ้นสุด process ทันที; มีแค่ handler ที่ชัดเจนเท่านั้นที่ซื้อเวลาทำงานที่ค้างอยู่ให้เสร็จ และซื้อได้แค่ในขอบเขต grace period ของ orchestrator
+- **"styleText เพิ่ม color code ให้ string ของฉันเสมอ"** — ความจริง: มันตรวจสอบก่อนว่า stream ปลายทางรองรับสีหรือไม่ และคืนค่า string เปล่าแบบเงียบ ๆ ถ้าไม่รองรับ (piped output, log file, CI ส่วนใหญ่)
+
+## อ่านโค้ดที่ AI เขียน
+
+- code เปรียบเทียบ `process.env.SOMETHING` ด้วย `===` กับตัวเลข หรือส่งมันเข้าคำนวณโดยตรงด้วย `+` โดยไม่มีการแปลง `Number(...)`/`parseInt(...)` อย่างชัดเจนก่อนหรือเปล่า?
+- script เรียก `process.exit()` ทันทีหลัง `console.log()` หรือการเขียน `fs.writeFile()`/database ที่อาจยังค้างอยู่หรือเปล่า? บาง platform buffered stdout อาจถูกตัดทอน และ async write ที่ค้างอยู่จะถูกทิ้งไปเลย
+- server ที่รันระยะยาวลงทะเบียน `SIGTERM`/`SIGINT` handler ไว้เลยหรือเปล่า? การไม่มีมันแปลว่าทุกครั้งที่ deploy จะฆ่า request ที่ค้างอยู่แทนที่จะทำให้เสร็จ
+- logic การเคลียร์อยู่ใน `finally` block ที่รันเฉพาะเส้นทางออกตามธรรมชาติ ในขณะที่ branch ก่อนหน้าเรียก `process.exit()` ตรง ๆ — ข้ามการเคลียร์เดียวกันนั้นไปแบบเงียบ ๆ หรือเปล่า?
+
+<SpotTheBug code={`import http from 'node:http';
+
+var server = http.createServer(function(req, res) {
+  res.end('ok');
+});
+
+server.listen(process.env.PORT || 3000, function() {
+  console.log('listening on port', process.env.PORT || 3000);
+});`}>
+`process.env.PORT` เป็น **string** (หรือ `undefined`) `server.listen()` บังเอิญรับ string port number ได้ ดังนั้น call นี้เฉพาะเจาะจงไม่ crash — แต่ทันทีที่ค่านี้ถูกใช้ที่ไหนก็ตามด้วย `===`, การคำนวณ หรือการตรวจ type (`typeof port === 'number'`, validation schema, health-check ที่เทียบกับช่วงตัวเลข) type ที่เป็น string จะทำให้เกิดบั๊กแบบเงียบ วิธีแก้คือแปลงครั้งเดียวใกล้ด้านบน: `var port = Number(process.env.PORT) || 3000;` เพื่อให้การใช้ `port` ทุกครั้งในภายหลังเป็นตัวเลขจริง
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ค่า `process.env` ทุกตัวเป็น string จนกว่าคุณจะแปลงมัน, `process.exitCode` ปล่อยให้งานที่ค้างเสร็จในขณะที่ `process.exit()` ตัดมันทิ้ง และ `SIGTERM` handler คือความต่างระหว่าง graceful deploy กับการที่ทุก request ที่ค้างอยู่ถูกทิ้งไป
+</Callout>
 
 export const processQuiz = [
   {
-    q: 'process.argv[0] มีค่าอะไรเมื่อรัน `node script.js`?',
+    q: 'process.argv[0] มีอะไรอยู่เมื่อคุณรัน `node script.js`?',
     options: [
       'argument แรกที่ผู้ใช้ระบุ',
-      'path ไปยัง script file',
+      'path ไปยังไฟล์ script',
       'path ไปยัง node binary',
       'current working directory',
     ],
     answer: 2,
+    explain: 'argv[0] เป็น path ไปยัง node executable เองเสมอ, argv[1] เป็น path ของ script และ argv[2] เป็นต้นไปคือ argument ที่คุณส่งมาจริง ๆ',
   },
   {
-    q: 'values ที่เก็บใน process.env มี type อะไร?',
+    q: 'ค่าที่เก็บใน process.env เป็น type อะไร?',
     options: [
-      'mixed — ตัวเลขจะถูก parse อัตโนมัติ',
-      'strings เสมอ',
-      'Booleans สำหรับค่า true/false',
+      'ผสม — ตัวเลขถูก parse ให้อัตโนมัติ',
+      'เป็น string เสมอ',
+      'เป็น boolean สำหรับค่า true/false',
       'ขึ้นอยู่กับ shell',
     ],
     answer: 1,
+    explain: 'key และ value ทุกตัวใน process.env เป็น string ไม่ว่าจะดูเหมือนอะไรก็ตาม PORT=3000 ใน shell จะให้ string "3000" ไม่ใช่ตัวเลข 3000 เลย',
   },
   {
-    q: 'exit code ใดที่บ่งบอกตามแบบแผนว่าทำงานสำเร็จ?',
+    q: 'exit code ใดที่ตามธรรมเนียมแปลว่าสำเร็จ?',
     options: [
       '1',
       '-1',
@@ -154,6 +368,40 @@ export const processQuiz = [
       '200',
     ],
     answer: 2,
+    explain: 'exit code 0 เป็นธรรมเนียมสากลของ Unix สำหรับความสำเร็จ exit code ที่ไม่ใช่ 0 (โดยทั่วไปคือ 1) บอก shell, CI system และ process manager ว่าล้มเหลว',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n\nprocess.env.PORT = "3000";\nconsole.log(process.env.PORT === 3000);\nconsole.log(process.env.PORT > 1024);',
+    options: [
+      'true แล้วก็ true',
+      'false แล้วก็ true',
+      'true แล้วก็ false',
+      'false แล้วก็ false',
+    ],
+    answer: 1,
+    explain: '=== ไม่เคย coerce type ดังนั้น string จึงไม่มีทาง === กับตัวเลขได้: false operator > จะ coerce string operand เป็นตัวเลขสำหรับการเปรียบเทียบ ดังนั้น "3000" > 1024 จึงประเมินการเปรียบเทียบเชิงตัวเลขและได้ true',
+  },
+  {
+    q: 'function หนึ่งเรียก `process.exit(1)` ทันทีหลังจากเริ่ม `setImmediate(() => cleanup())` cleanup() จะทำงานไหม?',
+    options: [
+      'ทำงาน — setImmediate callback ทำงานก่อน exit เสมอ',
+      'ไม่ทำงาน — process.exit() สิ้นสุดทันที ข้าม pending callback ใด ๆ รวมถึง setImmediate นั้น',
+      'ทำงานเฉพาะถ้า cleanup() เป็น synchronous',
+      'ทำงาน แต่เฉพาะบน Linux เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'process.exit() คือการหยุดแบบทันทีและเด็ดขาด อะไรก็ตามที่ยังเข้าคิวอยู่ -- pending I/O, timer, setImmediate/setTimeout callback แม้แต่ finally block บน stack ปัจจุบัน -- จะถูกทิ้งไป การตั้ง process.exitCode แทนจะปล่อยให้ setImmediate ทำงานก่อน',
+  },
+  {
+    q: 'เกิดอะไรขึ้นกับ Node.js server process ที่ได้รับ SIGTERM โดยไม่มี signal handler ลงทะเบียนไว้?',
+    options: [
+      'Node ละเว้น SIGTERM โดยดีฟอลต์ -- process ทำงานต่อไป',
+      'process สิ้นสุดทันที ตัด request ที่ค้างอยู่ทิ้งไป',
+      'Node เรียก server.close() ให้อัตโนมัติและรอให้ request เสร็จ',
+      'SIGTERM เกี่ยวข้องเฉพาะบน Windows เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'ถ้าไม่มี listener พฤติกรรมดีฟอลต์ของ SIGTERM จะสิ้นสุด process ทันที มีแค่การลงทะเบียน process.on(\'SIGTERM\', ...) เท่านั้นที่ซื้อเวลาทำ request ที่ค้างอยู่ให้เสร็จและปิดการเชื่อมต่อก่อนที่จะจบเอง',
   },
 ];
 
