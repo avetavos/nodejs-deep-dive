@@ -10,6 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## สองคิว หนึ่งลูป
 
@@ -28,24 +29,12 @@ event loop ประมวลผล callback แบบ async จากสอง�
 
 ## ลำดับการระบาย
 
-```
-┌─────────────────────────────┐
-│  Run one callback           │
-│  (or the initial script)    │
-└──────────────┬──────────────┘
-               │
-               ▼
-┌─────────────────────────────┐
-│  Drain nextTick, then all   │◄──┐
-│  microtasks (incl. new ones)│   │ new microtasks
-└──────────────┬──────────────┘───┘
-               │
-               ▼
-┌─────────────────────────────┐
-│  Next callback in this      │
-│  phase, or next phase       │
-└─────────────────────────────┘
-```
+export const drainOrderDiagram = `flowchart TB
+  Run["Run one callback (or the initial script)"] --> Drain["Drain nextTick, then all microtasks (incl. new ones)"]
+  Drain --> Next["Next callback in this phase, or next phase"]
+  Drain -->|"new microtasks"| Drain`;
+
+<Mermaid code={drainOrderDiagram} title="หลังทุก callback Node จะระบาย process.nextTick แล้วตามด้วย microtask queue ทั้งหมด — รวมถึง microtask ที่ถูกสร้างขึ้นใหม่ระหว่างทาง — ก่อนจะไปต่อ" />
 
 ## เฉพาะ Node: process.nextTick และ setImmediate
 

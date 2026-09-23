@@ -39,34 +39,24 @@ Node 18 and 20 are end-of-life. When a lesson says "Node 22+", the feature exist
 
 ## The toolchain at a glance
 
-```
-┌─────────────────────────────────────────────────┐
-│  Your Node.js Project                           │
-│                                                 │
-│  Source code (.ts / .js / .mjs)                 │
-│       │                                         │
-│       ▼                                         │
-│  Linter / Formatter  ──►  ESLint, Prettier,     │
-│                            Biome                │
-│       │                                         │
-│       ▼                                         │
-│  TypeScript runner   ──►  node file.ts (built-  │
-│                            in type stripping);  │
-│                            tsx for enum etc.    │
-│       │                                         │
-│       ▼                                         │
-│  Test runner         ──►  node:test (built-in)  │
-│                            or Vitest / Jest      │
-│       │                                         │
-│       ▼                                         │
-│  Debugger            ──►  node --inspect +      │
-│                            Chrome DevTools       │
-│       │                                         │
-│       ▼                                         │
-│  Performance         ──►  perf_hooks,           │
-│                            PerformanceObserver   │
-└─────────────────────────────────────────────────┘
-```
+export const toolchainDiagram = `flowchart TB
+  subgraph Project["Your Node.js Project"]
+    direction TB
+    Source["Source code (.ts / .js / .mjs)"]
+    Lint["Linter / Formatter"]
+    TSR["TypeScript runner"]
+    TestRunner["Test runner"]
+    Debugger["Debugger"]
+    Perf["Performance"]
+    Source --> Lint --> TSR --> TestRunner --> Debugger --> Perf
+  end
+  Lint --> LintTools["ESLint, Prettier, Biome"]
+  TSR --> TSRTools["node file.ts (built-in type stripping); tsx for enum etc."]
+  TestRunner --> TestTools["node:test (built-in) or Vitest / Jest"]
+  Debugger --> DebuggerTools["node --inspect + Chrome DevTools"]
+  Perf --> PerfTools["perf_hooks, PerformanceObserver"]`;
+
+<Mermaid code={toolchainDiagram} title="A Node.js project's toolchain: source flows through the linter, TypeScript runner, test runner, debugger, and performance tools" />
 
 ## Choosing what to install
 

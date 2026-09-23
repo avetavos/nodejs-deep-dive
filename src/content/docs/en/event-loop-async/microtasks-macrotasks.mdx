@@ -10,6 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 import SpotTheBug from '../../../../components/SpotTheBug.astro';
+import Mermaid from '../../../../components/Mermaid.astro';
 
 ## Two queues, one loop
 
@@ -28,24 +29,12 @@ The rule is simple: after **every individual callback** — not just once per ph
 
 ## The drain order
 
-```
-┌─────────────────────────────┐
-│  Run one callback           │
-│  (or the initial script)    │
-└──────────────┬──────────────┘
-               │
-               ▼
-┌─────────────────────────────┐
-│  Drain nextTick, then all   │◄──┐
-│  microtasks (incl. new ones)│   │ new microtasks
-└──────────────┬──────────────┘───┘
-               │
-               ▼
-┌─────────────────────────────┐
-│  Next callback in this      │
-│  phase, or next phase       │
-└─────────────────────────────┘
-```
+export const drainOrderDiagram = `flowchart TB
+  Run["Run one callback (or the initial script)"] --> Drain["Drain nextTick, then all microtasks (incl. new ones)"]
+  Drain --> Next["Next callback in this phase, or next phase"]
+  Drain -->|"new microtasks"| Drain`;
+
+<Mermaid code={drainOrderDiagram} title="After every callback, Node drains process.nextTick and the full microtask queue — including microtasks queued by microtasks — before moving on" />
 
 ## Node-specific: process.nextTick and setImmediate
 

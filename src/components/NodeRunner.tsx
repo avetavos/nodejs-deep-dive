@@ -43,7 +43,7 @@ export default function NodeRunner({ code, node = false, expected }: { code: str
   }
 
   return (
-    <div class="nr">
+    <div class="nr not-content">
       <div class="nr__bar">
         <span class="nr__label">{node ? t.node : t.js}</span>
         <span class="nr__actions">
