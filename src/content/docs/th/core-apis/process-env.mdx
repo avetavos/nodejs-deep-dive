@@ -76,10 +76,13 @@ node --env-file=.env src/app.js
 ```
 
 ```js
+import { writeFileSync, unlinkSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 
-loadEnvFile();              // ค่าเริ่มต้นคือ ./.env
+writeFileSync('.env', 'PORT=4000\n'); // demo fixture
+loadEnvFile();              // defaults to ./.env
 console.log(process.env.PORT);
+unlinkSync('.env');
 ```
 
 <Callout title="อ่าน config จาก process.env ไม่ใช่ hardcode">
@@ -111,6 +114,7 @@ console.log('arch:', process.arch);
 - code ที่ไม่ใช่ศูนย์ (มักเป็น `1`) หมายถึงล้มเหลว
 
 ```js
+// @expect-throw
 // Example: exit with error if a required env var is missing
 if (!process.env.DATABASE_URL) {
   console.error('ERROR: DATABASE_URL is required');
@@ -118,7 +122,7 @@ if (!process.env.DATABASE_URL) {
 }
 ```
 
-การเรียก `process.exit()` คือการหยุดแบบทันที — `finally` blocks ยังทำงาน แต่ async callbacks ที่ค้างอยู่จะไม่ทำงาน สำหรับการปิดตัวแบบ graceful ควร drain server ก่อน (เช่น `server.close()`) แล้วปล่อยให้ event loop ออกเอง
+การเรียก `process.exit()` คือการหยุดแบบทันที — มันข้าม async callbacks ที่ค้างอยู่ **และ** `finally` blocks ที่ยังอยู่บน call stack ด้วย ควรใช้ `process.exitCode` แทน (เช่น `process.exitCode = 1`) แล้วปล่อยให้ process จบเองตามธรรมชาติ — วิธีนี้จะให้โอกาส pending I/O, `finally` blocks และการปิดตัวแบบ graceful (เช่น `server.close()`) ได้ทำงานจริง
 
 export const processQuiz = [
   {

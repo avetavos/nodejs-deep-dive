@@ -20,7 +20,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 Method `write()` ของ Writable Stream เป็นสัญญาณสำคัญ:
 
-- คืนค่า `true` — internal buffer ต่ำกว่า **high-water mark** (ค่าเริ่มต้น: 16 KB (16384 bytes) สำหรับ byte stream หรือ 16 objects สำหรับ object-mode stream โดย `fs.createReadStream` เป็นข้อยกเว้นที่ใช้ 64 KB) producer ส่งข้อมูลต่อได้
+- คืนค่า `true` — internal buffer ต่ำกว่า **high-water mark** (ค่าเริ่มต้นบน Node 24: 65536 bytes (64 KiB) สำหรับ byte-mode stream ทั้ง Readable และ Writable หรือ 16 objects สำหรับ object-mode stream โดย `fs.createReadStream` ใช้ค่าเริ่มต้นเดียวกันนี้ ไม่มีข้อยกเว้นแยกต่างหากแล้ว) producer ส่งข้อมูลต่อได้
 - คืนค่า `false` — buffer อยู่ที่หรือเกิน high-water mark producer ต้อง **pause** และรอ event `drain` ก่อนเขียนต่อ
 
 high-water mark ไม่ใช่ขีดจำกัดแบบ hard — เป็นเพียง soft advisory Node ยัง Buffer chunk เกินขีดนั้นได้แต่ต้องเสียค่า Memory การเคารพสัญญาณนี้ทำให้การใช้ Memory คงที่
@@ -120,7 +120,7 @@ export const backpressureQuiz = [
   {
     q: 'readable.pipe() และ stream.pipeline() ช่วยเรื่อง backpressure อย่างไร?',
     options: [
-      'เพิ่ม high-water mark ให้ buffer ไม่เต็ย',
+      'เพิ่ม high-water mark ให้ buffer ไม่เต็ม',
       'รัน Writable บน worker thread เพื่อให้ตามทัน Readable',
       'Pause Readable โดยอัตโนมัติเมื่อ write() คืนค่า false และ resume เมื่อ drain',
       'ทิ้ง chunk ที่ไม่สามารถเขียนได้ทันที',

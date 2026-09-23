@@ -31,9 +31,12 @@ Node ships the same filesystem operations in three distinct APIs:
 ```js
 import fs from 'node:fs';
 
+fs.writeFileSync('./hello.txt', 'Hello from Node.js!');
+
 fs.readFile('./hello.txt', 'utf8', function(err, data) {
   if (err) throw err;
   console.log(data);
+  fs.unlinkSync('./hello.txt');
 });
 ```
 
@@ -119,7 +122,10 @@ demo().catch(console.error);
 Two newer APIs retire old dependencies. `fs.glob` (stable in Node 22+) replaces the `glob` package, and file handles support `await using` (Node 24+) so they close themselves:
 
 ```js
+import { writeFileSync, unlinkSync } from 'node:fs';
 import { glob, open } from 'node:fs/promises';
+
+writeFileSync('./config.json', JSON.stringify({ port: 3000 })); // demo fixture
 
 // Find files without the `glob` package
 for await (const file of glob('src/**/*.test.js')) {
@@ -132,15 +138,20 @@ for await (const file of glob('src/**/*.test.js')) {
   const text = await fh.readFile('utf8');
   console.log(JSON.parse(text).port);
 }
+
+unlinkSync('./config.json');
 ```
 
 ## Synchronous reads — startup only
 
 ```js
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+writeFileSync('./config.json', JSON.stringify({ port: 3000 })); // demo fixture
 
 // Acceptable at startup — process has not yet started accepting requests
 const config = JSON.parse(readFileSync('./config.json', 'utf8'));
+console.log(config.port);
 ```
 
 Never call `readFileSync` inside a request handler, route callback, or any function invoked after the server starts.

@@ -34,7 +34,7 @@ Key globals and modules covered in this module:
 
 Node keeps absorbing popular packages into the runtime:
 
-- **`node:sqlite`** — an embedded SQLite database (unflagged since 22.13, release candidate from 25.7). Zero dependencies for local state, tests, and CLIs.
+- **`node:sqlite`** — an embedded SQLite database (unflagged since 22.13, still **Experimental** on Node 24 — importing it prints an `ExperimentalWarning`). Zero dependencies for local state, tests, and CLIs.
 - **`fs.glob`** (22+) — file matching without the `glob` package.
 - **`node:test`** — the test runner covered in the last module.
 
@@ -70,7 +70,7 @@ console.log('Bytes (UTF-8): ' + Buffer.byteLength(str, 'utf8'));
 <NodeRunner client:visible code={indexDemoCode} node />
 
 <Callout title="Globals vs modules">
-`process` and `Buffer` are true globals — no import needed. `fs`, `path`, `events`, and other built-ins must be imported with `import ... from 'node:fs'` (or the legacy `require('fs')`). The `node:` prefix is the modern convention and makes it immediately clear that the import is a Node built-in.
+`process` and `Buffer` are true globals — no import needed. Legacy built-ins like `fs`, `path`, `events`, and `stream` can be imported with or without the `node:` prefix — `require('fs')` and `require('node:fs')` both work; the prefix is optional but recommended for clarity. Newer built-ins only exist under the prefixed name: `node:test` and `node:sqlite` have no unprefixed form, so `require('test')` throws `MODULE_NOT_FOUND`.
 </Callout>
 
 export const indexQuiz = [

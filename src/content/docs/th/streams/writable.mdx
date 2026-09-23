@@ -38,9 +38,14 @@ dest.end('last line\n', function() {
 หลังจากเรียก `end()` และ flush ข้อมูลทั้งหมดไปยัง underlying system แล้ว Stream จะ emit `finish` นี่คือเวลาที่ถูกต้องเพื่อรู้ว่าการเขียนเสร็จสมบูรณ์จริงๆ:
 
 ```js
+const fs = require('node:fs');
+const dest = fs.createWriteStream('./output.txt');
+
 dest.on('finish', function() {
   console.log('write complete');
 });
+
+dest.end('done');
 ```
 
 ## Event `drain` และการควบคุมการไหล

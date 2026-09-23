@@ -22,7 +22,7 @@ JavaScript `string` ที่มี 4 ตัวอักษรอาจใช้
 
 ## การสร้าง Buffer
 
-วิธีที่แนะนำคือ `Buffer.from()` constructor `new Buffer()` ที่ deprecated ถูกลบออกไปแล้ว อย่าใช้
+วิธีที่แนะนำคือ `Buffer.from()` ส่วน constructor `new Buffer()` เป็น deprecated (`DEP0005`) — ยังใช้งานได้และจะพิมพ์ `DeprecationWarning` ออกมา แต่อย่าใช้ในโค้ดใหม่
 
 export const bufferFromCode = `
 // From a string (UTF-8 by default)
@@ -98,8 +98,8 @@ console.log('buf after mutation:', buf.toString()); // Jello, World!
 
 // Independent copy
 var copy = Buffer.from(buf.slice(7, 12));
-copy[0] = 0x57; // 'W'
-console.log('copy:', copy.toString());   // World with W
+copy[0] = 0x77; // 'w'
+console.log('copy:', copy.toString());   // world
 console.log('buf unchanged:', buf.toString());
 `;
 

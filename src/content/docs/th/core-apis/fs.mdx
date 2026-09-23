@@ -31,9 +31,12 @@ Node มาพร้อม filesystem operations เดียวกันใน 
 ```js
 import fs from 'node:fs';
 
+fs.writeFileSync('./hello.txt', 'Hello from Node.js!');
+
 fs.readFile('./hello.txt', 'utf8', function(err, data) {
   if (err) throw err;
   console.log(data);
+  fs.unlinkSync('./hello.txt');
 });
 ```
 
@@ -119,28 +122,36 @@ demo().catch(console.error);
 API ใหม่สองตัวช่วยปลด dependency เก่า: `fs.glob` (stable ใน Node 22+) แทน package `glob` และ file handle รองรับ `await using` (Node 24+) จึงปิดตัวเองได้:
 
 ```js
+import { writeFileSync, unlinkSync } from 'node:fs';
 import { glob, open } from 'node:fs/promises';
 
-// หาไฟล์โดยไม่ต้องใช้ package `glob`
+writeFileSync('./config.json', JSON.stringify({ port: 3000 })); // demo fixture
+
+// Find files without the `glob` package
 for await (const file of glob('src/**/*.test.js')) {
   console.log(file);
 }
 
-// handle ถูกปิดเมื่อออกจาก block — แม้จะ throw
+// The handle is closed when the block exits — even if it throws
 {
   await using fh = await open('./config.json');
   const text = await fh.readFile('utf8');
   console.log(JSON.parse(text).port);
 }
+
+unlinkSync('./config.json');
 ```
 
 ## Synchronous reads — เฉพาะตอน startup
 
 ```js
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+writeFileSync('./config.json', JSON.stringify({ port: 3000 })); // demo fixture
 
 // Acceptable at startup — process has not yet started accepting requests
 const config = JSON.parse(readFileSync('./config.json', 'utf8'));
+console.log(config.port);
 ```
 
 อย่าเรียก `readFileSync` ใน request handler, route callback หรือ function ใดที่ถูกเรียกหลังจาก server เริ่มทำงาน

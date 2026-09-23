@@ -17,6 +17,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 ```js
 const fs = require('node:fs');
 
+fs.writeFileSync('./input.txt', 'hello world'); // demo fixture
+
 const readable = fs.createReadStream('./input.txt');
 const writable = fs.createWriteStream('./output.txt');
 
@@ -26,7 +28,10 @@ readable.pipe(writable);
 You can chain `.pipe()` through Transform streams to build processing pipelines:
 
 ```js
+const fs = require('node:fs');
 const zlib = require('node:zlib');
+
+fs.writeFileSync('./file.txt', 'hello world'); // demo fixture
 
 fs.createReadStream('./file.txt')
   .pipe(zlib.createGzip())
@@ -38,6 +43,7 @@ fs.createReadStream('./file.txt')
 `.pipe()` has a well-known flaw: **it does not propagate errors**. If any stream in the chain emits an `error` event, the other streams are not automatically destroyed or closed. You end up with open file handles and memory leaks.
 
 ```js
+// @skip-verify illustrative fragment: readable/writable continue the example above
 // Dangerous: error on readable does NOT close writable
 readable.pipe(writable);
 
@@ -78,12 +84,19 @@ Node 15+ also ships `stream/promises` which gives you an `await`-friendly versio
 
 ```js
 const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
 
-await pipeline(
-  fs.createReadStream('./input.txt'),
-  zlib.createGzip(),
-  fs.createWriteStream('./input.txt.gz')
-);
+fs.writeFileSync('./input.txt', 'hello world'); // demo fixture
+
+(async () => {
+  await pipeline(
+    fs.createReadStream('./input.txt'),
+    zlib.createGzip(),
+    fs.createWriteStream('./input.txt.gz')
+  );
+  console.log('done');
+})();
 ```
 
 ## Runnable demo

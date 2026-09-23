@@ -22,7 +22,7 @@ A JavaScript `string` with 4 characters might occupy 4, 8, or even more bytes de
 
 ## Creating a Buffer
 
-The preferred way is `Buffer.from()`. The deprecated `new Buffer()` constructor was removed; never use it.
+The preferred way is `Buffer.from()`. The `new Buffer()` constructor is deprecated (`DEP0005`) — it still works and prints a `DeprecationWarning`, but never use it in new code.
 
 export const bufferFromCode = `
 // From a string (UTF-8 by default)
@@ -98,8 +98,8 @@ console.log('buf after mutation:', buf.toString()); // Jello, World!
 
 // Independent copy
 var copy = Buffer.from(buf.slice(7, 12));
-copy[0] = 0x57; // 'W'
-console.log('copy:', copy.toString());   // World with W
+copy[0] = 0x77; // 'w'
+console.log('copy:', copy.toString());   // world
 console.log('buf unchanged:', buf.toString());
 `;
 

@@ -34,7 +34,7 @@ globals และโมดูลหลักที่โมดูลนี้จ
 
 Node ดูดซับ package ยอดนิยมเข้ามาใน runtime เรื่อย ๆ:
 
-- **`node:sqlite`** — ฐานข้อมูล SQLite แบบฝังตัว (ไม่ต้องใส่ flag ตั้งแต่ 22.13, เป็น release candidate ตั้งแต่ 25.7) ใช้เก็บ state ในเครื่อง, test และ CLI โดยไม่มี dependency
+- **`node:sqlite`** — ฐานข้อมูล SQLite แบบฝังตัว (ไม่ต้องใส่ flag ตั้งแต่ 22.13 แต่ยังเป็น **Experimental** บน Node 24 — import แล้วจะพิมพ์ `ExperimentalWarning`) ใช้เก็บ state ในเครื่อง, test และ CLI โดยไม่มี dependency
 - **`fs.glob`** (22+) — จับคู่ไฟล์โดยไม่ต้องใช้ package `glob`
 - **`node:test`** — test runner ที่จะพูดถึงในโมดูลสุดท้าย
 
@@ -70,7 +70,7 @@ console.log('Bytes (UTF-8): ' + Buffer.byteLength(str, 'utf8'));
 <NodeRunner client:visible code={indexDemoCode} node />
 
 <Callout title="Globals vs modules">
-`process` และ `Buffer` คือ globals แท้จริง — ไม่ต้อง import `fs`, `path`, `events` และ built-ins อื่นๆ ต้อง import ด้วย `import ... from 'node:fs'` (หรือ `require('fs')` แบบเดิม) prefix `node:` คือแบบแผนสมัยใหม่ที่ทำให้เห็นชัดทันทีว่า import นั้นคือ Node built-in
+`process` และ `Buffer` คือ globals แท้จริง — ไม่ต้อง import built-ins แบบเดิมอย่าง `fs`, `path`, `events` และ `stream` import ได้ทั้งแบบมีและไม่มี prefix `node:` — `require('fs')` และ `require('node:fs')` ใช้ได้ทั้งคู่ prefix เป็นทางเลือกแต่แนะนำให้ใส่เพื่อความชัดเจน ส่วน built-ins ใหม่ ๆ มีเฉพาะชื่อแบบมี prefix เท่านั้น: `node:test` และ `node:sqlite` ไม่มีรูปแบบไม่มี prefix ดังนั้น `require('test')` จะ throw `MODULE_NOT_FOUND`
 </Callout>
 
 export const indexQuiz = [

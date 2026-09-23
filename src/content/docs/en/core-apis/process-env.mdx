@@ -76,10 +76,13 @@ node --env-file=.env src/app.js
 ```
 
 ```js
+import { writeFileSync, unlinkSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 
+writeFileSync('.env', 'PORT=4000\n'); // demo fixture
 loadEnvFile();              // defaults to ./.env
 console.log(process.env.PORT);
+unlinkSync('.env');
 ```
 
 <Callout title="Read config from process.env, not hardcoded values">
@@ -111,6 +114,7 @@ console.log('arch:', process.arch);
 - Any non-zero code (typically `1`) means failure.
 
 ```js
+// @expect-throw
 // Example: exit with error if a required env var is missing
 if (!process.env.DATABASE_URL) {
   console.error('ERROR: DATABASE_URL is required');
@@ -118,7 +122,7 @@ if (!process.env.DATABASE_URL) {
 }
 ```
 
-Calling `process.exit()` is a hard stop — `finally` blocks still run, but pending async callbacks do not. For a graceful shutdown, prefer draining the server first (e.g., `server.close()`), then letting the event loop exit naturally.
+Calling `process.exit()` is a hard stop — it skips pending async callbacks **and** any `finally` blocks still on the call stack. Prefer setting `process.exitCode` (e.g. `process.exitCode = 1`) and letting the process exit naturally instead — that gives pending I/O, `finally` blocks, and a graceful shutdown (e.g. `server.close()`) a chance to run.
 
 export const processQuiz = [
   {

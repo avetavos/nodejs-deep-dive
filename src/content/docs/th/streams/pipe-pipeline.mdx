@@ -17,6 +17,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 ```js
 const fs = require('node:fs');
 
+fs.writeFileSync('./input.txt', 'hello world'); // demo fixture
+
 const readable = fs.createReadStream('./input.txt');
 const writable = fs.createWriteStream('./output.txt');
 
@@ -26,7 +28,10 @@ readable.pipe(writable);
 คุณสามารถ chain `.pipe()` ผ่าน Transform Stream เพื่อสร้าง processing pipeline:
 
 ```js
+const fs = require('node:fs');
 const zlib = require('node:zlib');
+
+fs.writeFileSync('./file.txt', 'hello world'); // demo fixture
 
 fs.createReadStream('./file.txt')
   .pipe(zlib.createGzip())
@@ -38,12 +43,13 @@ fs.createReadStream('./file.txt')
 `.pipe()` มีข้อบกพร่องที่ทราบกันดี: **ไม่ส่งต่อ error** ถ้า Stream ใดใน chain emit event `error` Stream อื่นจะไม่ถูกทำลายหรือปิดโดยอัตโนมัติ ส่งผลให้มี file handle ที่ยังเปิดอยู่และ memory leak
 
 ```js
-// อันตราย: error บน readable ไม่ปิด writable
+// @skip-verify illustrative fragment: readable/writable continue the example above
+// Dangerous: error on readable does NOT close writable
 readable.pipe(writable);
 
 readable.on('error', function(err) {
   console.error('read error — but writable is still open!', err.message);
-  writable.destroy();   // ต้อง clean up เอง
+  writable.destroy();   // you must clean up manually
 });
 ```
 
@@ -78,12 +84,19 @@ Node 15+ ยังมี `stream/promises` ที่ให้ใช้กับ 
 
 ```js
 const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
 
-await pipeline(
-  fs.createReadStream('./input.txt'),
-  zlib.createGzip(),
-  fs.createWriteStream('./input.txt.gz')
-);
+fs.writeFileSync('./input.txt', 'hello world'); // demo fixture
+
+(async () => {
+  await pipeline(
+    fs.createReadStream('./input.txt'),
+    zlib.createGzip(),
+    fs.createWriteStream('./input.txt.gz')
+  );
+  console.log('done');
+})();
 ```
 
 ## Demo ที่รันได้
