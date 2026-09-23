@@ -78,6 +78,7 @@ npx eslint --fix src/
 `eslint.config.mjs` พื้นฐานสำหรับ TypeScript:
 
 ```js
+// @skip-verify CLI/flag: needs @eslint/js and typescript-eslint installed as devDependencies — not part of this repo
 // eslint.config.mjs
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
@@ -150,7 +151,7 @@ npx nodemon --exec "npx tsx" src/app.ts
 
 ## Environment Variables และ .env Files
 
-### Native .env loading (stable ตั้งแต่ Node 22)
+### Native .env loading (stable ตั้งแต่ 22.21 / 24.10)
 
 ```bash
 # โหลด .env โดยไม่ต้องใช้ dotenv
@@ -160,12 +161,20 @@ node --env-file=.env src/app.js
 node --env-file=.env --env-file=.env.local src/app.js
 ```
 
+การรองรับ `.env` ผ่านช่วง experimental มาก่อน — เริ่มมาพร้อม warning ตั้งแต่ 20.6 แล้วค่อย stable ที่ **22.21 และ 24.10** (ไม่มี ExperimentalWarning ตั้งแต่เวอร์ชันนั้นเป็นต้นไป)
+
 ภายในโปรแกรม `process.loadEnvFile()` ทำแบบเดียวกันโดยไม่ต้องใส่ flag:
 
 ```js
 import { loadEnvFile } from 'node:process';
+import { writeFileSync, unlinkSync } from 'node:fs';
 
-loadEnvFile('.env'); // เติมค่าลง process.env; throw ถ้าไม่มีไฟล์
+writeFileSync('.env', 'GREETING=hello-from-dotenv\n'); // demo fixture
+
+loadEnvFile('.env'); // populates process.env; throws if the file is missing
+console.log(process.env.GREETING);
+
+unlinkSync('.env');
 ```
 
 ### dotenv — วิธีคลาสสิก
@@ -175,10 +184,11 @@ npm install dotenv
 ```
 
 ```js
-// src/app.js — โหลดที่บรรทัดแรกสุด
+// @skip-verify CLI/flag: needs the dotenv package installed — not part of this repo
+// src/app.js — load at the very top
 import 'dotenv/config';
 
-console.log(process.env.DATABASE_URL); // จาก .env
+console.log(process.env.DATABASE_URL); // from .env
 ```
 
 ### best practices สำหรับ env files

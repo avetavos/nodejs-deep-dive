@@ -13,40 +13,78 @@ Publishing a package makes it available on the npm registry so that anyone (or m
 
 ## Key `package.json` fields for publishing
 
-Three fields control what consumers receive and how they can use your package:
+A package ready to publish typically carries these fields, on top of `name` and `version`:
 
 ```json
 {
-  "name": "my-util-lib",
+  "name": "@myorg/my-util-lib",
   "version": "1.0.0",
   "description": "A small utility library",
-
+  "license": "MIT",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "files": ["dist", "README.md"],
-
   "bin": {
     "my-util": "./dist/cli.js"
   },
-
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.cjs"
     },
     "./helpers": {
+      "types": "./dist/helpers.d.ts",
       "import": "./dist/helpers.mjs",
       "require": "./dist/helpers.cjs"
     }
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
 ```
 
-- **`files`** — an allowlist of paths included in the published tarball. Everything else (source files, test fixtures, config) is excluded. If omitted, npm applies a default set of exclusions.
-- **`bin`** — maps a CLI command name to an entry-point script. npm creates a symlink in `.bin/` so the command is available in the PATH when the package is installed.
-- **`exports`** — declares the public API surface. Any path not listed here is inaccessible to consumers.
+- **`license`** — the SPDX identifier consumers and registry scanners check before depending on your package.
+- **`main`** / **`module`** — legacy CJS entry point, and a bundler-only convention some older tools still look for; both are superseded by `exports` but keep tooling compatible.
+- **`types`** — the root TypeScript declaration file, used by editors and `tsc` when the package has no `exports` map or as a fallback.
+- **`files`** — an allowlist of paths included in the published tarball. Everything else (source files, test fixtures, config) is excluded. If omitted, npm still applies a default set of exclusions (`node_modules`, `.git`, anything matched by `.npmignore` or, absent that, `.gitignore`).
+- **`bin`** — maps a CLI command name to an entry-point script. npm creates a symlink in `.bin/` so the command is available in the PATH when the package is installed, and via `npx`.
+- **`exports`** — declares the public API surface. Any path not listed here is inaccessible to consumers. Inside each conditions object, `"types"` must come first — see [Module Resolution](/nodejs/en/modules-npm/resolution/#exports-condition-order-is-significant) for why key order matters.
 
-## Bumping the version with `npm version`
+## The `files` field
 
-npm follows **semantic versioning** (semver). Use `npm version` to bump and tag in one step:
+```json
+{
+  "files": ["dist", "README.md", "LICENSE"]
+}
+```
+
+`"files"` is an allowlist, not a denylist: only the paths listed here (plus a few files npm always includes, like `package.json` and `README`) end up in the tarball. This keeps source maps, test fixtures, and local config out of what consumers download.
+
+## The `bin` field
+
+```json
+{
+  "bin": {
+    "my-util": "./dist/cli.js"
+  }
+}
+```
+
+When the package is installed (locally or globally), npm creates a `my-util` executable in `node_modules/.bin/` (or the global bin directory) pointing at `./dist/cli.js`. That is what makes the command available to `npx my-util` and to `npm run` scripts in a consuming project without a global install.
+
+## Versioning with Semantic Versioning
+
+npm follows **semantic versioning** (semver): `MAJOR.MINOR.PATCH`.
+
+- **PATCH** — backwards-compatible bug fixes.
+- **MINOR** — backwards-compatible new features.
+- **MAJOR** — breaking changes.
+
+Use `npm version` to bump and tag in one step:
 
 ```bash
 # Patch bump: 1.0.0 → 1.0.1 (bug fixes)
@@ -60,37 +98,6 @@ npm version major
 ```
 
 Each command updates the `"version"` field in `package.json`, commits the change, and creates a signed git tag (e.g. `v1.0.1`). Push the tag with `git push --follow-tags`.
-
-## Publishing with `npm publish`
-
-```bash
-# Publish a public (unscoped) package
-npm publish
-
-# Publish a scoped package as public (scoped packages default to restricted)
-npm publish --access public
-```
-
-npm reads `package.json` to determine the registry target (defaults to `https://registry.npmjs.org`). You must be authenticated (`npm login`) before publishing.
-
-## Scoped packages
-
-A **scoped package** uses the `@scope/name` format and is typically used for organisation namespacing or to group related packages:
-
-```json
-{
-  "name": "@myorg/my-util-lib",
-  "version": "1.0.0"
-}
-```
-
-Scoped packages are **private by default** on the npm registry. To publish them publicly, always pass `--access public`:
-
-```bash
-npm publish --access public
-```
-
-Private scoped packages require a paid npm account or a private registry.
 
 ## Testing before publish with `npm pack`
 
@@ -110,6 +117,47 @@ npm install ../my-util-lib/myorg-my-util-lib-1.0.0.tgz
 <Callout title="Test with npm pack before publishing">
 Running `npm pack` is a free dry run. It respects the `"files"` allowlist, applies `.npmignore`, and produces the exact tarball that `npm publish` would upload. Inspect the output to confirm you are not accidentally shipping source maps, test fixtures, or secret config files — mistakes here are permanent because published versions cannot be overwritten.
 </Callout>
+
+## Publishing with `npm publish`
+
+You must be authenticated (`npm login`) before publishing. npm reads `package.json` to determine the registry target (defaults to `https://registry.npmjs.org`).
+
+```bash
+# Log in to the registry
+npm login
+
+# Publish a public (unscoped) package
+npm publish
+
+# Publish a scoped package as public (scoped packages default to restricted)
+npm publish --access public
+
+# Publish under a dist-tag other than "latest" (e.g. a beta)
+npm publish --tag beta
+```
+
+## Scoped packages
+
+A **scoped package** uses the `@scope/name` format and is typically used for organisation namespacing or to group related packages:
+
+```json
+{
+  "name": "@myorg/my-util-lib",
+  "version": "1.0.0"
+}
+```
+
+Scoped packages are **private by default** on the npm registry. To publish them publicly, always pass `--access public`:
+
+```bash
+# Scaffold a scoped package
+npm init --scope=@myorg
+
+# Publish it publicly
+npm publish --access public
+```
+
+Private scoped packages require a paid npm account or a private registry.
 
 export const publishingQuiz = [
   {

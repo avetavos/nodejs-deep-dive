@@ -25,7 +25,7 @@ import { performance } from 'node:perf_hooks';
 
 const start = performance.now();
 
-// --- งานที่ต้องการวัด ---
+// --- work to measure ---
 let sum = 0;
 for (let i = 0; i < 1_000_000; i++) {
   sum += i;
@@ -44,7 +44,7 @@ console.log('Sum loop took: ' + elapsed.toFixed(3) + ' ms');
 import { performance, PerformanceObserver } from 'node:perf_hooks';
 
 performance.mark('db-start');
-// ... จำลอง DB query ...
+// ... simulate a DB query ...
 await new Promise(function(resolve) { setTimeout(resolve, 50); });
 performance.mark('db-end');
 
@@ -70,11 +70,11 @@ const obs = new PerformanceObserver(function(list) {
 obs.observe({ entryTypes: ['measure'] });
 
 performance.mark('a');
-// ... ทำงาน ...
+// ... work ...
 performance.mark('b');
 performance.measure('my-operation', 'a', 'b');
 
-// disconnect เสมอเมื่อเสร็จแล้ว เพื่อป้องกัน memory leak
+// Always disconnect when done to avoid memory leaks
 obs.disconnect();
 ```
 
@@ -105,31 +105,31 @@ for (const n of iterations) {
 CPU-bound loop ที่ทำงานนานกว่า ~50 ms จะ**บล็อก event loop** — ไม่มี I/O, ไม่มี timer, ไม่มี request อื่นที่ประมวลผลได้ในระหว่างนั้น
 
 ```js
-// แย่ — บล็อก event loop ตลอดเวลา
+// BAD — blocks the event loop for the entire duration
 function blockingWork(data) {
   const result = [];
   for (const item of data) {
-    result.push(expensiveTransform(item)); // แต่ละ call ใช้เวลา ~1ms, 10000 items = บล็อก 10s
+    result.push(expensiveTransform(item)); // each call takes ~1ms, 10000 items = 10s block
   }
   return result;
 }
 
-// ดีกว่า — yield control เป็นระยะด้วย setImmediate
+// BETTER — yield control periodically with setImmediate
 async function nonBlockingWork(data) {
   const result = [];
   for (let i = 0; i < data.length; i++) {
     result.push(expensiveTransform(data[i]));
     if (i % 100 === 0) {
-      // Yield ให้ event loop ทุก 100 items
+      // Yield to the event loop every 100 items
       await new Promise(function(resolve) { setImmediate(resolve); });
     }
   }
   return result;
 }
 
-// ดีที่สุดสำหรับงาน CPU-heavy — offload ไปยัง Worker Thread
+// BEST for CPU-heavy work — offload to a Worker Thread
 import { Worker } from 'node:worker_threads';
-// (ดูเพิ่มเติมในโมดูล Streams & Worker Threads)
+// (see the Streams & Worker Threads module for full coverage)
 ```
 
 ## CPU profiling ด้วย `--prof`

@@ -27,6 +27,7 @@ Node.js supports two module systems that cannot be freely mixed:
 CommonJS was the original Node.js module system. It is still widely used in older packages and tooling.
 
 ```js
+// @skip-verify multi-file: illustrative
 // math.js (CommonJS)
 function add(a, b) { return a + b; }
 function multiply(a, b) { return a * b; }
@@ -47,6 +48,7 @@ console.log(multiply(4, 5));  // 20
 ESM is the official JavaScript module standard. It is now the recommended system for new Node.js projects.
 
 ```js
+// @skip-verify multi-file: illustrative
 // math.mjs (ESM — named exports)
 export function add(a, b) { return a + b; }
 export function multiply(a, b) { return a * b; }
@@ -83,6 +85,7 @@ Two ways to tell Node.js a file uses ESM:
 ## Named vs default exports
 
 ```js
+// @skip-verify multi-file: illustrative
 // Named: export multiple bindings, import with exact names (or rename)
 export const PI = 3.14159;
 export function area(r) { return PI * r * r; }

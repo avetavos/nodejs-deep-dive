@@ -41,6 +41,7 @@ Declarations are **hoisted** — moved to the top of their scope by the engine b
 `var` hoisting initialises the variable as `undefined` immediately. `let`/`const` are hoisted but stay in a **Temporal Dead Zone (TDZ)** — any access before the declaration line throws a `ReferenceError`.
 
 ```js
+// @expect-throw
 console.log(a); // undefined — var is hoisted and initialised
 var a = 5;
 

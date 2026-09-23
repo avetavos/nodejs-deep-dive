@@ -37,6 +37,7 @@ Node resolves specifiers to concrete files using these rules:
 ESM enforces **explicit extensions** in specifiers. Unlike CJS, you cannot omit the extension and rely on Node to guess:
 
 ```js
+// @skip-verify multi-file: illustrative
 // CJS — extension optional (Node tries .js, .json, index.js …)
 const utils = require('./utils');
 
@@ -49,6 +50,7 @@ import utils from './utils.js';
 The two module systems can coexist, but with constraints:
 
 ```js
+// @skip-verify multi-file: illustrative
 // ── CJS file (utils.cjs) ─────────────────────────────────────
 // CJS can require other CJS modules normally.
 const fs = require('fs');
@@ -95,6 +97,20 @@ With this map:
 - `require('my-lib')` resolves to `dist/index.cjs`.
 - `import 'my-lib/utils'` resolves to `dist/utils.mjs`.
 - `import 'my-lib/internal/secret'` throws — `"./internal/secret"` is not exported.
+
+## Exports condition order is significant
+
+Inside a conditions object, Node checks keys **in the order they are written** and uses the **first** one it recognises — it does not pick the "most specific" or "best" match. If two conditions could both apply, whichever is listed first wins, so a careless reordering silently changes what a package resolves to. When a `"types"` condition is present (for TypeScript consumers), it must be listed **first** in every conditions object — Node's own resolver ignores it, but listing it after `"import"`/`"require"` risks a resolver that does not special-case `"types"` matching the wrong file first.
+
+```bash
+# scratch package: exports = { ".": { "import": "./esm.mjs", "default": "./cjs.cjs" } }
+$ node -e "import('order-demo').then(m => console.log(m.via))"
+import-wins
+
+# Reorder to { "default": "./cjs.cjs", "import": "./esm.mjs" } — same import() call:
+$ node -e "import('order-demo').then(m => console.log(m.via))"
+undefined   # "default" matched first, so import() got the CJS build instead
+```
 
 ## Running inline ESM with `--input-type`
 

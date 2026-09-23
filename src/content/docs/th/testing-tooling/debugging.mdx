@@ -72,25 +72,25 @@ function calculateTotal(items) {
 object `console` มีเมธอดมากกว่าที่นักพัฒนาส่วนใหญ่รู้จัก:
 
 ```js
-// แสดงข้อมูลเป็นตาราง — เหมาะมากสำหรับ arrays ของ objects
+// Tabular output — great for arrays of objects
 const users = [
   { name: 'Alice', age: 30, role: 'admin' },
   { name: 'Bob',   age: 25, role: 'user'  },
 ];
 console.table(users);
-// แสดงตาราง ASCII ที่ formatted พร้อมคอลัมน์: name, age, role
+// Prints a formatted ASCII table with columns: name, age, role
 
-// ตรวจสอบเชิงลึก — แสดง non-enumerable properties และ prototype chain
+// Deep inspection — prints non-enumerable properties and prototype chain
 const map = new Map([['key', 'value']]);
 console.dir(map, { depth: 3, colors: true });
 
-// จับเวลา code block
+// Timing a code block
 console.time('database-query');
-// ... รัน operation ที่ใช้เวลานาน ...
+// ... run expensive operation ...
 console.timeEnd('database-query');
-// แสดง: database-query: 42.183ms
+// Prints: database-query: 42.183ms
 
-// นับจำนวนครั้งที่ถูกเรียก
+// Count invocations
 function hit() {
   console.count('hit');
 }
@@ -98,14 +98,14 @@ hit(); // hit: 1
 hit(); // hit: 2
 hit(); // hit: 3
 
-// จัดกลุ่ม output ที่เกี่ยวข้องกัน
+// Group related output
 console.group('User details');
 console.log('name: Alice');
 console.log('role: admin');
 console.groupEnd();
 
-// Assertion แบบมีเงื่อนไข
-console.assert(1 === 2, 'Math is broken'); // แสดง assertion error
+// Conditional breakpoint-style assertion
+console.assert(1 === 2, 'Math is broken'); // prints assertion error
 console.assert(1 === 1, 'This never prints');
 ```
 

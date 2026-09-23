@@ -21,17 +21,17 @@ JavaScript มีค่าสองประเภท:
 - Plain objects `{}`, arrays `[]`, functions, `Map`, `Set`, `Date` เป็นต้น
 
 ```js
-// Primitives: แต่ละตัวแปรถือสำเนาอิสระ
+// Primitives: each variable holds an independent copy
 let a = 42;
 let b = a;
 b = 99;
-console.log(a); // 42 — ไม่เปลี่ยน
+console.log(a); // 42 — unchanged
 
-// Objects: ทั้งสองตัวแปรชี้ไปยัง object เดียวกัน
+// Objects: both variables point to the same object
 const x = { count: 0 };
 const y = x;
 y.count = 5;
-console.log(x.count); // 5 — object เดียวกัน
+console.log(x.count); // 5 — same object
 ```
 
 ## typeof
@@ -43,9 +43,9 @@ typeof 42            // 'number'
 typeof 'hello'       // 'string'
 typeof true          // 'boolean'
 typeof undefined     // 'undefined'
-typeof null          // 'object'  ← bug ทางประวัติศาสตร์ แก้ไขไม่ได้
+typeof null          // 'object'  ← historical bug, not fixable
 typeof {}            // 'object'
-typeof []            // 'object'  ← arrays เป็น objects
+typeof []            // 'object'  ← arrays are objects
 typeof function(){}  // 'function'
 typeof Symbol()      // 'symbol'
 typeof 9007n         // 'bigint'
@@ -58,16 +58,16 @@ typeof 9007n         // 'bigint'
 `==` ทำ **type coercion** ก่อนเปรียบเทียบ ส่วน `===` ไม่ทำ — ตรวจสอบทั้งค่าและ type
 
 ```js
-0 == false     // true  — false coerces เป็น 0
+0 == false     // true  — false coerces to 0
 0 === false    // false — number vs boolean
 
-'' == false    // true  — ทั้งคู่ coerces เป็น 0
+'' == false    // true  — both coerce to 0
 '' === false   // false
 
-null == undefined  // true  — กฎพิเศษ
+null == undefined  // true  — special rule
 null === undefined // false
 
-1 == '1'   // true  — '1' coerces เป็น 1
+1 == '1'   // true  — '1' coerces to 1
 1 === '1'  // false
 ```
 
@@ -81,21 +81,21 @@ null === undefined // false
 ทุกอย่างอื่นเป็น truthy — รวมถึง `[]`, `{}`, `'0'` และ `'false'`
 
 ```js
-if ([]) console.log('empty array is truthy');   // แสดงผล
-if ({}) console.log('empty object is truthy');  // แสดงผล
-if (0)  console.log('zero is truthy');          // ไม่แสดงผล
+if ([]) console.log('empty array is truthy');   // prints
+if ({}) console.log('empty object is truthy');  // prints
+if (0)  console.log('zero is truthy');          // does NOT print
 ```
 
 ## Demo Coercion ที่รันได้
 
 ```js
-// สังเกต coercion ที่น่าแปลกใจ
+// Spot the coercion surprises
 console.log(0 == false);      // true
 console.log(0 === false);     // false
 console.log(null == undefined); // true
 console.log(null === undefined); // false
-console.log([] == false);     // true  — [] coerces เป็น '' coerces เป็น 0
-console.log(Boolean([]));     // true  — [] เป็น truthy!
+console.log([] == false);     // true  — [] coerces to '' coerces to 0
+console.log(Boolean([]));     // true  — [] is truthy!
 console.log(typeof null);     // object
 ```
 

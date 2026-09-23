@@ -37,8 +37,23 @@ const server = http.createServer(function(req, res) {
   res.end('Hello from Node.js!\\n');
 });
 
-server.listen(3000, function() {
-  console.log('Server listening on http://localhost:3000');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('Server listening on http://localhost:' + port);
+
+  // Request itself once, print the response, then shut down
+  fetch('http://localhost:' + port)
+    .then(function(res) { return res.text(); })
+    .then(function(text) {
+      console.log(text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 

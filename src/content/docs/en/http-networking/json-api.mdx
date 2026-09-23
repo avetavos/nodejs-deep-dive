@@ -113,17 +113,31 @@ const server = http.createServer(async function(req, res) {
   sendJson(res, 404, { error: 'Route not found' });
 });
 
-server.listen(3000, function() {
-  console.log('JSON API at http://localhost:3000');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('JSON API at http://localhost:' + port);
   console.log('GET  /items');
   console.log('POST /items  { "name": "..." }');
   console.log('GET  /items/1');
+
+  fetch('http://localhost:' + port + '/items')
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      console.log(data);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 
 <NodeRunner client:visible code={jsonApiCode} node />
 
-Open in StackBlitz to test the API with the built-in HTTP client or a tool like `curl`:
+Open in StackBlitz to test the API further with the built-in HTTP client or a tool like `curl` — swap `3000` for the port printed in the console:
 
 ```bash
 curl http://localhost:3000/items

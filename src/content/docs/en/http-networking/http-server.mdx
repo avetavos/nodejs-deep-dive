@@ -55,14 +55,28 @@ const server = http.createServer(function(req, res) {
   res.end('<h1>Hello from Node.js!</h1><p>Status: 200 OK</p>');
 });
 
-server.listen(3000, function() {
-  console.log('Server running at http://localhost:3000');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('Server running at http://localhost:' + port);
+
+  fetch('http://localhost:' + port)
+    .then(function(res) { return res.text(); })
+    .then(function(html) {
+      console.log(html);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 
 <NodeRunner client:visible code={httpServerCode} node />
 
-Open in StackBlitz, then visit `http://localhost:3000` in the preview tab to see the rendered HTML response with correct headers.
+Open in StackBlitz to see it run — the server requests itself once, prints the rendered HTML response with correct headers, then shuts down.
 
 ## Responding with different status codes
 
@@ -82,9 +96,23 @@ const server = http.createServer(function(req, res) {
   }
 });
 
-server.listen(3000, function() {
-  console.log('Server running at http://localhost:3000');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('Server running at http://localhost:' + port);
   console.log('Try: /, /created, /anything-else');
+
+  fetch('http://localhost:' + port + '/created')
+    .then(function(res) { return res.text().then(function(text) { return { status: res.status, text: text }; }); })
+    .then(function(result) {
+      console.log(result.status, result.text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 

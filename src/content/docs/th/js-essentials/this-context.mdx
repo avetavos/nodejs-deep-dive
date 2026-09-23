@@ -17,7 +17,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 ## this ในรูปแบบการเรียกต่างๆ
 
 ```js
-// 1. Method call — this คือ object ก่อนจุด
+// 1. Method call — this is the object before the dot
 const user = {
   name: 'Alice',
   greet: function() {
@@ -26,12 +26,12 @@ const user = {
 };
 console.log(user.greet()); // 'Hi, I am Alice'
 
-// 2. Plain function call — this คือ undefined (strict mode) หรือ globalThis
+// 2. Plain function call — this is undefined (strict mode) or globalThis
 function whoAmI() {
-  return typeof this; // 'undefined' ใน strict mode
+  return typeof this; // 'undefined' in strict mode
 }
 
-// 3. Constructor call — this คือ object ที่สร้างใหม่
+// 3. Constructor call — this is the newly created object
 function Person(name) {
   this.name = name;
 }
@@ -47,9 +47,9 @@ console.log(p.name); // 'Bob'
 const timer = {
   label: 'tick',
   start: function() {
-    // หลังจาก 0 ms fn ถูกเรียกเป็น plain function — this.label เป็น undefined
+    // After 0 ms, fn is called as a plain function — this.label is undefined
     setTimeout(function() {
-      console.log(this.label); // undefined — 'this' ไม่ใช่ timer
+      console.log(this.label); // undefined — 'this' is not timer
     }, 0);
   },
 };
@@ -66,13 +66,13 @@ function introduce(greeting, punctuation) {
 
 const obj = { name: 'Carol' };
 
-// call — ส่ง arguments แยกกัน
+// call — pass arguments individually
 introduce.call(obj, 'Hello', '!');     // 'Hello, I am Carol!'
 
-// apply — ส่ง arguments เป็น array
+// apply — pass arguments as an array
 introduce.apply(obj, ['Hey', '.']);    // 'Hey, I am Carol.'
 
-// bind — return ฟังก์ชันใหม่ที่ this ถูก bind อย่างถาวร
+// bind — returns a NEW function with this permanently bound
 const boundIntroduce = introduce.bind(obj);
 boundIntroduce('Hi', '?');            // 'Hi, I am Carol?'
 ```
@@ -85,9 +85,9 @@ Arrow functions **ไม่มี `this` ของตัวเอง** แต่
 const timer2 = {
   label: 'tick',
   start: function() {
-    // Arrow function inherit 'this' จาก start() — ซึ่งคือ timer2
+    // Arrow function inherits 'this' from start() — which is timer2
     setTimeout(() => {
-      console.log(this.label); // 'tick' — bound อย่างถูกต้อง
+      console.log(this.label); // 'tick' — correctly bound
     }, 0);
   },
 };
@@ -95,12 +95,15 @@ const timer2 = {
 
 ทำให้ arrow functions เป็นตัวเลือกที่เหมาะสมสำหรับ callbacks ภายใน methods
 
+`<script>` ธรรมดารันแบบ **sloppy mode** โดย default ซึ่งการเรียก `this` ที่ detached จะ fallback ไปที่ global object เงียบๆ แทนที่จะ throw — demo ด้านล่างเปิด **strict mode** อย่างชัดเจน เพื่อให้การเรียกแบบ detached fail เหมือนที่จะเกิดขึ้นจริงใน ES module หรือ class ซึ่งทั้งคู่เป็น strict mode โดยอัตโนมัติ
+
 ## Demo ที่รันได้
 
-export const thisCode = `
+export const thisCode = `// @browser
+'use strict';
 const counter = {
   count: 0,
-  // Regular function — 'this' คือ counter เมื่อเรียกเป็น counter.method()
+  // Regular function — 'this' is counter when called as counter.method()
   incrementRegular: function() {
     this.count += 1;
     return this.count;
@@ -110,15 +113,15 @@ const counter = {
 console.log('after increment:', counter.incrementRegular()); // 1
 console.log('after increment:', counter.incrementRegular()); // 2
 
-// แยก method ออก — 'this' หาย
+// Detach the method — 'this' is lost
 const detached = counter.incrementRegular;
 try {
-  detached(); // TypeError ใน strict mode
+  detached(); // TypeError in strict mode
 } catch (e) {
   console.log('detached call error:', e.message);
 }
 
-// แก้ด้วย bind
+// Fix with bind
 const bound = counter.incrementRegular.bind(counter);
 console.log('bound call:', bound()); // 3
 `;

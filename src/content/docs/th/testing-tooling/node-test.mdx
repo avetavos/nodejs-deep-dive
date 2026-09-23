@@ -34,11 +34,13 @@ test('add returns the correct sum', function() {
 node --test math.test.js
 ```
 
-หรือรันไฟล์ `*.test.js` ทั้งหมดแบบ recursive:
+หรือรันทั้ง suite ด้วยการค้นหาไฟล์แบบ default:
 
 ```bash
 node --test
 ```
+
+เมื่อไม่ระบุ path `node --test` จะค้นหาแบบ recursive ให้ทั้ง `*.test.{js,mjs,cjs}`, `*-test.*`, `*_test.*`, และ `test-*.*` — **รวมถึงทุกไฟล์ที่อยู่ในไดเรกทอรีชื่อ `test/`** ไม่ว่าไฟล์นั้นจะชื่ออะไรก็ตาม
 
 ## describe / it — การจัดกลุ่มการทดสอบ
 
@@ -83,15 +85,16 @@ test('fetch-like async test', async function() {
 ## คู่มือ node:assert/strict
 
 ```js
+// @skip-verify placeholder identifiers (actual/expected/obj1/obj2) — signature reference, not runnable
 import assert from 'node:assert/strict';
 
 assert.equal(actual, expected);          // ==  (strict: ===)
 assert.notEqual(actual, expected);       // !==
 assert.deepEqual(obj1, obj2);            // deep structural equality
 assert.notDeepEqual(obj1, obj2);
-assert.throws(fn, /pattern/);            // fn ต้อง throw error ที่ตรงกัน
-assert.rejects(asyncFn, /pattern/);      // async fn ต้อง reject
-assert.ok(value);                        // ตรวจสอบ truthy
+assert.throws(fn, /pattern/);            // fn must throw matching error
+assert.rejects(asyncFn, /pattern/);      // async fn must reject
+assert.ok(value);                        // truthy check
 ```
 
 ควรใช้ `node:assert/strict` เสมอแทนที่จะใช้ `node:assert` เพราะ strict variant ใช้ `===` สำหรับการเปรียบเทียบ scalar และหลีกเลี่ยงความผิดพลาดจาก type coercion
@@ -135,7 +138,7 @@ test('async: resolves to correct value', async function() {
 | `mock.fn()`, `mock.method()`, `mock.timers`, `mock.module()` | Stable |
 | Snapshot testing — `t.assert.snapshot(value)` | Stable ตั้งแต่ 23.4 |
 | Code coverage | Experimental — `--experimental-test-coverage` |
-| `--watch` สำหรับ test | Experimental |
+| `--watch` สำหรับ test | Stable — ไม่ต้องใช้ flag และไม่มี warning |
 | Test tags — `--experimental-test-tag-filter` | Early development (26.2+) |
 
 fake timers ช่วยให้ทดสอบ logic ของ retry และ timeout ได้โดยไม่ต้องรอจริง:
@@ -144,12 +147,24 @@ fake timers ช่วยให้ทดสอบ logic ของ retry และ
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
+// your helper — note the setTimeout is scheduled inside a .then(), not synchronously
+function retry(fn, options) {
+  return fn().catch(function(err) {
+    if (options.attempts <= 1) throw err;
+    return new Promise(function(resolve) { setTimeout(resolve, options.delayMs); })
+      .then(function() { return retry(fn, { attempts: options.attempts - 1, delayMs: options.delayMs }); });
+  });
+}
+
 test('retries call the fetcher twice', async function(t) {
   const fetcher = mock.fn(async function() { throw new Error('flaky'); });
   mock.timers.enable({ apis: ['setTimeout'] });   // fake setTimeout
 
-  const pending = retry(fetcher, { attempts: 2, delayMs: 1000 }); // helper ของคุณเอง
-  mock.timers.tick(1000);                         // เดินนาฬิกาปลอมทันที
+  const pending = retry(fetcher, { attempts: 2, delayMs: 1000 });
+
+  await null;                                     // let the pending .then() run and register the timer
+  mock.timers.tick(1000);                         // advance the fake clock instantly
+
   await assert.rejects(pending, /flaky/);
   assert.equal(fetcher.mock.callCount(), 2);
 
@@ -157,13 +172,15 @@ test('retries call the fetcher twice', async function(t) {
 });
 ```
 
+`setTimeout` ด้านบนถูกเรียกอยู่ภายใน callback ของ `.then()` ซึ่งรันเป็น microtask เท่านั้น — ณ ตอนที่บรรทัดถัดไปเรียก `tick()` แบบ synchronous, timer ตัวนี้ยังไม่ถูกลงทะเบียนเลย `await null` ช่วยให้ event loop ไป drain microtask ที่ค้างอยู่นั้นก่อน ทำให้ timer ถูกตั้งก่อนที่ `tick()` จะมาหา ถ้าข้ามขั้นตอนนี้ไป การทดสอบนี้จะ**ค้างตลอดไป** เพราะ `node:test` ไม่มี timeout ต่อ test เป็นค่าเริ่มต้น ควรใส่ `--test-timeout=<ms>` เสมอ (เช่น `node --test --test-timeout=2000`) เพื่อให้ความผิดพลาดแบบนี้ล้มเหลวเร็วแทนที่จะทำให้ CI ค้าง
+
 ## ฟีเจอร์เพิ่มเติม
 
 ```bash
 # รันเฉพาะ test ที่ตรงกับ pattern
 node --test --test-name-pattern "Array"
 
-# Watch mode — รัน test ใหม่เมื่อไฟล์เปลี่ยน (ยัง experimental ใน Node 26)
+# Watch mode — รัน test ใหม่เมื่อไฟล์เปลี่ยน (stable ไม่มี warning)
 node --test --watch
 
 # Code coverage — flag ยังเป็น --experimental-test-coverage ใน Node 24 / 26

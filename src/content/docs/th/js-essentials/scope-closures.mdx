@@ -25,11 +25,11 @@ JavaScript มี keyword การประกาศสามแบบ แต�
 ```js
 function example() {
   if (true) {
-    var x = 1;   // function-scoped — รั่วออกนอก if
-    let y = 2;   // block-scoped — อยู่แค่ใน if
+    var x = 1;   // function-scoped — leaks outside the if
+    let y = 2;   // block-scoped — stays inside the if
     const z = 3; // block-scoped
   }
-  console.log(x); // 1  — มองเห็นที่นี่
+  console.log(x); // 1  — visible here
   console.log(y); // ReferenceError: y is not defined
 }
 ```
@@ -41,10 +41,11 @@ function example() {
 การ hoist ของ `var` จะ initialise ตัวแปรเป็น `undefined` ทันที ส่วน `let`/`const` ถูก hoist แต่อยู่ใน **Temporal Dead Zone (TDZ)** — การเข้าถึงก่อนบรรทัดที่ประกาศจะ throw `ReferenceError`
 
 ```js
-console.log(a); // undefined — var ถูก hoist และ initialised
+// @expect-throw
+console.log(a); // undefined — var is hoisted and initialised
 var a = 5;
 
-console.log(b); // ReferenceError — let อยู่ใน TDZ
+console.log(b); // ReferenceError — let is in TDZ
 let b = 10;
 ```
 
@@ -61,7 +62,7 @@ function outer() {
   const level = 'INFO';
 
   function inner(msg) {
-    // inner อ่านได้ทั้ง prefix (module scope) และ level (outer scope)
+    // inner can read both prefix (module scope) and level (outer scope)
     console.log('[' + prefix + ':' + level + '] ' + msg);
   }
 

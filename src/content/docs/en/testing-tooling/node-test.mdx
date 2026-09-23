@@ -34,11 +34,13 @@ Run it from the terminal:
 node --test math.test.js
 ```
 
-Or run all `*.test.js` files recursively:
+Or run the whole suite with default discovery:
 
 ```bash
 node --test
 ```
+
+Without a path, `node --test` recursively discovers `*.test.{js,mjs,cjs}`, `*-test.*`, `*_test.*`, and `test-*.*` — **plus every file inside any directory named `test/`**, regardless of that file's own name.
 
 ## describe / it — grouping related tests
 
@@ -83,6 +85,7 @@ test('fetch-like async test', async function() {
 ## node:assert/strict cheat sheet
 
 ```js
+// @skip-verify placeholder identifiers (actual/expected/obj1/obj2) — signature reference, not runnable
 import assert from 'node:assert/strict';
 
 assert.equal(actual, expected);          // ==  (strict: ===)
@@ -135,7 +138,7 @@ You do not need Jest, Mocha, or Vitest to write tests in Node.js. `node:test` + 
 | `mock.fn()`, `mock.method()`, `mock.timers`, `mock.module()` | Stable |
 | Snapshot testing — `t.assert.snapshot(value)` | Stable since 23.4 |
 | Code coverage | Experimental — `--experimental-test-coverage` |
-| `--watch` for tests | Experimental |
+| `--watch` for tests | Stable — no flag or warning |
 | Test tags — `--experimental-test-tag-filter` | Early development (26.2+) |
 
 Fake timers let you test retry and timeout logic without waiting:
@@ -144,12 +147,24 @@ Fake timers let you test retry and timeout logic without waiting:
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
+// your helper — note the setTimeout is scheduled inside a .then(), not synchronously
+function retry(fn, options) {
+  return fn().catch(function(err) {
+    if (options.attempts <= 1) throw err;
+    return new Promise(function(resolve) { setTimeout(resolve, options.delayMs); })
+      .then(function() { return retry(fn, { attempts: options.attempts - 1, delayMs: options.delayMs }); });
+  });
+}
+
 test('retries call the fetcher twice', async function(t) {
   const fetcher = mock.fn(async function() { throw new Error('flaky'); });
   mock.timers.enable({ apis: ['setTimeout'] });   // fake setTimeout
 
-  const pending = retry(fetcher, { attempts: 2, delayMs: 1000 }); // your helper
+  const pending = retry(fetcher, { attempts: 2, delayMs: 1000 });
+
+  await null;                                     // let the pending .then() run and register the timer
   mock.timers.tick(1000);                         // advance the fake clock instantly
+
   await assert.rejects(pending, /flaky/);
   assert.equal(fetcher.mock.callCount(), 2);
 
@@ -157,13 +172,15 @@ test('retries call the fetcher twice', async function(t) {
 });
 ```
 
+The `setTimeout` call above happens inside a `.then()` callback, which only runs as a microtask — it has not been registered yet at the moment `tick()` is called synchronously on the next line. `await null` yields once so that pending microtask runs and schedules the timer before `tick()` looks for it; skip it and this test **hangs forever**, because `node:test` has no default per-test timeout. Always pass `--test-timeout=<ms>` (e.g. `node --test --test-timeout=2000`) so a mistake like this fails fast instead of hanging CI.
+
 ## Beyond the basics
 
 ```bash
 # Only run tests matching a pattern
 node --test --test-name-pattern "Array"
 
-# Watch mode — re-runs on file change (still experimental in Node 26)
+# Watch mode — re-runs on file change (stable, no warning)
 node --test --watch
 
 # Code coverage — the flag is still --experimental-test-coverage in Node 24 / 26

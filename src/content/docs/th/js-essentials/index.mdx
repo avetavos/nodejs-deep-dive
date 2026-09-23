@@ -63,15 +63,16 @@ Node อัปเกรด V8 ทุก major release ภาษาจึงโ�
 - **Node 26** — API วันเวลา **Temporal** เปิดเป็นค่าเริ่มต้น พร้อม `Map.prototype.getOrInsert()` และ `Iterator.concat()`
 
 ```js
-// Node 26: Temporal แทนการคำนวณ Date ที่ผิดพลาดง่าย
+// @skip-verify Node 26-only (Temporal) + illustrative openConnection()
+// Node 26: Temporal replaces error-prone Date arithmetic
 const due = Temporal.Now.plainDateISO().add({ days: 30 });
-console.log(due.toString()); // เช่น 2026-10-12
+console.log(due.toString()); // e.g. 2026-10-12
 
-// Node 24: using — resource ถูก dispose เมื่อออกจาก block
+// Node 24: using — the resource is disposed when the block exits
 {
-  using conn = openConnection();   // object นี้มีเมธอด [Symbol.dispose]()
+  using conn = openConnection();   // the object has a [Symbol.dispose]() method
   conn.query('SELECT 1');
-}                                   // conn[Symbol.dispose]() ทำงานตรงนี้ แม้จะ throw
+}                                   // conn[Symbol.dispose]() runs here, even on throw
 ```
 
 <Callout title="Modern JS throughout">

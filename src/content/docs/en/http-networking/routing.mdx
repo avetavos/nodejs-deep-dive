@@ -45,8 +45,22 @@ const server = http.createServer(function(req, res) {
   }
 });
 
-server.listen(3000, function() {
-  console.log('Router running at http://localhost:3000');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('Router running at http://localhost:' + port);
+
+  fetch('http://localhost:' + port + '/about')
+    .then(function(res) { return res.text(); })
+    .then(function(text) {
+      console.log(text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 
@@ -75,8 +89,22 @@ const server = http.createServer(function(req, res) {
   }
 });
 
-server.listen(3000, function() {
-  console.log('Try: http://localhost:3000/search?q=nodejs');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('Try: http://localhost:' + port + '/search?q=nodejs');
+
+  fetch('http://localhost:' + port + '/search?q=nodejs')
+    .then(function(res) { return res.text(); })
+    .then(function(text) {
+      console.log(text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 
@@ -130,8 +158,22 @@ const server = http.createServer(function(req, res) {
   }
 });
 
-server.listen(3000, function() {
-  console.log('Tiny router running at http://localhost:3000');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('Tiny router running at http://localhost:' + port);
+
+  fetch('http://localhost:' + port + '/users')
+    .then(function(res) { return res.text(); })
+    .then(function(text) {
+      console.log(text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 

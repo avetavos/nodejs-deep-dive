@@ -63,6 +63,7 @@ Node upgrades V8 with every major release, so the language keeps growing:
 - **Node 26** — the **Temporal** date/time API is enabled by default, plus `Map.prototype.getOrInsert()` and `Iterator.concat()`.
 
 ```js
+// @skip-verify Node 26-only (Temporal) + illustrative openConnection()
 // Node 26: Temporal replaces error-prone Date arithmetic
 const due = Temporal.Now.plainDateISO().add({ days: 30 });
 console.log(due.toString()); // e.g. 2026-10-12

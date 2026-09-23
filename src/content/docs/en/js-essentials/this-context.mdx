@@ -95,9 +95,12 @@ const timer2 = {
 
 This makes arrow functions the natural choice for callbacks inside methods.
 
+A plain `<script>` runs in **sloppy mode** by default, where a detached `this` call silently falls back to the global object instead of throwing — the demo below opts into **strict mode** explicitly so the detached call fails the way it would inside an ES module or a class, both of which are strict mode automatically.
+
 ## Runnable demo
 
-export const thisCode = `
+export const thisCode = `// @browser
+'use strict';
 const counter = {
   count: 0,
   // Regular function — 'this' is counter when called as counter.method()

@@ -45,8 +45,22 @@ const server = http.createServer(function(req, res) {
   }
 });
 
-server.listen(3000, function() {
-  console.log('Router running at http://localhost:3000');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('Router running at http://localhost:' + port);
+
+  fetch('http://localhost:' + port + '/about')
+    .then(function(res) { return res.text(); })
+    .then(function(text) {
+      console.log(text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 
@@ -60,9 +74,9 @@ export const urlParsingCode = `
 const http = require('node:http');
 
 const server = http.createServer(function(req, res) {
-  // ใช้ global URL class เพื่อ parse request URL
+  // Use the global URL class to parse the request URL
   const parsed = new URL(req.url, 'http://localhost:3000');
-  const pathname = parsed.pathname;   // เช่น '/search'
+  const pathname = parsed.pathname;   // e.g. '/search'
   const query = parsed.searchParams;  // URLSearchParams
 
   if (req.method === 'GET' && pathname === '/search') {
@@ -75,8 +89,22 @@ const server = http.createServer(function(req, res) {
   }
 });
 
-server.listen(3000, function() {
-  console.log('Try: http://localhost:3000/search?q=nodejs');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('Try: http://localhost:' + port + '/search?q=nodejs');
+
+  fetch('http://localhost:' + port + '/search?q=nodejs')
+    .then(function(res) { return res.text(); })
+    .then(function(text) {
+      console.log(text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 
@@ -102,7 +130,7 @@ console.log(userRoute.test('http://localhost:3000/posts/1'));   // false
 export const tinyRouterCode = `
 const http = require('node:http');
 
-// Route map: key คือ "METHOD /path"
+// Route map: keys are "METHOD /path"
 const routes = {
   'GET /': function(req, res) {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -130,8 +158,22 @@ const server = http.createServer(function(req, res) {
   }
 });
 
-server.listen(3000, function() {
-  console.log('Tiny router running at http://localhost:3000');
+server.listen(0, function() {
+  var port = server.address().port;
+  console.log('Tiny router running at http://localhost:' + port);
+
+  fetch('http://localhost:' + port + '/users')
+    .then(function(res) { return res.text(); })
+    .then(function(text) {
+      console.log(text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function(err) {
+      console.error(err);
+      server.close();
+      server.closeAllConnections();
+    });
 });
 `;
 

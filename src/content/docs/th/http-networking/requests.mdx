@@ -15,7 +15,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 ตั้งแต่ Node.js 18 เป็นต้นมา `fetch` API มีให้ใช้ globally — ไม่ต้อง import ไม่ต้อง `npm install` เป็น Web Fetch API แบบเดียวกับที่ใช้ใน browser:
 
 ```js
-// ไม่ต้อง import ใน Node 18+
+// @skip-verify network: illustrative — api.example.com is not a real API
+// No import needed in Node 18+
 const response = await fetch('https://api.example.com/data');
 const data = await response.json();
 ```
@@ -29,33 +30,61 @@ const data = await response.json();
 export const fetchJsonCode = `
 const http = require('node:http');
 
-// demo fetch ภายใน Node server
-const server = http.createServer(async function(req, res) {
-  if (req.method === 'GET' && req.url === '/post') {
-    try {
-      // built-in fetch — ไม่ต้อง npm package (Node 18+)
-      const response = await fetch('https://jsonplaceholder.typicode.com/posts/1');
-
-      if (!response.ok) {
-        throw new Error('API error: ' + response.status);
-      }
-
-      const post = await response.json();
-
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ title: post.title, userId: post.userId }));
-    } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
-    }
-  } else {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('Try GET /post');
-  }
+// A tiny stand-in for a real upstream API — keeps this demo self-contained and offline
+const upstream = http.createServer(function(req, res) {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ id: 1, title: 'Node.js internals', userId: 7 }));
 });
 
-server.listen(3000, function() {
-  console.log('Server at http://localhost:3000 - try /post');
+upstream.listen(0, function() {
+  const upstreamPort = upstream.address().port;
+
+  // Demonstrate fetch inside a Node server
+  const server = http.createServer(async function(req, res) {
+    if (req.method === 'GET' && req.url === '/post') {
+      try {
+        // Built-in fetch — no npm package needed (Node 18+)
+        const response = await fetch('http://localhost:' + upstreamPort + '/posts/1');
+
+        if (!response.ok) {
+          throw new Error('API error: ' + response.status);
+        }
+
+        const post = await response.json();
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ title: post.title, userId: post.userId }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Try GET /post');
+    }
+  });
+
+  server.listen(0, function() {
+    const port = server.address().port;
+    console.log('Server at http://localhost:' + port + ' - try /post');
+
+    fetch('http://localhost:' + port + '/post')
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        console.log(data);
+        server.close();
+        server.closeAllConnections();
+        upstream.close();
+        upstream.closeAllConnections();
+      })
+      .catch(function(err) {
+        console.error(err);
+        server.close();
+        server.closeAllConnections();
+        upstream.close();
+        upstream.closeAllConnections();
+      });
+  });
 });
 `;
 
@@ -68,34 +97,62 @@ server.listen(3000, function() {
 export const fetchErrorCode = `
 const http = require('node:http');
 
-const server = http.createServer(async function(req, res) {
-  try {
-    // Fetch resource ที่ไม่มีอยู่ — จะได้รับ 404
-    const response = await fetch('https://jsonplaceholder.typicode.com/posts/99999');
-
-    // fetch throw เฉพาะ network error เท่านั้น ไม่ใช่ HTTP error
-    if (!response.ok) {
-      res.writeHead(response.status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        error: 'Upstream error',
-        status: response.status,
-        statusText: response.statusText
-      }));
-      return;
-    }
-
-    const data = await response.json();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(data));
-  } catch (networkErr) {
-    // throw เฉพาะ DNS failure, connection refused เป็นต้น
-    res.writeHead(503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Network error: ' + networkErr.message }));
-  }
+// A tiny stand-in upstream that always returns 404 — keeps this demo self-contained and offline
+const upstream = http.createServer(function(req, res) {
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'Not found' }));
 });
 
-server.listen(3000, function() {
-  console.log('Error-handling demo at http://localhost:3000');
+upstream.listen(0, function() {
+  const upstreamPort = upstream.address().port;
+
+  const server = http.createServer(async function(req, res) {
+    try {
+      // Fetch a non-existent resource — returns 404
+      const response = await fetch('http://localhost:' + upstreamPort + '/posts/99999');
+
+      // fetch only throws for network errors, not HTTP errors
+      if (!response.ok) {
+        res.writeHead(response.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'Upstream error',
+          status: response.status,
+          statusText: response.statusText
+        }));
+        return;
+      }
+
+      const data = await response.json();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+    } catch (networkErr) {
+      // Only thrown on DNS failure, connection refused, etc.
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Network error: ' + networkErr.message }));
+    }
+  });
+
+  server.listen(0, function() {
+    const port = server.address().port;
+    console.log('Error-handling demo at http://localhost:' + port);
+
+    fetch('http://localhost:' + port)
+      .then(function(res) { return res.json().then(function(data) { return { status: res.status, data: data }; }); })
+      .then(function(result) {
+        console.log(result.status, result.data);
+        server.close();
+        server.closeAllConnections();
+        upstream.close();
+        upstream.closeAllConnections();
+      })
+      .catch(function(err) {
+        console.error(err);
+        server.close();
+        server.closeAllConnections();
+        upstream.close();
+        upstream.closeAllConnections();
+      });
+  });
 });
 `;
 
@@ -106,7 +163,8 @@ server.listen(3000, function() {
 ก่อน `fetch` การทำ outbound HTTP request ใน Node.js ใช้ `http.request()` จาก module `node:http` ที่เป็น lower-level API ใช้ stream คุณอาจพบใน codebase เก่า:
 
 ```js
-// pattern เก่า — เก็บ chunk ด้วยตนเอง
+// @skip-verify network: illustrative legacy pattern against a public host
+// Older pattern — collecting chunks manually
 const http = require('node:http');
 
 http.get('http://example.com', function(res) {
@@ -123,6 +181,7 @@ http.get('http://example.com', function(res) {
 ตั้งแต่ Node 22 client `WebSocket` แบบเดียวกับใน browser ใช้ได้โดยไม่ต้อง import โค้ดฝั่ง client ชุดเดียวจึงรันได้ทั้งใน browser และบน server:
 
 ```js
+// @skip-verify network: illustrative — connects to a public WebSocket echo host
 const ws = new WebSocket('wss://echo.websocket.org');
 ws.addEventListener('open', function() { ws.send('hello'); });
 ws.addEventListener('message', function(event) {

@@ -37,6 +37,7 @@ Node ค้นหา specifier ไปยังไฟล์จริงโดย�
 ESM บังคับให้ใช้ **นามสกุลที่ชัดเจน** ใน specifier ต่างจาก CJS คุณไม่สามารถละเว้นนามสกุลและให้ Node เดาได้:
 
 ```js
+// @skip-verify multi-file: illustrative
 // CJS — extension optional (Node tries .js, .json, index.js …)
 const utils = require('./utils');
 
@@ -49,6 +50,7 @@ import utils from './utils.js';
 ระบบโมดูลทั้งสองสามารถอยู่ร่วมกันได้ แต่มีข้อจำกัด:
 
 ```js
+// @skip-verify multi-file: illustrative
 // ── CJS file (utils.cjs) ─────────────────────────────────────
 // CJS can require other CJS modules normally.
 const fs = require('fs');
@@ -95,6 +97,20 @@ import { helper } from './helpers.mjs'; // ✅
 - `require('my-lib')` จะค้นหาไปที่ `dist/index.cjs`
 - `import 'my-lib/utils'` จะค้นหาไปที่ `dist/utils.mjs`
 - `import 'my-lib/internal/secret'` จะ throw — `"./internal/secret"` ไม่ได้ถูก export
+
+## ลำดับ condition ใน exports มีผล
+
+ภายใน conditions object Node จะตรวจ key **ตามลำดับที่เขียนไว้** และใช้ key แรกที่มันรู้จัก — ไม่ได้เลือก condition ที่ "ตรงที่สุด" หรือ "ดีที่สุด" ถ้า condition สองตัวใช้ได้ทั้งคู่ ตัวที่เขียนไว้ก่อนจะชนะ ดังนั้นการสลับลำดับโดยไม่ระวังจะเปลี่ยนผลลัพธ์การ resolve แบบเงียบๆ เมื่อมี condition `"types"` อยู่ (สำหรับผู้ใช้ TypeScript) ต้องวางไว้เป็น**ตัวแรก**ในทุก conditions object เสมอ — ตัว resolver ของ Node เองจะข้าม `"types"` ไป แต่ถ้าวางไว้หลัง `"import"`/`"require"` อาจเสี่ยงที่ resolver ตัวอื่นที่ไม่ได้ special-case `"types"` จะจับ key ผิดตัวเป็นตัวแรกแทน
+
+```bash
+# scratch package: exports = { ".": { "import": "./esm.mjs", "default": "./cjs.cjs" } }
+$ node -e "import('order-demo').then(m => console.log(m.via))"
+import-wins
+
+# Reorder to { "default": "./cjs.cjs", "import": "./esm.mjs" } — same import() call:
+$ node -e "import('order-demo').then(m => console.log(m.via))"
+undefined   # "default" matched first, so import() got the CJS build instead
+```
 
 ## การรัน ESM แบบ inline ด้วย `--input-type`
 

@@ -61,7 +61,7 @@ npm install --save-dev eslint vitest typescript
 }
 ```
 
-If a consumer installs `eslint-plugin-my-rules` without `eslint` present, npm prints a peer dependency warning. The plugin itself never includes its own copy of `eslint` — it uses the one in the consumer's project.
+Since npm 7, `npm install` **automatically installs** a missing peer dependency when it can resolve a version that satisfies the range — no separate step or flag needed. npm only prints a peer dependency warning when it cannot resolve one automatically (for example, an already-installed version conflicts with the required range). The plugin itself never includes its own copy of `eslint` — it uses the one in the consumer's project.
 
 ## Lockfiles
 

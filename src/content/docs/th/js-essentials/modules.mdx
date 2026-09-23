@@ -27,12 +27,13 @@ Node.js รองรับสองระบบ module ที่ไม่สา�
 CommonJS คือระบบ module ดั้งเดิมของ Node.js ยังคงใช้กันอย่างแพร่หลายใน packages และ tooling เก่า
 
 ```js
+// @skip-verify multi-file: illustrative
 // math.js (CommonJS)
 function add(a, b) { return a + b; }
 function multiply(a, b) { return a * b; }
 
-module.exports = { add, multiply };      // named exports ผ่าน object
-// หรือ: module.exports = add;           // single default export
+module.exports = { add, multiply };      // named exports via object
+// OR: module.exports = add;             // single default export
 
 // main.js (CommonJS)
 const { add, multiply } = require('./math');
@@ -47,6 +48,7 @@ console.log(multiply(4, 5));  // 20
 ESM คือมาตรฐาน JavaScript module อย่างเป็นทางการ ตอนนี้เป็นระบบที่แนะนำสำหรับ Node.js projects ใหม่
 
 ```js
+// @skip-verify multi-file: illustrative
 // math.mjs (ESM — named exports)
 export function add(a, b) { return a + b; }
 export function multiply(a, b) { return a * b; }
@@ -83,18 +85,19 @@ console.log(formatNumber(3.14159)); // '3.14'
 ## Named vs Default Exports
 
 ```js
-// Named: export หลาย bindings import ด้วยชื่อที่แน่นอน (หรือเปลี่ยนชื่อ)
+// @skip-verify multi-file: illustrative
+// Named: export multiple bindings, import with exact names (or rename)
 export const PI = 3.14159;
 export function area(r) { return PI * r * r; }
 
 import { PI, area } from './circle.mjs';
-import { area as circleArea } from './circle.mjs'; // เปลี่ยนชื่อ
+import { area as circleArea } from './circle.mjs'; // rename
 
-// Default: main export หนึ่งตัวต่อไฟล์ import ด้วยชื่อใดก็ได้
+// Default: one main export per file, imported with any name
 export default class Logger { /* ... */ }
 
 import Logger from './logger.mjs';
-import MyLogger from './logger.mjs'; // เหมือนกัน แค่ชื่อ local ต่างกัน
+import MyLogger from './logger.mjs'; // same thing, different local name
 ```
 
 ## Demo ESM ที่รันได้
@@ -102,7 +105,7 @@ import MyLogger from './logger.mjs'; // เหมือนกัน แค่ช
 snippet นี้รันบน Node.js runtime (module resolution ต้องการ Node) แสดงการทำงานของ ES module ที่มี named exports end-to-end โดยใช้ inline dynamic `import()`
 
 ```js
-// ESM inline ผ่าน data: URL — ต้องการ Node runtime
+// ESM inline via data: URL — requires Node runtime
 const src = `
   export function add(a, b) { return a + b; }
   export const VERSION = '1.0.0';
@@ -113,7 +116,7 @@ console.log('VERSION:', mod.VERSION);
 ```
 
 export const modulesCode = `
-// Dynamic import ของ inline ESM module ผ่าน data: URL
+// Dynamic import of an inline ESM module via data: URL
 const src = [
   'export function add(a, b) { return a + b; }',
   'export const VERSION = "1.0.0";',

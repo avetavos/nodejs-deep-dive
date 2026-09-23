@@ -9,30 +9,36 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-การเผยแพร่ npm package ต้องการให้คุณตัดสินใจเรื่อง metadata ที่ถูกต้อง เลือกสิ่งที่จะ expose และควบคุม lifecycle การ versioning ให้ดี บทเรียนนี้ครอบคลุมทุกอย่างตั้งแต่ `package.json` ที่พร้อม publish ไปจนถึงการ push package ขึ้น registry
+การเผยแพร่ package ทำให้มันพร้อมใช้งานบน npm registry เพื่อให้ใครก็ตาม (หรือสมาชิกในองค์กรของคุณ) ติดตั้งได้ด้วย `npm install` กระบวนการนี้มีสามขั้นตอน: เตรียม `package.json` ด้วย metadata ที่ถูกต้อง, bump เวอร์ชัน, และรัน `npm publish` แต่ละขั้นตอนมี guardrail ที่ช่วยให้คุณ ship release ที่สะอาดและคาดเดาได้
 
-## package.json ที่พร้อม publish
+## ฟิลด์ `package.json` สำคัญสำหรับการ publish
 
-package ที่ดีควรมีฟิลด์สำคัญเหล่านี้:
+package ที่พร้อม publish มักมีฟิลด์เหล่านี้ นอกเหนือจาก `name` และ `version`:
 
 ```json
 {
-  "name": "@myorg/my-lib",
+  "name": "@myorg/my-util-lib",
   "version": "1.0.0",
-  "description": "A concise description for npm search",
+  "description": "A small utility library",
   "license": "MIT",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
-  "files": [
-    "dist",
-    "README.md"
-  ],
+  "files": ["dist", "README.md"],
+  "bin": {
+    "my-util": "./dist/cli.js"
+  },
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
+      "default": "./dist/index.cjs"
+    },
+    "./helpers": {
+      "types": "./dist/helpers.d.ts",
+      "import": "./dist/helpers.mjs",
+      "require": "./dist/helpers.cjs"
     }
   },
   "engines": {
@@ -41,107 +47,117 @@ package ที่ดีควรมีฟิลด์สำคัญเหล่
 }
 ```
 
-## ฟิลด์ files
+- **`license`** — SPDX identifier ที่ผู้ใช้และ registry scanner ตรวจก่อนจะ depend on package ของคุณ
+- **`main`** / **`module`** — entry point แบบ CJS เดิม และ convention เฉพาะ bundler ที่ tool เก่าบางตัวยังมองหา ทั้งคู่ถูกแทนที่ด้วย `exports` แต่ยังเก็บไว้เพื่อ compat กับ tooling
+- **`types`** — ไฟล์ TypeScript declaration หลัก ใช้โดย editor และ `tsc` เมื่อ package ไม่มี `exports` map หรือใช้เป็น fallback
+- **`files`** — allowlist ของ path ที่รวมไว้ใน published tarball ทุกอย่างนอกเหนือจากนี้ (source file, test fixture, config) ถูก exclude ถ้าไม่ระบุ npm ยังใช้ชุด exclusion เริ่มต้น (`node_modules`, `.git`, และไฟล์ที่ตรงกับ `.npmignore` หรือถ้าไม่มีก็ `.gitignore`)
+- **`bin`** — map ชื่อคำสั่ง CLI ไปยัง entry-point script npm สร้าง symlink ใน `.bin/` ทำให้คำสั่งพร้อมใช้งานใน PATH เมื่อติดตั้ง package และผ่าน `npx`
+- **`exports`** — ประกาศ public API surface path ใดที่ไม่ได้ระบุไว้ที่นี่จะเข้าถึงไม่ได้จากภายนอก ภายใน conditions object แต่ละอัน `"types"` ต้องมาก่อนเสมอ — ดู [Module Resolution](/nodejs/th/modules-npm/resolution/#ลำดับ-condition-ใน-exports-มีผล) ว่าทำไมลำดับ key ถึงสำคัญ
 
-`"files"` ระบุว่าไฟล์และโฟลเดอร์ใดจะถูกรวมไว้ใน published package ใช้เป็น allowlist เพื่อให้แน่ใจว่าไม่ส่ง source file, test, หรือ config ที่ไม่จำเป็นไปให้ผู้ใช้
+## ฟิลด์ `files`
 
 ```json
 {
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ]
+  "files": ["dist", "README.md", "LICENSE"]
 }
 ```
 
-ไฟล์บางอย่างถูก exclude โดยอัตโนมัติ เช่น `node_modules`, `.git`, และไฟล์ที่ระบุใน `.npmignore` หรือ `.gitignore`
+`"files"` เป็น allowlist ไม่ใช่ denylist: มีเพียง path ที่ระบุไว้ที่นี่ (บวกกับไฟล์บางอย่างที่ npm รวมให้เสมอ เช่น `package.json` และ `README`) เท่านั้นที่จะอยู่ใน tarball วิธีนี้ทำให้ source map, test fixture, และ config เฉพาะเครื่องไม่หลุดไปกับสิ่งที่ผู้ใช้ดาวน์โหลด
 
-## ฟิลด์ bin
-
-หาก package ของคุณมี CLI tool ใช้ฟิลด์ `"bin"` เพื่อ map ชื่อคำสั่งไปยังไฟล์ที่รันได้:
+## ฟิลด์ `bin`
 
 ```json
 {
   "bin": {
-    "my-cli": "./dist/cli.js"
+    "my-util": "./dist/cli.js"
   }
 }
 ```
 
-เมื่อ install globally หรือใช้ใน `npx` คำสั่ง `my-cli` จะพร้อมใช้งาน
+เมื่อ package ถูกติดตั้ง (แบบ local หรือ global) npm จะสร้าง executable ชื่อ `my-util` ใน `node_modules/.bin/` (หรือ global bin directory) ที่ชี้ไปยัง `./dist/cli.js` นี่คือสิ่งที่ทำให้คำสั่งนี้ใช้งานได้ผ่าน `npx my-util` และผ่าน script ใน `npm run` ของโปรเจกต์ที่ใช้งาน โดยไม่ต้องติดตั้งแบบ global
 
 ## การกำหนดเวอร์ชันด้วย Semantic Versioning
 
-npm ใช้ **Semantic Versioning (semver)**: `MAJOR.MINOR.PATCH`
+npm ใช้ **semantic versioning** (semver): `MAJOR.MINOR.PATCH`
 
-- **PATCH** — bug fix ที่ backwards compatible
-- **MINOR** — feature ใหม่ที่ backwards compatible
-- **MAJOR** — breaking changes
+- **PATCH** — bug fix ที่ backwards-compatible
+- **MINOR** — feature ใหม่ที่ backwards-compatible
+- **MAJOR** — breaking change
 
-ใช้คำสั่ง `npm version` เพื่อ bump version, อัปเดต `package.json`, และสร้าง git tag โดยอัตโนมัติ:
+ใช้ `npm version` เพื่อ bump และสร้าง tag ในขั้นตอนเดียว:
 
 ```bash
-# bump patch version: 1.0.0 → 1.0.1
+# Patch bump: 1.0.0 → 1.0.1 (bug fixes)
 npm version patch
 
-# bump minor version: 1.0.0 → 1.1.0
+# Minor bump: 1.0.1 → 1.1.0 (backwards-compatible new features)
 npm version minor
 
-# bump major version: 1.0.0 → 2.0.0
+# Major bump: 1.1.0 → 2.0.0 (breaking changes)
 npm version major
 ```
 
-## ทดสอบก่อน publish ด้วย npm pack
+แต่ละคำสั่งอัปเดตฟิลด์ `"version"` ใน `package.json`, commit การเปลี่ยนแปลง, และสร้าง signed git tag (เช่น `v1.0.1`) push tag ด้วย `git push --follow-tags`
 
-ก่อน publish ให้สร้าง tarball local เพื่อตรวจสอบว่าไฟล์ที่จะถูกส่งออกนั้นถูกต้อง:
+## ทดสอบก่อน publish ด้วย `npm pack`
+
+`npm pack` รวม package ของคุณเป็น tarball `.tgz` เหมือนกับที่ npm จะทำถ้าคุณรัน `npm publish` — แต่มันอยู่แค่ local เท่านั้น วิธีนี้ให้คุณตรวจสอบ artifact สุดท้ายก่อน ship จริง
 
 ```bash
+# Create a local tarball (e.g. myorg-my-util-lib-1.0.0.tgz)
 npm pack
+
+# Inspect its contents without extracting
+tar -tzf myorg-my-util-lib-1.0.0.tgz
+
+# Install it locally in another project to smoke-test
+npm install ../my-util-lib/myorg-my-util-lib-1.0.0.tgz
 ```
 
-คำสั่งนี้สร้างไฟล์ `.tgz` ในโฟลเดอร์ปัจจุบัน คุณสามารถ inspect เนื้อหาหรือติดตั้งใน project อื่นเพื่อทดสอบก่อน publish จริง:
+<Callout title="ทดสอบด้วย npm pack ก่อน publish เสมอ">
+การรัน `npm pack` คือ dry run ที่ไม่มีค่าใช้จ่าย มัน respect `"files"` allowlist, ใช้ `.npmignore`, และสร้าง tarball ที่ตรงกับสิ่งที่ `npm publish` จะอัปโหลดจริงทุกประการ ตรวจสอบผลลัพธ์เพื่อยืนยันว่าคุณไม่ได้ ship source map, test fixture, หรือไฟล์ config ลับไปโดยไม่ตั้งใจ — ความผิดพลาดตรงนี้แก้ไม่ได้เพราะเวอร์ชันที่ publish แล้วเขียนทับไม่ได้
+</Callout>
+
+## การ publish ด้วย `npm publish`
+
+คุณต้อง authenticate (`npm login`) ก่อน publish npm อ่าน `package.json` เพื่อกำหนด registry ปลายทาง (ค่าเริ่มต้นคือ `https://registry.npmjs.org`)
 
 ```bash
-# install local tarball in another project
-npm install ../my-lib/myorg-my-lib-1.0.0.tgz
-```
-
-## การ publish
-
-Login และ publish:
-
-```bash
-# login to npm registry
+# Log in to the registry
 npm login
 
-# publish public scoped package
+# Publish a public (unscoped) package
+npm publish
+
+# Publish a scoped package as public (scoped packages default to restricted)
 npm publish --access public
 
-# publish with a dist-tag (e.g. beta)
+# Publish under a dist-tag other than "latest" (e.g. a beta)
 npm publish --tag beta
 ```
 
-สำหรับ package ที่มีชื่อ scope เช่น `@myorg/my-lib` ต้องระบุ `--access public` เพื่อ publish แบบ public มิฉะนั้น npm จะถือว่าเป็น private (ต้องเสียค่าใช้จ่าย)
-
 ## Scoped packages
 
-Scoped packages มีรูปแบบ `@scope/name` และช่วยจัดกลุ่ม package ขององค์กรหรือโปรเจกต์:
+**scoped package** ใช้รูปแบบ `@scope/name` และมักใช้สำหรับ namespace ขององค์กร หรือจัดกลุ่ม package ที่เกี่ยวข้องกัน:
 
-```bash
-# create a scoped package
-npm init --scope=@myorg
-
-# publish to npm public registry
-npm publish --access public
-
-# install a scoped package
-npm install @myorg/my-lib
+```json
+{
+  "name": "@myorg/my-util-lib",
+  "version": "1.0.0"
+}
 ```
 
-<Callout title="ใช้ npm pack เพื่อตรวจสอบก่อน publish เสมอ">
-`npm pack` สร้าง tarball local ที่แสดงตัวอย่างสิ่งที่จะถูก publish จริงๆ ตรวจสอบว่าฟิลด์ `"files"` ครอบคลุมทุกอย่างที่ต้องการและไม่มีไฟล์ sensitive หรือ build artifact ขนาดใหญ่ที่ไม่ควร publish รวมอยู่ด้วย นี่เป็นขั้นตอนที่ควรทำก่อน `npm publish` ทุกครั้ง
-</Callout>
+Scoped packages เป็น **private โดยค่าเริ่มต้น** บน npm registry เพื่อ publish แบบ public ต้องใส่ `--access public` เสมอ:
+
+```bash
+# Scaffold a scoped package
+npm init --scope=@myorg
+
+# Publish it publicly
+npm publish --access public
+```
+
+Private scoped packages ต้องใช้ npm account แบบเสียเงิน หรือ private registry
 
 export const publishingQuiz = [
   {

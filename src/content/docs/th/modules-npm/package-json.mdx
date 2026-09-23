@@ -9,88 +9,113 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-## package.json คืออะไร?
+## Manifest ของโปรเจกต์
 
-`package.json` คือไฟล์ manifest ที่อยู่ที่ root ของทุกโปรเจกต์ Node.js ไฟล์นี้เก็บข้อมูลสำคัญเกี่ยวกับโปรเจกต์ของคุณ: ชื่อ, เวอร์ชัน, dependencies, scripts, และอีกมากมาย npm ใช้ไฟล์นี้เพื่อติดตั้ง dependencies, รัน scripts, และเผยแพร่แพ็คเกจไปยัง registry
+`package.json` คือ manifest ของทุกโปรเจกต์ Node.js มันบอก Node และ npm ว่าใครเป็นเจ้าของ package นี้ เวอร์ชันอะไร รันอย่างไร ไฟล์ไหนเป็น public API และขึ้นกับ package อะไรบ้าง ทุกคำสั่ง `npm install`, `npm run`, และ `npm publish` อ่านข้อมูลจากไฟล์นี้
 
 ## ฟิลด์สำคัญ
 
+| ฟิลด์ | หน้าที่ |
+|---|---|
+| `name` | ตัวระบุ package บน npm registry (ตัวพิมพ์เล็ก, URL-safe) |
+| `version` | เวอร์ชันปัจจุบัน ตาม Semantic Versioning (`MAJOR.MINOR.PATCH`) |
+| `type` | ระบบ module เริ่มต้น: `"module"` สำหรับ ESM, `"commonjs"` (หรือไม่ระบุ) สำหรับ CJS |
+| `main` | entry point แบบเก่าสำหรับผู้ใช้ CJS (`require('your-pkg')`) |
+| `exports` | entry point map สมัยใหม่ — ควบคุมว่าผู้ใช้ import อะไรได้บ้างและจาก subpath ไหน |
+| `scripts` | คำสั่ง shell ที่ตั้งชื่อไว้ รันด้วย `npm run <name>` (รวมถึง lifecycle hook เช่น `start`, `test`) |
+
+### ตัวอย่างพร้อมคำอธิบาย
+
 ```json
 {
-  "name": "my-app",
-  "version": "1.0.0",
-  "description": "A sample Node.js application",
-  "main": "index.js",
+  "name": "my-library",
+  "version": "1.2.0",
+  "description": "A small utility library",
   "type": "module",
+  "main": "./dist/index.cjs",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./utils": "./dist/utils.js"
+  },
   "scripts": {
-    "start": "node index.js",
-    "dev": "node --watch index.js",
-    "test": "node --test"
+    "build": "tsc",
+    "test": "node --test",
+    "start": "node dist/index.js",
+    "lint": "eslint src"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "zod": "^3.22.4"
   },
   "devDependencies": {
-    "typescript": "^5.3.3"
-  },
-  "engines": {
-    "node": ">=20.0.0"
+    "typescript": "~5.4.0"
   }
 }
 ```
 
-- **`name`** — ชื่อแพ็คเกจ ต้องเป็น lowercase และไม่มีช่องว่าง
-- **`version`** — เวอร์ชันปัจจุบันในรูปแบบ semver (`major.minor.patch`)
-- **`main`** — entry point สำหรับ CommonJS (`require('my-app')` จะโหลดไฟล์นี้)
-- **`type`** — กำหนดว่า `.js` files เป็น CJS หรือ ESM โดยค่าเริ่มต้น
-- **`scripts`** — คำสั่งที่รันด้วย `npm run <name>`
-- **`dependencies`** — แพ็คเกจที่จำเป็นสำหรับ production
-- **`devDependencies`** — แพ็คเกจที่ใช้เฉพาะในการพัฒนา (เช่น test runners, bundlers)
-- **`engines`** — ระบุเวอร์ชัน Node.js ที่รองรับ
+ฟิลด์ `exports` มีความสำคัญกว่า `main` ใน Node.js สมัยใหม่ มันให้คุณเปิด subpath ได้หลายเส้นทาง และส่งไฟล์ต่างกันให้ผู้ใช้ ESM กับ CJS จาก package เดียวกัน
 
 ## Semver ranges
 
-npm ใช้ **Semantic Versioning (semver)** สำหรับ version constraints ไวยากรณ์ range ที่พบบ่อยมีดังนี้:
+npm ใช้ [Semantic Versioning](https://semver.org) สำหรับ dependency range ไวยากรณ์ range ใน `package.json` ควบคุมว่าเวอร์ชันไหนที่ `npm install` ถือว่า compatible
 
 | Range | ความหมาย | ตัวอย่าง |
-|-------|----------|---------|
-| `^4.18.2` | minor และ patch ล่าสุดที่ compatible กับ major version นี้ | `>=4.18.2 <5.0.0` |
-| `~4.18.2` | patch ล่าสุดที่ compatible กับ minor version นี้ | `>=4.18.2 <4.19.0` |
-| `4.18.2` | เวอร์ชันนี้เท่านั้น (pinned) | `4.18.2` เท่านั้น |
-| `>=4.0.0` | เวอร์ชัน 4.0.0 ขึ้นไป | ไม่มีขีดบน |
-| `*` | เวอร์ชันใดก็ได้ | ไม่แนะนำใน production |
+|---|---|---|
+| `^1.2.3` | Compatible — อนุญาต `MINOR` และ `PATCH` bump, lock `MAJOR` | `>=1.2.3 <2.0.0` |
+| `~1.2.3` | Patch-only — อนุญาตเฉพาะ `PATCH` bump | `>=1.2.3 <1.3.0` |
+| `1.2.3` | Exact — เวอร์ชันนี้เท่านั้น | `1.2.3` |
+| `*` | เวอร์ชันใดก็ได้ — ไม่มีข้อจำกัด | `>=0.0.0` |
 
-`^` (caret) คือ range ที่ใช้บ่อยที่สุด — เพราะเลือก patch และ minor releases ที่ใหม่กว่าโดยอัตโนมัติ แต่ lock major version เพื่อหลีกเลี่ยง breaking changes
+### ตัวอย่าง Dependencies block
+
+```json
+{
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "~16.3.1",
+    "uuid": "9.0.0",
+    "some-experimental-pkg": "*"
+  }
+}
+```
+
+ในทางปฏิบัติ `^` คือตัวเลือกที่ใช้บ่อยที่สุดสำหรับ dependencies: มันทำให้คุณได้ release ล่าสุดที่ compatible อยู่เสมอ พร้อมป้องกัน breaking change ที่มาจาก major version ใหม่
 
 ## การสร้าง package.json ด้วย npm init
 
+`npm init` พาคุณผ่าน interactive prompt เพื่อสร้าง `package.json` `npm init -y` ข้ามทุก prompt และรับค่า default ทันที — มีประโยชน์เมื่อต้องการไฟล์ minimal อย่างรวดเร็ว
+
 ```bash
-# Interactive wizard — ถามคุณทีละขั้น
+# Interactive wizard
 npm init
 
-# สร้างด้วยค่า default ทันที (ไม่ถาม)
+# Accept all defaults immediately
 npm init -y
 ```
 
-`npm init -y` สร้าง `package.json` ที่ถูกต้องด้วยค่า default ทันที มีประโยชน์สำหรับโปรเจกต์ใหม่ที่คุณต้องการติดตั้งแพ็คเกจอย่างรวดเร็ว
+หลังจากรัน `npm init -y` คุณจะได้ `package.json` แบบ minimal ใน directory ปัจจุบัน:
 
-## การติดตั้ง dependencies
-
-```bash
-# เพิ่ม production dependency
-npm install express
-
-# เพิ่ม dev dependency
-npm install --save-dev typescript
-
-# ติดตั้ง dependencies ทั้งหมดจาก package.json ที่มีอยู่แล้ว
-npm install
+```json
+{
+  "name": "my-project",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
 ```
 
-เมื่อคุณรัน `npm install <package>` npm จะอัปเดต `package.json` และ `package-lock.json` โดยอัตโนมัติ `package-lock.json` เก็บเวอร์ชันที่แน่นอนของทุก dependency เพื่อให้ builds สามารถ reproduce ได้
+แก้ไขไฟล์โดยตรง หรือใช้ `npm pkg set name="my-library" type="module"` เพื่ออัปเดตฟิลด์ทีละตัวจาก terminal
 
-<Callout title='ฟิลด์ "type": "module"'>
-การเพิ่ม `"type": "module"` ใน `package.json` ทำให้ไฟล์ `.js` ทั้งหมดในโปรเจกต์ถูกถือว่าเป็น ES modules ซึ่งหมายความว่าคุณสามารถใช้ `import`/`export` ใน `.js` files ได้โดยตรง หากคุณต้องการไฟล์ CommonJS บางไฟล์ท่ามกลาง ESM package ให้ใช้นามสกุล `.cjs` สำหรับไฟล์เหล่านั้น
+<Callout title='ตั้ง "type": "module" เพื่อใช้ ESM'>
+การเพิ่ม `"type": "module"` ใน `package.json` เปลี่ยนทั้ง package ให้เป็น ESM: ไฟล์ `.js` ทุกไฟล์ใน package ถือเป็น ES module จากนั้นคุณใช้ top-level `import`/`export` ได้โดยไม่ต้องเปลี่ยนนามสกุลเป็น `.mjs` หากต้องการไฟล์ CJS เพียงไฟล์เดียวใน ESM package ให้ตั้งนามสกุล `.cjs` แล้ว Node จะถือว่าเป็น CommonJS โดยไม่สนใจฟิลด์ `"type"`
 </Callout>
 
 export const packageJsonQuiz = [
