@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Primitives vs objects
 
@@ -115,6 +117,171 @@ console.log('typeof null:', typeof null);
 The `===` operator never coerces types, so comparisons behave exactly as written. Reserve `==` for the one deliberate use case: checking both `null` and `undefined` at once with `value == null`.
 </Callout>
 
+## More coercion traps
+
+`if`, `+`, `-`, `Number()`, and `parseInt()` each coerce in a different, easy-to-misremember way.
+
+**`if` only cares about truthy/falsy — not "is this a meaningful value".** `0`, `NaN`, and `''` are all falsy and all fall into the same branch as `null`/`undefined`, even though `0` and `''` can be perfectly valid data:
+
+```js
+if (0)        console.log('never — 0 is falsy');
+if (NaN)      console.log('never — NaN is falsy');
+if ('')       console.log('never — empty string is falsy');
+if ([])       console.log('runs — an empty array is truthy');
+if ({})       console.log('runs — an empty object is truthy');
+```
+
+**`+` and `-` disagree on strings.** `+` is overloaded for both numeric addition and string concatenation, so if *either* operand is a string, `+` concatenates. `-` has no string meaning, so it always coerces both sides to numbers first:
+
+```js
+console.log(1 + '1');   // '11'  — + sees a string, concatenates
+console.log(1 - '1');   // 0     — - always coerces to number
+console.log([5] - 1);   // 4     — [5] coerces to the number 5 first
+console.log([] + []);   // ''    — both sides coerce to '', then concatenate
+```
+
+**`Number('')` is `0`, not `NaN`.** An empty or whitespace-only string converts to `0` under `Number()`, but `parseInt('')` gives `NaN` — the two functions disagree on empty input:
+
+```js
+console.log(Number(''));      // 0
+console.log(Number('   '));   // 0
+console.log(parseInt(''));    // NaN
+```
+
+**`parseInt` without a radix is a real footgun — but not the one people repeat.** The old "leading zero means octal" story does not apply anymore (`parseInt('08')` is `8` on any modern engine, per the ES5+ spec). The actual trap is `0x`-prefixed strings auto-detecting hex, and any call without an explicit radix silently trusting that behavior:
+
+```js
+console.log(parseInt('08'));      // 8   — no octal trap on modern JS engines
+console.log(parseInt('0x10'));    // 16  — auto-detected as hex, radix defaulted to 16
+console.log(parseInt('10', 2));   // 2   — radix 2: '10' means binary two
+console.log(parseInt('19,000'));  // 19  — stops at the first non-digit character
+```
+
+Always pass the radix explicitly — `parseInt(str, 10)` — when you mean decimal.
+
+**`Array.isArray()` is the only reliable array check.** `typeof` reports `'object'` for arrays (see above), and `[] instanceof Array` fails across different realms (iframes, worker threads, vm contexts):
+
+```js
+console.log(Array.isArray([]));        // true
+console.log(Array.isArray({}));        // false
+console.log(typeof []);                // 'object' — no help here
+```
+
+## Optional chaining and nullish coalescing vs `||`
+
+`?.` short-circuits to `undefined` instead of throwing when a link in a property/method chain is `null` or `undefined`. `??` picks the right-hand value only when the left side is `null` or `undefined` — unlike `||`, which falls through for **every** falsy value, including `0` and `''`:
+
+```js
+const config = { retries: 0, name: '' };
+
+console.log(config.retries || 3);   // 3  — WRONG: 0 is a valid retry count, but || treats it as missing
+console.log(config.retries ?? 3);   // 0  — RIGHT: ?? only falls back on null/undefined
+
+console.log(config.timeout ?? 5000); // 5000 — timeout is genuinely absent
+console.log(config.user?.profile?.email); // undefined — no throw, even though user is missing
+```
+
+<Mermaid code={coercionDecisionDiagram} title="|| falls through on any falsy value; ?? only falls through on null/undefined" />
+
+export const coercionDecisionDiagram = `flowchart TD
+  A["left ?? right"] --> B{"Is left null or undefined?"}
+  B -->|"yes"| C["use right"]
+  B -->|"no, even if 0, '', false, NaN"| D["use left"]
+  E["left || right"] --> F{"Is left falsy? (0, '', false, NaN, null, undefined)"}
+  F -->|"yes"| C
+  F -->|"no"| D`;
+
+## Cloning objects: structuredClone vs spread
+
+Spreading an object (`{ ...obj }`) or an array (`[...arr]`) copies only the **top level** — nested objects are still shared by reference. `structuredClone()` performs a true **deep** clone (and correctly recreates `Date`, `Map`, `Set`, typed arrays), but it cannot clone functions:
+
+```js
+const original = { name: 'demo', tags: ['a', 'b'], meta: { count: 1 } };
+
+const shallow = { ...original };
+shallow.meta.count = 99;
+console.log(original.meta.count); // 99 — shallow copy shared the nested "meta" object
+
+const deep = structuredClone(original);
+deep.meta.count = 1;
+console.log(original.meta.count); // still 99 — deep clone is fully independent
+```
+
+`JSON.parse(JSON.stringify(obj))` is a common ad hoc deep-clone trick, but it silently drops `undefined` values and functions, and turns `Date` objects into plain strings — `structuredClone()` handles all of those correctly and should be preferred.
+
+## Runnable coercion & cloning demo
+
+export const coercionDeepCode = `
+console.log('--- if traps ---');
+console.log('if (0):', Boolean(0));
+console.log('if (NaN):', Boolean(NaN));
+console.log('if ([]):', Boolean([]));
+console.log('--- + vs - ---');
+console.log('1 + "1":', 1 + '1');
+console.log('1 - "1":', 1 - '1');
+console.log('[5] - 1:', [5] - 1);
+console.log('--- Number vs parseInt ---');
+console.log('Number(""):', Number(''));
+console.log('parseInt(""):', parseInt(''));
+console.log('parseInt("0x10"):', parseInt('0x10'));
+console.log('parseInt("10", 2):', parseInt('10', 2));
+console.log('--- Array.isArray ---');
+console.log('Array.isArray([]):', Array.isArray([]));
+console.log('--- ?? vs || ---');
+const config = { retries: 0 };
+console.log('retries || 3:', config.retries || 3);
+console.log('retries ?? 3:', config.retries ?? 3);
+console.log('--- structuredClone vs spread ---');
+const original = { meta: { count: 1 } };
+const shallow = { ...original };
+shallow.meta.count = 99;
+console.log('shallow leaked into original:', original.meta.count);
+const deep = structuredClone(original);
+deep.meta.count = 1;
+console.log('deep left original alone:', original.meta.count);
+`;
+
+<NodeRunner client:visible code={coercionDeepCode} />
+
+## Mental Model
+
+Every coercing operator answers a slightly different question: `if` asks "is this truthy?", `+` asks "does either side look like a string?", `-`/`Number()` ask "what number is this?", and `??` asks "is this specifically null or undefined?". None of them ask "did the caller actually provide a meaningful value?" — that question is exactly the one `0`, `''`, and `NaN` cannot answer for you, because those are legitimate values that also happen to be falsy. Reading coercion-heavy code well means substituting `0`, `''`, `[]`, and `{}` mentally into every truthy check before trusting it.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `if (value)` / `value \|\| fallback` | Short, reads well for "is this missing" | Cannot tell "missing" apart from a real `0`, `''`, or `false` |
+| `value ?? fallback` | Only treats `null`/`undefined` as missing | Slightly less familiar to developers coming from `||`-only habits |
+| `{ ...obj }` spread | Fast, no dependency, fine for flat objects | Nested objects/arrays are shared by reference — mutating a clone can mutate the original |
+| `structuredClone(obj)` | True deep clone, handles `Date`/`Map`/`Set` correctly | Cannot clone functions or DOM nodes; slightly slower than a shallow spread |
+
+## Common Misconceptions
+
+- **"`0` and `''` mean the same thing as `null`/`undefined` in an `if`."** They are all falsy, but `0` and `''` are real, present values — `??` (not `||`, not `if (!value)`) is the operator that actually distinguishes "missing" from "falsy but present".
+- **"`parseInt('08')` gives the wrong answer because of octal parsing."** That was true in pre-ES5 engines; on every engine this course targets, `parseInt('08') === 8`. The real `parseInt` footgun today is missing the radix on ambiguous or `0x`-prefixed input.
+- **"Spreading an object (`{ ...obj }`) makes a fully independent copy."** It only copies one level deep — any nested object or array is still the same reference in both copies.
+- **"`typeof arr === 'object'` is fine for checking arrays."** It is true for both plain objects and arrays, so it cannot distinguish them — use `Array.isArray()`.
+
+## Reading AI-generated code
+
+A very common shape in AI-generated code is a truthy check standing in for a "was this provided" check — `if (user.count)`, `value || 'default'`, or `data.length && doSomething()` — none of which work correctly the moment the real value is `0`, `''`, or `false`. Whenever a falsy-but-valid value is possible, the check needs to be `!== undefined`, `!== null`, or `??`.
+
+<SpotTheBug code={`function renderBadge(user) {
+  if (user.count) {
+    return user.count + ' items';
+  }
+  return 'No items yet';
+}
+
+console.log(renderBadge({ count: 0 })); // meant to show "0 items"`}>
+`if (user.count)` treats `0` as falsy, so a user with exactly zero items falls into the "No items yet" branch — even though `0` is a perfectly valid, known count, not a missing value. The fix is to check for the *absence* of the value specifically: `if (user.count !== undefined)`, or restructure with nullish coalescing so `undefined`/`null` falls back to a default while a real `0` still prints as "0 items".
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Falsy is not the same question as missing: `0`, `''`, and `NaN` are real values that happen to be falsy, so reach for `??` or an explicit `!== undefined`/`!== null` check instead of `if (value)` or `value || fallback` whenever a falsy value can be legitimate data.
+</Callout>
+
 export const coercionQuiz = [
   {
     q: 'What does `typeof null` return in JavaScript?',
@@ -125,6 +292,7 @@ export const coercionQuiz = [
       '"boolean"',
     ],
     answer: 2,
+    explain: '`typeof null === \'object\'` is a bug baked into the language since JavaScript 1.0 and can never be fixed without breaking the web. Check for null specifically with `value === null`.',
   },
   {
     q: 'Which of these values is falsy?',
@@ -135,6 +303,7 @@ export const coercionQuiz = [
       'The number `0`',
     ],
     answer: 3,
+    explain: 'There are exactly six falsy values: `false`, `0`, `\'\'`, `null`, `undefined`, `NaN`. `[]`, `{}`, and the non-empty string `"0"` are all truthy — only the literal number `0` in this list is falsy.',
   },
   {
     q: 'What is the result of `null == undefined`?',
@@ -145,6 +314,29 @@ export const coercionQuiz = [
       'true — both coerce to 0',
     ],
     answer: 1,
+    explain: 'The spec carves out a special case: `==` treats `null` and `undefined` as equal to each other and to nothing else. This is the one legitimate, idiomatic use of `==` in modern code: `value == null` checks both at once.',
+  },
+  {
+    q: '```js\nconst config = { retries: 0 };\nconsole.log(config.retries || 3);\nconsole.log(config.retries ?? 3);\n```\nWhat does this print?',
+    options: [
+      '0 then 0',
+      '3 then 3',
+      '3 then 0',
+      '0 then 3',
+    ],
+    answer: 2,
+    explain: '`||` falls back on *any* falsy value, and `0` is falsy, so `config.retries || 3` prints `3` — losing the real value. `??` only falls back on `null`/`undefined`, so `config.retries ?? 3` correctly prints `0`.',
+  },
+  {
+    q: '```js\nfunction renderBadge(user) {\n  if (user.count) {\n    return user.count + \' items\';\n  }\n  return \'No items yet\';\n}\nconsole.log(renderBadge({ count: 0 }));\n```\nWhat does this print, and why is it a bug?',
+    options: [
+      '"0 items" — count is read correctly',
+      '"No items yet" — 0 is falsy, so it is treated the same as a missing count',
+      'undefined — count is never read',
+      'A TypeError, because count is 0',
+    ],
+    answer: 1,
+    explain: '`if (user.count)` cannot tell "count is 0" apart from "count is missing" — both are falsy. The fix checks for absence explicitly, e.g. `if (user.count !== undefined)`, so a real zero still renders as "0 items".',
   },
 ];
 

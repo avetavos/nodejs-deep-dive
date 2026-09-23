@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## JavaScript is the language of Node.js
 
@@ -79,6 +81,91 @@ console.log(due.toString()); // e.g. 2026-10-12
 This module uses ES2022+ syntax. If you see a feature you do not recognise, MDN Web Docs is your friend — and the list above tells you which Node line first shipped it.
 </Callout>
 
+## Script mode: sloppy vs strict
+
+Every piece of JavaScript runs in one of two modes, decided by *how the file is loaded*, not by what it does:
+
+- **Sloppy mode** — the historical default. A classic `<script>` tag in a browser, or a `.js` file in a package without `"type": "module"`, runs sloppy unless it opts out. Sloppy mode forgives mistakes that would otherwise be bugs: assigning to a name that was never declared silently creates a global variable instead of throwing, and a plain function call sets `this` to the global object instead of `undefined`.
+- **Strict mode** — turns those silent forgivenesses into thrown errors. You get strict mode in three ways: writing `'use strict';` as the very first statement in a script or function, loading the file as an **ES module** (`.mjs`, or `.js` with `"type": "module"` — always strict, no directive needed), or writing code **inside a `class` body** (class bodies are strict even in an otherwise sloppy file).
+
+<Mermaid code={scriptModesDiagram} title="What decides sloppy vs strict mode" />
+
+export const scriptModesDiagram = `flowchart TD
+  A["How is this code loaded?"] --> B["Classic script / CommonJS .js file"]
+  A --> C["ES module: .mjs, or .js with package.json type: module"]
+  A --> D["Any code inside a class body"]
+  B -->|"no directive"| E["Sloppy mode"]
+  B -->|"'use strict' as first line"| F["Strict mode"]
+  C --> F
+  D --> F
+  E --> G["Undeclared assignment creates a global; this === global object in a plain call"]
+  F --> H["Undeclared assignment throws ReferenceError; this === undefined in a plain call"]`;
+
+This is exactly why the [`this` and Context](/nodejs/en/js-essentials/this-context/) demo later in this module opens with `'use strict';`: without it, a detached method call would silently fail by mutating the wrong object instead of throwing an error you can see and fix.
+
+```js
+// @skip-verify illustrative — contrasts what a plain (sloppy) script allows
+// vs what strict mode (any ES module, any class, or an explicit directive) rejects
+function setTotal() {
+  total = 42; // no const/let/var
+}
+setTotal();
+console.log(total); // sloppy mode: 42 — an implicit global was created
+```
+
+export const strictModeCode = `// @browser
+'use strict';
+function setTotal() {
+  total = 42; // no const/let/var — this line is the one sloppy mode would silently allow
+}
+
+try {
+  setTotal();
+  console.log('total:', total);
+} catch (e) {
+  console.log('threw:', e.constructor.name + ':', e.message);
+}
+`;
+
+<NodeRunner client:visible code={strictModeCode} />
+
+## Mental Model
+
+Think of sloppy mode as JavaScript running with a permissive safety net: typos and missing declarations get quietly absorbed instead of stopping the program. Strict mode removes that net. It does not add new features — it removes silent failure paths, converting them into thrown errors at the exact line where the mistake happened. Because ES modules and classes are strict unconditionally, and essentially all new Node.js code is written as ES modules, you should default to *assuming* strict mode and treat sloppy mode as the legacy exception you occasionally still meet in old CommonJS files.
+
+## Trade-offs
+
+| Mode | Benefit | Cost |
+|---|---|---|
+| Sloppy (legacy default) | Old scripts keep running unmodified; nothing new to learn | Typos become invisible global variables instead of errors; `this` in a plain call silently becomes the global object |
+| Strict (ESM, classes, `'use strict'`) | Mistakes surface immediately as `ReferenceError`/`TypeError` at the point of the bug | A handful of legacy patterns (some `arguments` tricks, `with`) stop working — rarely missed in modern code |
+
+## Common Misconceptions
+
+- **"`'use strict'` is an old ES5 relic nobody needs anymore."** You still need it in plain CommonJS `.js`/`.cjs` files if you want strict guarantees there — but you get it for free, with no directive, in every ES module and every class.
+- **"Strict mode changes what the code computes."** It does not add or change arithmetic or object semantics; it only turns previously-silent mistakes into thrown errors.
+- **"If my file has `"type": "module"` in `package.json`, I still need `'use strict'` at the top."** No — the directive is redundant there; ESM is strict unconditionally.
+
+## Reading AI-generated code
+
+AI-generated snippets are frequently written and tested as quick CommonJS scripts (sloppy by default) and then assumed to behave identically once dropped into a class or an ES module. Watch for code that relies on an assignment "just working" without a preceding `const`/`let`/`var` — that is a latent bug that only a strict context (ESM, a class, or an explicit directive) will actually catch for you.
+
+<SpotTheBug code={`function cache(key, value) {
+  if (!store) store = {}; // no declaration — meant to be a shared cache
+  store[key] = value;
+  return store;
+}
+
+cache('a', 1);
+cache('b', 2);
+console.log(store); // "works" by accident today`}>
+`store` is never declared with `const`/`let`/`var`. In a sloppy CommonJS script this silently creates a global named `store` the first time `cache` runs, which is why it "works" — every call happens to share the same accidental global. Drop this same function into an ES module, a class method, or add `'use strict'` to the file, and the first call throws `ReferenceError: store is not defined` instead. The fix is to declare the variable in an enclosing scope (module-level `const store = {};`) so the behavior does not depend on which mode the file happens to run in.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Sloppy mode silently forgives undeclared assignments and loose `this`; ES modules and classes are strict unconditionally, so treat "strict" as the default you write for and sloppy as the legacy exception.
+</Callout>
+
 export const indexQuiz = [
   {
     q: 'What does Node.js provide that a browser does not?',
@@ -89,6 +176,7 @@ export const indexQuiz = [
       'Garbage collection',
     ],
     answer: 1,
+    explain: 'Both Node and browsers embed a JS engine (V8) and support modern syntax and garbage collection. What Node adds is unrestricted access to the OS: files, sockets, child processes — none of which a browser exposes to page scripts for security reasons.',
   },
   {
     q: 'Which JavaScript version features does this module rely on?',
@@ -99,6 +187,40 @@ export const indexQuiz = [
       'TypeScript — which is compiled down to ES3',
     ],
     answer: 2,
+    explain: 'This course assumes ES2022+ throughout (optional chaining, `at()`, class fields, top-level await) and targets Node 24, the active LTS at time of writing — everything also runs unmodified on Node 26.',
+  },
+  {
+    q: 'Which of these three contexts is strict mode **not** automatic in, and needs an explicit `\'use strict\';` directive to get it?',
+    options: [
+      'A `.mjs` file',
+      'A `.js` file with `"type": "module"` in `package.json`',
+      'A plain `.js`/`.cjs` CommonJS script',
+      'The body of a `class`',
+    ],
+    answer: 2,
+    explain: 'ES modules (`.mjs`, or `.js` under `"type": "module"`) and class bodies are strict unconditionally. A plain CommonJS script is sloppy by default and only becomes strict if it starts with the `\'use strict\';` directive.',
+  },
+  {
+    q: '```js\nfunction setTotal() {\n  total = 42;\n}\nsetTotal();\nconsole.log(total);\n```\nWhat does this print when run as a plain, sloppy CommonJS script (no `\'use strict\'`)?',
+    options: [
+      'ReferenceError: total is not defined',
+      '42 — an implicit global `total` was created',
+      'undefined',
+      'A SyntaxError before the script even runs',
+    ],
+    answer: 1,
+    explain: 'Sloppy mode allows assignment to an undeclared name; it silently creates a global variable instead of throwing. The exact same code inside an ES module, a class, or with `\'use strict\'` added throws `ReferenceError: total is not defined` instead.',
+  },
+  {
+    q: '```js\nfunction cache(key, value) {\n  if (!store) store = {};\n  store[key] = value;\n  return store;\n}\ncache(\'a\', 1);\n```\nWhy does this function silently misbehave if it is ever moved into an ES module?',
+    options: [
+      'It would not misbehave — the code is fully mode-independent',
+      '`store` is never declared, so it relies on sloppy mode\'s implicit-global behavior, which ES modules do not have',
+      'ES modules do not support the `if` statement',
+      '`cache` would need to be exported first',
+    ],
+    answer: 1,
+    explain: '`store` is assigned without `const`/`let`/`var`. That only "works" because sloppy mode turns the undeclared assignment into an implicit global. An ES module is always strict, so the same line throws `ReferenceError: store is not defined` on the very first call.',
   },
 ];
 

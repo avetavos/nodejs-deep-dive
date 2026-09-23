@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## JavaScript คือภาษาของ Node.js
 
@@ -79,6 +81,91 @@ console.log(due.toString()); // e.g. 2026-10-12
 โมดูลนี้ใช้ syntax ES2022+ หากพบฟีเจอร์ที่ไม่คุ้นเคย MDN Web Docs คือแหล่งอ้างอิงที่ดีที่สุด — และรายการด้านบนบอกว่าฟีเจอร์นั้นมาพร้อม Node สายไหน
 </Callout>
 
+## Script mode: sloppy vs strict
+
+JavaScript ทุกชิ้นรันอยู่ใน mode ใดมode หนึ่งจากสองแบบ ตัดสินโดย **วิธีที่ไฟล์ถูกโหลด** ไม่ใช่โดยสิ่งที่โค้ดทำ:
+
+- **Sloppy mode** — ค่า default ดั้งเดิม `<script>` tag แบบคลาสสิกใน browser หรือไฟล์ `.js` ใน package ที่ไม่มี `"type": "module"` จะรัน sloppy เว้นแต่จะ opt out sloppy mode ให้อภัยความผิดพลาดที่ปกติจะเป็น bug: การ assign ให้ชื่อที่ไม่เคยถูกประกาศจะสร้างตัวแปร global ขึ้นมาเงียบๆ แทนที่จะ throw และการเรียกฟังก์ชันแบบธรรมดาจะตั้ง `this` เป็น global object แทนที่จะเป็น `undefined`
+- **Strict mode** — เปลี่ยนความให้อภัยแบบเงียบๆ เหล่านั้นให้กลายเป็น error ที่ throw ออกมา คุณจะได้ strict mode สามทาง: เขียน `'use strict';` เป็น statement แรกสุดในสคริปต์หรือฟังก์ชัน, โหลดไฟล์เป็น **ES module** (`.mjs` หรือ `.js` ที่มี `"type": "module"` — strict เสมอ ไม่ต้องมี directive), หรือเขียนโค้ด **ภายใน `class` body** (class body เป็น strict เสมอแม้อยู่ในไฟล์ที่ปกติเป็น sloppy)
+
+<Mermaid code={scriptModesDiagram} title="อะไรเป็นตัวกำหนด sloppy vs strict mode" />
+
+export const scriptModesDiagram = `flowchart TD
+  A["How is this code loaded?"] --> B["Classic script / CommonJS .js file"]
+  A --> C["ES module: .mjs, or .js with package.json type: module"]
+  A --> D["Any code inside a class body"]
+  B -->|"no directive"| E["Sloppy mode"]
+  B -->|"'use strict' as first line"| F["Strict mode"]
+  C --> F
+  D --> F
+  E --> G["Undeclared assignment creates a global; this === global object in a plain call"]
+  F --> H["Undeclared assignment throws ReferenceError; this === undefined in a plain call"]`;
+
+นี่คือเหตุผลที่ demo ของ [`this` และ Context](/nodejs/th/js-essentials/this-context/) ในบทถัดไปของโมดูลนี้เปิดด้วย `'use strict';` — ถ้าไม่มี การเรียก method แบบ detached จะ fail อย่างเงียบๆ โดยแก้ไข object ผิดตัวแทนที่จะ throw error ที่คุณเห็นและแก้ได้
+
+```js
+// @skip-verify illustrative — contrasts what a plain (sloppy) script allows
+// vs what strict mode (any ES module, any class, or an explicit directive) rejects
+function setTotal() {
+  total = 42; // no const/let/var
+}
+setTotal();
+console.log(total); // sloppy mode: 42 — an implicit global was created
+```
+
+export const strictModeCode = `// @browser
+'use strict';
+function setTotal() {
+  total = 42; // no const/let/var — this line is the one sloppy mode would silently allow
+}
+
+try {
+  setTotal();
+  console.log('total:', total);
+} catch (e) {
+  console.log('threw:', e.constructor.name + ':', e.message);
+}
+`;
+
+<NodeRunner client:visible code={strictModeCode} />
+
+## Mental Model
+
+ให้นึกภาพ sloppy mode เป็น JavaScript ที่รันพร้อม safety net ที่ผ่อนปรน: typo และการประกาศตัวแปรที่ขาดหายจะถูกดูดซับเงียบๆ แทนที่จะหยุดโปรแกรม Strict mode เอา net นั้นออก มันไม่ได้เพิ่มฟีเจอร์ใหม่ — มันเอา silent failure path ออก แล้วเปลี่ยนเป็น error ที่ throw ตรงบรรทัดที่ความผิดพลาดเกิดขึ้นจริง เพราะ ES module และ class เป็น strict โดยไม่มีเงื่อนไข และโค้ด Node.js ใหม่แทบทั้งหมดเขียนเป็น ES module คุณควร default ไปที่การ *สมมติ* ว่าเป็น strict mode และมอง sloppy mode เป็นข้อยกเว้นแบบ legacy ที่คุณอาจเจอบ้างในไฟล์ CommonJS เก่า
+
+## Trade-offs
+
+| Mode | Benefit | Cost |
+|---|---|---|
+| Sloppy (legacy default) | สคริปต์เก่ายังรันได้โดยไม่ต้องแก้ | typo กลายเป็นตัวแปร global ที่มองไม่เห็นแทนที่จะเป็น error; `this` ในการเรียกแบบธรรมดากลายเป็น global object แบบเงียบๆ |
+| Strict (ESM, class, `'use strict'`) | ความผิดพลาดปรากฏทันทีเป็น `ReferenceError`/`TypeError` ตรงจุดที่เกิด bug | pattern เก่าบางตัว (`arguments` บางแบบ, `with`) ใช้ไม่ได้ — แทบไม่มีผลกับโค้ดสมัยใหม่ |
+
+## Common Misconceptions
+
+- **"`'use strict'` เป็นของเก่าจาก ES5 ที่ไม่มีใครต้องใช้แล้ว"** ยังต้องใช้อยู่ในไฟล์ CommonJS `.js`/`.cjs` ธรรมดาถ้าต้องการ strict guarantee ที่นั่น — แต่ได้มันมาฟรีๆ โดยไม่ต้องมี directive ใน ES module และ class ทุกตัว
+- **"Strict mode เปลี่ยนสิ่งที่โค้ดคำนวณ"** มันไม่ได้เพิ่มหรือเปลี่ยน semantics ของ arithmetic หรือ object มันแค่เปลี่ยนความผิดพลาดที่เคยเงียบให้กลายเป็น error ที่ throw
+- **"ถ้าไฟล์มี `"type": "module"` ใน `package.json` ก็ยังต้องใส่ `'use strict'` ไว้บนสุดอยู่ดี"** ไม่จำเป็น — directive นั้นซ้ำซ้อนตรงนั้น เพราะ ESM เป็น strict โดยไม่มีเงื่อนไขอยู่แล้ว
+
+## Reading AI-generated code
+
+โค้ดที่ AI สร้างมักถูกเขียนและทดสอบเป็นสคริปต์ CommonJS สั้นๆ (sloppy โดย default) แล้วสมมติว่าจะทำงานเหมือนเดิมทุกประการเมื่อย้ายไปอยู่ใน class หรือ ES module ให้ระวังโค้ดที่พึ่งพาการ assign แบบ "ทำงานได้เฉยๆ" โดยไม่มี `const`/`let`/`var` นำหน้า — นั่นคือ bug แฝงที่ context แบบ strict เท่านั้น (ESM, class หรือ directive ชัดเจน) จะจับให้คุณเห็นจริงๆ
+
+<SpotTheBug code={`function cache(key, value) {
+  if (!store) store = {}; // no declaration — meant to be a shared cache
+  store[key] = value;
+  return store;
+}
+
+cache('a', 1);
+cache('b', 2);
+console.log(store); // "works" by accident today`}>
+`store` ไม่เคยถูกประกาศด้วย `const`/`let`/`var` ใน CommonJS script แบบ sloppy สิ่งนี้จะสร้างตัวแปร global ชื่อ `store` เงียบๆ ในครั้งแรกที่ `cache` รัน ซึ่งเป็นเหตุผลที่มัน "ทำงานได้" — ทุกการเรียกบังเอิญใช้ global ตัวเดียวกันร่วมกัน ย้ายฟังก์ชันเดียวกันนี้ไปอยู่ใน ES module, class method หรือเพิ่ม `'use strict'` เข้าไปในไฟล์ แล้วการเรียกครั้งแรกจะ throw `ReferenceError: store is not defined` แทน วิธีแก้คือประกาศตัวแปรใน scope ที่ครอบคลุมอยู่ (`const store = {};` ระดับ module) เพื่อไม่ให้พฤติกรรมขึ้นอยู่กับว่าไฟล์รันใน mode ไหน
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Sloppy mode ให้อภัยการ assign ที่ไม่ประกาศและ `this` ที่หลวมอย่างเงียบๆ; ES module และ class เป็น strict โดยไม่มีเงื่อนไข ดังนั้นให้มอง "strict" เป็นค่า default ที่คุณเขียนเพื่อมัน และมอง sloppy เป็นข้อยกเว้นแบบ legacy
+</Callout>
+
 export const indexQuiz = [
   {
     q: 'Node.js ให้สิ่งที่ browser ไม่มีคืออะไร?',
@@ -89,6 +176,7 @@ export const indexQuiz = [
       'Garbage collection',
     ],
     answer: 1,
+    explain: 'ทั้ง Node และ browser ฝัง JS engine (V8) เดียวกันและรองรับ syntax สมัยใหม่กับ garbage collection สิ่งที่ Node เพิ่มมาคือการเข้าถึง OS แบบไม่จำกัด: ไฟล์, socket, child process — ซึ่งไม่มีตัวไหนที่ browser เปิดให้ script บนหน้าเว็บใช้ได้ด้วยเหตุผลด้านความปลอดภัย',
   },
   {
     q: 'โมดูลนี้พึ่งพาฟีเจอร์ JavaScript เวอร์ชันใด?',
@@ -99,6 +187,40 @@ export const indexQuiz = [
       'TypeScript ที่คอมไพล์ลงเป็น ES3',
     ],
     answer: 2,
+    explain: 'คอร์สนี้ยึด ES2022+ ตลอดทั้งหมด (optional chaining, `at()`, class field, top-level await) และยึด Node 24 ซึ่งเป็น active LTS ณ เวลาที่เขียน — ทุกอย่างรันได้ไม่ต้องแก้บน Node 26 ด้วยเช่นกัน',
+  },
+  {
+    q: 'ใน 3 context นี้ context ไหนที่ strict mode **ไม่ได้** เป็นอัตโนมัติ และต้องมี directive `\'use strict\';` ชัดเจนถึงจะได้?',
+    options: [
+      'ไฟล์ `.mjs`',
+      'ไฟล์ `.js` ที่มี `"type": "module"` ใน `package.json`',
+      'สคริปต์ CommonJS `.js`/`.cjs` ธรรมดา',
+      'body ของ `class`',
+    ],
+    answer: 2,
+    explain: 'ES module (`.mjs` หรือ `.js` ภายใต้ `"type": "module"`) และ class body เป็น strict โดยไม่มีเงื่อนไข ส่วนสคริปต์ CommonJS ธรรมดาเป็น sloppy โดย default และจะ strict ก็ต่อเมื่อขึ้นต้นด้วย directive `\'use strict\';` เท่านั้น',
+  },
+  {
+    q: '```js\nfunction setTotal() {\n  total = 42;\n}\nsetTotal();\nconsole.log(total);\n```\nโค้ดนี้พิมพ์อะไรเมื่อรันเป็นสคริปต์ CommonJS แบบ sloppy ธรรมดา (ไม่มี `\'use strict\'`)?',
+    options: [
+      'ReferenceError: total is not defined',
+      '42 — เกิดตัวแปร global `total` แบบ implicit',
+      'undefined',
+      'SyntaxError ก่อนที่สคริปต์จะรันด้วยซ้ำ',
+    ],
+    answer: 1,
+    explain: 'Sloppy mode อนุญาตให้ assign ให้ชื่อที่ไม่ประกาศ มันสร้างตัวแปร global เงียบๆ แทนที่จะ throw โค้ดชิ้นเดียวกันนี้ในเดี๋ยว ES module, class หรือเพิ่ม `\'use strict\'` เข้าไป จะ throw `ReferenceError: total is not defined` แทน',
+  },
+  {
+    q: '```js\nfunction cache(key, value) {\n  if (!store) store = {};\n  store[key] = value;\n  return store;\n}\ncache(\'a\', 1);\n```\nทำไมฟังก์ชันนี้ถึงทำงานผิดเงียบๆ ถ้าถูกย้ายไปอยู่ใน ES module?',
+    options: [
+      'ไม่ผิดเลย — โค้ดนี้ไม่ขึ้นกับ mode',
+      '`store` ไม่เคยถูกประกาศ จึงพึ่งพาพฤติกรรม implicit-global ของ sloppy mode ซึ่ง ES module ไม่มี',
+      'ES module ไม่รองรับ statement `if`',
+      '`cache` ต้อง export ก่อน',
+    ],
+    answer: 1,
+    explain: '`store` ถูก assign โดยไม่มี `const`/`let`/`var` มัน "ทำงานได้" เพราะ sloppy mode เปลี่ยนการ assign ที่ไม่ประกาศให้กลายเป็น implicit global เท่านั้น ES module เป็น strict เสมอ โค้ดบรรทัดเดียวกันจึง throw `ReferenceError: store is not defined` ตั้งแต่การเรียกครั้งแรก',
   },
 ];
 

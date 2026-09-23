@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## var, let, and const
 
@@ -133,6 +135,124 @@ Note that `c1` and `c2` are completely independent — each call to `makeCounter
 An inner function holds a live reference to the outer variable. If that variable changes after the closure is created, the closure sees the new value. This is why the classic `var` loop bug produces unexpected results — all callbacks close over the same `i` variable, which has already incremented to its final value by the time any callback runs. Use `let` in loops to create a new binding per iteration.
 </Callout>
 
+## The var loop-closure bug
+
+This is the single most-repeated closure bug: `var` is function-scoped, so a `for` loop using `var` has exactly **one** `i` variable shared by every iteration. By the time any deferred callback runs, the loop has already finished and `i` holds its final value — every callback sees the same, wrong number. `let` fixes this because the loop creates a **fresh binding of `i` for every iteration**, and each callback closes over its own copy.
+
+<Mermaid code={loopClosureDiagram} title="var: one shared binding for the whole loop — let: a new binding per iteration" />
+
+export const loopClosureDiagram = `flowchart TD
+  subgraph var loop - one binding
+    V0["i (shared)"] --> V1["callback 0 reads i"]
+    V0 --> V2["callback 1 reads i"]
+    V0 --> V3["callback 2 reads i"]
+    V4["loop finishes: i = 3"] --> V0
+  end
+  subgraph let loop - one binding per iteration
+    L0["i = 0"] --> L1["callback 0 reads i = 0"]
+    L2["i = 1"] --> L3["callback 1 reads i = 1"]
+    L4["i = 2"] --> L5["callback 2 reads i = 2"]
+  end`;
+
+export const loopClosureCode = `
+console.log('--- var: shared binding ---');
+const varCallbacks = [];
+for (var i = 0; i < 3; i++) {
+  varCallbacks.push(function() { return i; });
+}
+console.log(varCallbacks.map(function(fn) { return fn(); })); // [3, 3, 3]
+
+console.log('--- let: fresh binding per iteration ---');
+const letCallbacks = [];
+for (let j = 0; j < 3; j++) {
+  letCallbacks.push(function() { return j; });
+}
+console.log(letCallbacks.map(function(fn) { return fn(); })); // [0, 1, 2]
+`;
+
+<NodeRunner client:visible code={loopClosureCode} />
+
+The same bug bites hardest with real async callbacks (`setTimeout`, a promise `.then()`, an event listener) because by the time *any* of them fires, the loop has always already finished — there is never a "fast enough" `var` loop that avoids this.
+
+## Automatic disposal: using and Symbol.dispose
+
+Node 24 adds `using` (and `await using`) declarations: a resource with a `[Symbol.dispose]()` (or `[Symbol.asyncDispose]()`) method is automatically disposed the moment the enclosing block exits — on a normal return **and** on a thrown error — without a manual `try`/`finally`. This is block scope put to work for resource cleanup: a `using` binding is scoped exactly like `let`, and disposal happens at the point the block's scope ends.
+
+export const usingCode = `
+function makeResource(name) {
+  return {
+    name,
+    [Symbol.dispose]() { console.log('disposed:', name); },
+  };
+}
+
+console.log('--- normal exit ---');
+{
+  using r1 = makeResource('r1');
+  console.log('using r1:', r1.name);
+} // r1[Symbol.dispose]() runs here automatically
+console.log('after block');
+
+console.log('--- exit via throw ---');
+try {
+  using r2 = makeResource('r2');
+  throw new Error('boom');
+} catch (e) {
+  console.log('caught:', e.message);
+} // r2 was disposed BEFORE the catch block ran, as the throw unwound the scope
+`;
+
+export const usingOut = `--- normal exit ---
+using r1: r1
+disposed: r1
+after block
+--- exit via throw ---
+disposed: r2
+caught: boom`;
+
+<NodeRunner client:visible code={usingCode} node expected={usingOut} />
+
+Before `using`, the same guarantee required a manual `try`/`finally` around every resource — easy to forget, and easy to get wrong when a function has more than one resource to release.
+
+## Mental Model
+
+Every `{ }` block that introduces `let`, `const`, or `using` bindings is a fresh scope — think of a loop with `let` as creating a **brand-new stack frame per iteration**, each with its own `i`, rather than one shared box that every iteration writes into. `var` never gets this treatment: it always writes into the single binding that belongs to the nearest enclosing function (or the module, if there is no function). `using` reuses that same "block creates its own lifetime" idea, but ties disposal — not just variable lifetime — to when the block's scope ends.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `var` | Familiar to anyone from older JS; hoists to the top of the function | Function-scoped, re-declarable, and shares one binding across every loop iteration — the source of the classic closure bug |
+| `let`/`const` in loops | A correct, independent binding per iteration; TDZ catches use-before-declare | Slightly more allocation than a single `var` (irrelevant in practice) |
+| Manual `try`/`finally` cleanup | Works in every JS version, no new syntax | Verbose with multiple resources; easy to forget on one code path |
+| `using`/`await using` | Guaranteed disposal on every exit path (return, throw, `break`) with no boilerplate | Node 24+ / very recent browsers only; the resource must implement `Symbol.dispose`/`Symbol.asyncDispose` |
+
+## Common Misconceptions
+
+- **"A closure copies the value of the variable it captures."** It captures a live reference. If the variable changes later, every closure over it sees the new value — this is exactly why the `var` loop bug happens.
+- **"Using `let` instead of `var` is just a style preference."** In a loop with any deferred callback, it is a correctness fix, not a style choice — `var` produces a real, reproducible bug.
+- **"`using` is just a fancier `try`/`finally`."** It is more than sugar: it lets each resource declare its own cleanup right at the point it is created, so cleanup for multiple resources reads top-to-bottom instead of nesting `finally` blocks, and it runs the dispose calls in reverse declaration order automatically.
+
+## Reading AI-generated code
+
+AI-generated code that pushes callbacks (`setTimeout`, array method callbacks stored for later, event listeners registered in bulk) inside a `for` loop declared with `var` is one of the most common and hardest-to-spot bugs to review, because the loop runs correctly and the bug only shows up once the deferred callbacks actually fire — often nowhere near the loop in the file or the stack trace.
+
+<SpotTheBug code={`function scheduleGreetings(names) {
+  for (var i = 0; i < names.length; i++) {
+    setTimeout(function() {
+      console.log('Hello, ' + names[i]);
+    }, 100);
+  }
+}
+
+scheduleGreetings(['Alice', 'Bob', 'Carol']);`}>
+`var i` is function-scoped, so there is exactly one `i` shared by all three `setTimeout` callbacks. By the time the first timer fires (100 ms later), the loop has already finished and `i` is `3` — every callback reads `names[3]`, which is `undefined`, printing "Hello, undefined" three times instead of greeting each name once. The fix is a one-character change: `for (let i = ...)`. `let` creates a fresh, independent `i` binding for each iteration, so each callback closes over its own value.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`var` gives a loop exactly one shared binding, so every deferred callback sees the loop's final value; `let` creates a fresh binding per iteration, which is why it is the correct default for any loop variable a callback might capture.
+</Callout>
+
 export const scopeQuiz = [
   {
     q: 'What is the key difference between `let` and `var` regarding scope?',
@@ -143,6 +263,7 @@ export const scopeQuiz = [
       'There is no difference — both behave identically inside a function',
     ],
     answer: 1,
+    explain: '`var` ignores block boundaries (`if`, `for`, `{}`) and belongs to the nearest function (or module); `let`/`const` are confined to the nearest enclosing `{}` block.',
   },
   {
     q: 'What is a closure?',
@@ -153,6 +274,7 @@ export const scopeQuiz = [
       'A pattern for preventing memory leaks in loops',
     ],
     answer: 1,
+    explain: 'A closure is any function bundled with a live reference to the variables of the scope it was created in — it keeps working even after that outer function has already returned.',
   },
   {
     q: 'What happens when you access a `let` variable before its declaration line?',
@@ -163,6 +285,29 @@ export const scopeQuiz = [
       'The engine hoists it and initialises it to `0`',
     ],
     answer: 2,
+    explain: '`let`/`const` are hoisted to the top of their block like `var`, but are left uninitialised in the Temporal Dead Zone — any read before the declaration line throws, instead of silently returning `undefined`.',
+  },
+  {
+    q: '```js\nconst fns = [];\nfor (var i = 0; i < 3; i++) {\n  fns.push(function() { return i; });\n}\nconsole.log(fns.map(function(fn) { return fn(); }));\n```\nWhat does this print?',
+    options: [
+      '[0, 1, 2]',
+      '[3, 3, 3]',
+      '[undefined, undefined, undefined]',
+      'A ReferenceError',
+    ],
+    answer: 1,
+    explain: '`var i` is one shared binding for the whole loop. By the time any of the pushed functions run, the loop has already finished and `i` is `3` — every closure reads that same final value.',
+  },
+  {
+    q: '```js\nfunction scheduleGreetings(names) {\n  for (var i = 0; i < names.length; i++) {\n    setTimeout(function() {\n      console.log(names[i]);\n    }, 0);\n  }\n}\nscheduleGreetings([\'Alice\', \'Bob\']);\n```\nWhat prints, and what is the minimal fix?',
+    options: [
+      'Alice then Bob — the code is already correct',
+      'undefined twice — change `var` to `let` in the for statement',
+      'A TypeError — `names` is not accessible inside `setTimeout`',
+      'Alice then Bob, but in a random order',
+    ],
+    answer: 1,
+    explain: 'All `setTimeout` callbacks share the one `var i` binding, so by the time they fire `i` is `2` (past the last valid index) and `names[2]` is `undefined`. Changing `var i` to `let i` gives each callback its own `i` for the correct iteration.',
   },
 ];
 

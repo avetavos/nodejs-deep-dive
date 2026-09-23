@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## var, let และ const
 
@@ -133,6 +135,124 @@ console.log('counters are independent:', c1.value() !== c2.value());
 ฟังก์ชันด้านในถือ reference ที่มีชีวิตอยู่ไปยังตัวแปรภายนอก หากตัวแปรนั้นเปลี่ยนแปลงหลังจากสร้าง closure แล้ว closure จะเห็นค่าใหม่ นี่คือสาเหตุที่ bug loop ของ `var` แบบคลาสสิกให้ผลลัพธ์ที่ไม่คาดคิด — callback ทุกตัว close over ตัวแปร `i` เดียวกัน ซึ่งเพิ่มไปยังค่าสุดท้ายแล้วเมื่อ callback ใดๆ รัน ใช้ `let` ใน loops เพื่อสร้าง binding ใหม่ต่อ iteration
 </Callout>
 
+## Bug loop closure ของ var
+
+นี่คือ closure bug ที่ถูกทำซ้ำมากที่สุด: `var` เป็น function-scoped ดังนั้น loop `for` ที่ใช้ `var` จะมี `i` แค่ **ตัวเดียว** ที่แชร์กันทุก iteration พอถึงเวลาที่ callback ที่ถูก defer ไว้ทำงานจริง loop ก็จบไปแล้วและ `i` ถือค่าสุดท้ายอยู่ — callback ทุกตัวเห็นตัวเลขผิดตัวเดียวกัน `let` แก้ปัญหานี้เพราะ loop จะสร้าง **binding ของ `i` ใหม่ทุก iteration** และแต่ละ callback close over copy ของตัวเอง
+
+<Mermaid code={loopClosureDiagram} title="var: binding เดียวที่แชร์กันตลอดทั้ง loop — let: binding ใหม่ทุก iteration" />
+
+export const loopClosureDiagram = `flowchart TD
+  subgraph var loop - one binding
+    V0["i (shared)"] --> V1["callback 0 reads i"]
+    V0 --> V2["callback 1 reads i"]
+    V0 --> V3["callback 2 reads i"]
+    V4["loop finishes: i = 3"] --> V0
+  end
+  subgraph let loop - one binding per iteration
+    L0["i = 0"] --> L1["callback 0 reads i = 0"]
+    L2["i = 1"] --> L3["callback 1 reads i = 1"]
+    L4["i = 2"] --> L5["callback 2 reads i = 2"]
+  end`;
+
+export const loopClosureCode = `
+console.log('--- var: shared binding ---');
+const varCallbacks = [];
+for (var i = 0; i < 3; i++) {
+  varCallbacks.push(function() { return i; });
+}
+console.log(varCallbacks.map(function(fn) { return fn(); })); // [3, 3, 3]
+
+console.log('--- let: fresh binding per iteration ---');
+const letCallbacks = [];
+for (let j = 0; j < 3; j++) {
+  letCallbacks.push(function() { return j; });
+}
+console.log(letCallbacks.map(function(fn) { return fn(); })); // [0, 1, 2]
+`;
+
+<NodeRunner client:visible code={loopClosureCode} />
+
+bug เดียวกันนี้กัดแรงที่สุดกับ callback แบบ async จริง (`setTimeout`, promise `.then()`, event listener) เพราะพอถึงเวลาที่ callback *ตัวไหนก็ตาม* ทำงาน loop จบไปแล้วเสมอ — ไม่มี `var` loop ตัวไหน "เร็วพอ" ที่จะหลีกเลี่ยง bug นี้ได้
+
+## การ dispose อัตโนมัติ: using และ Symbol.dispose
+
+Node 24 เพิ่ม `using` (และ `await using`) declaration: resource ที่มี method `[Symbol.dispose]()` (หรือ `[Symbol.asyncDispose]()`) จะถูก dispose อัตโนมัติทันทีที่ block ที่ครอบมันจบลง — ทั้งตอน return ปกติ **และ** ตอนที่มี error ถูก throw — โดยไม่ต้องมี `try`/`finally` ด้วยมือ นี่คือ block scope ที่ถูกนำมาใช้ทำ resource cleanup: `using` binding มี scope เหมือน `let` ทุกประการ และการ dispose เกิดขึ้นตรงจุดที่ scope ของ block นั้นจบลง
+
+export const usingCode = `
+function makeResource(name) {
+  return {
+    name,
+    [Symbol.dispose]() { console.log('disposed:', name); },
+  };
+}
+
+console.log('--- normal exit ---');
+{
+  using r1 = makeResource('r1');
+  console.log('using r1:', r1.name);
+} // r1[Symbol.dispose]() runs here automatically
+console.log('after block');
+
+console.log('--- exit via throw ---');
+try {
+  using r2 = makeResource('r2');
+  throw new Error('boom');
+} catch (e) {
+  console.log('caught:', e.message);
+} // r2 was disposed BEFORE the catch block ran, as the throw unwound the scope
+`;
+
+export const usingOut = `--- normal exit ---
+using r1: r1
+disposed: r1
+after block
+--- exit via throw ---
+disposed: r2
+caught: boom`;
+
+<NodeRunner client:visible code={usingCode} node expected={usingOut} />
+
+ก่อนมี `using` การรับประกันแบบเดียวกันนี้ต้องใช้ `try`/`finally` ด้วยมือรอบ resource ทุกตัว — ลืมง่าย และผิดพลาดง่ายเมื่อฟังก์ชันหนึ่งมี resource มากกว่าหนึ่งตัวที่ต้อง release
+
+## Mental Model
+
+`{ }` block ทุกอันที่ประกาศ `let`, `const` หรือ `using` คือ scope ใหม่ — ให้นึกภาพ loop ที่ใช้ `let` เป็นการสร้าง **stack frame ใหม่ทุก iteration** แต่ละอันมี `i` ของตัวเอง แทนที่จะเป็นกล่องเดียวที่ทุก iteration เขียนทับกัน `var` ไม่ได้รับการปฏิบัติแบบนี้เลย — มันเขียนลงใน binding เดียวที่เป็นของฟังก์ชันที่ครอบใกล้ที่สุดเสมอ (หรือ module ถ้าไม่มีฟังก์ชัน) `using` ใช้แนวคิด "block สร้าง lifetime ของตัวเอง" แบบเดียวกัน แต่ผูกการ dispose — ไม่ใช่แค่ lifetime ของตัวแปร — เข้ากับตอนที่ scope ของ block จบลง
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `var` | คุ้นเคยสำหรับคนที่มาจาก JS รุ่นเก่า; hoist ไปบนสุดของฟังก์ชัน | Function-scoped, re-declare ได้ และแชร์ binding เดียวตลอดทุก loop iteration — ต้นเหตุของ closure bug คลาสสิก |
+| `let`/`const` ใน loops | binding ที่ถูกต้องและเป็นอิสระต่อ iteration; TDZ จับ use-before-declare ได้ | allocation เยอะกว่า `var` ตัวเดียวเล็กน้อย (ไม่มีผลจริงในทางปฏิบัติ) |
+| Manual `try`/`finally` cleanup | ใช้ได้กับ JS ทุกเวอร์ชัน ไม่มี syntax ใหม่ | ยืดยาวเมื่อมีหลาย resource; ลืมง่ายใน code path หนึ่ง |
+| `using`/`await using` | รับประกันการ dispose ทุก exit path (return, throw, `break`) โดยไม่มี boilerplate | รองรับแค่ Node 24+ / browser ล่าสุดมากๆ; resource ต้อง implement `Symbol.dispose`/`Symbol.asyncDispose` |
+
+## Common Misconceptions
+
+- **"Closure copy ค่าของตัวแปรที่มัน capture"** มัน capture live reference ต่างหาก ถ้าตัวแปรเปลี่ยนทีหลัง closure ทุกตัวที่อ้างถึงมันจะเห็นค่าใหม่ — นี่คือสาเหตุที่แท้จริงของ bug loop ของ `var`
+- **"ใช้ `let` แทน `var` เป็นแค่เรื่อง style"** ใน loop ที่มี callback แบบ defer มันคือการแก้ correctness ไม่ใช่แค่ style — `var` ทำให้เกิด bug จริงที่ reproduce ได้เสมอ
+- **"`using` เป็นแค่ `try`/`finally` ที่หรูขึ้น"** มันมากกว่า syntax sugar: มันให้แต่ละ resource ประกาศ cleanup ของตัวเองตรงจุดที่มันถูกสร้าง ทำให้ cleanup ของหลาย resource อ่านจากบนลงล่างแทนที่จะซ้อน `finally` และมันรัน dispose ตามลำดับย้อนกลับของการประกาศให้อัตโนมัติ
+
+## Reading AI-generated code
+
+โค้ดที่ AI สร้างซึ่ง push callback (`setTimeout`, callback ของ array method ที่เก็บไว้ใช้ทีหลัง, event listener ที่ลงทะเบียนเป็นชุด) ไว้ใน loop `for` ที่ประกาศด้วย `var` เป็นหนึ่งใน bug ที่พบบ่อยและ review ยากที่สุด เพราะ loop รันถูกต้องและ bug จะโผล่ก็ต่อเมื่อ callback ที่ defer ไว้ทำงานจริงเท่านั้น — มักอยู่ห่างจาก loop มากในไฟล์หรือใน stack trace
+
+<SpotTheBug code={`function scheduleGreetings(names) {
+  for (var i = 0; i < names.length; i++) {
+    setTimeout(function() {
+      console.log('Hello, ' + names[i]);
+    }, 100);
+  }
+}
+
+scheduleGreetings(['Alice', 'Bob', 'Carol']);`}>
+`var i` เป็น function-scoped ดังนั้นมี `i` แค่ตัวเดียวที่แชร์กันทั้งสาม `setTimeout` callback พอถึงเวลาที่ timer ตัวแรกทำงาน (100 ms ต่อมา) loop จบไปแล้วและ `i` เป็น `3` — callback ทุกตัวอ่าน `names[3]` ซึ่งเป็น `undefined` พิมพ์ "Hello, undefined" สามครั้งแทนที่จะทักทายแต่ละชื่อครั้งเดียว วิธีแก้คือเปลี่ยนแค่ตัวอักษรเดียว: `for (let i = ...)` `let` สร้าง `i` binding ใหม่และเป็นอิสระให้แต่ละ iteration ดังนั้นแต่ละ callback close over ค่าของตัวเอง
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`var` ให้ loop มี binding เดียวที่แชร์กัน ดังนั้น callback ที่ defer ไว้ทุกตัวเห็นค่าสุดท้ายของ loop; `let` สร้าง binding ใหม่ต่อ iteration ซึ่งเป็นเหตุผลที่มันเป็น default ที่ถูกต้องสำหรับตัวแปร loop ตัวไหนก็ตามที่ callback อาจ capture ไว้
+</Callout>
+
 export const scopeQuiz = [
   {
     q: 'ความแตกต่างหลักระหว่าง `let` และ `var` ในเรื่อง scope คืออะไร?',
@@ -143,6 +263,7 @@ export const scopeQuiz = [
       'ไม่มีความแตกต่าง — ทำงานเหมือนกันทุกประการภายในฟังก์ชัน',
     ],
     answer: 1,
+    explain: '`var` ไม่สนใจขอบเขตของ block (`if`, `for`, `{}`) และเป็นของฟังก์ชันที่ใกล้ที่สุด (หรือ module); `let`/`const` ถูกจำกัดอยู่แค่ `{}` block ที่ครอบใกล้ที่สุด',
   },
   {
     q: 'Closure คืออะไร?',
@@ -153,6 +274,7 @@ export const scopeQuiz = [
       'pattern สำหรับป้องกัน memory leaks ใน loops',
     ],
     answer: 1,
+    explain: 'Closure คือฟังก์ชันใดก็ตามที่ผูกมากับ live reference ของตัวแปรใน scope ที่มันถูกสร้างขึ้น — มันยังทำงานได้แม้ฟังก์ชันรอบนอกนั้น return ไปแล้ว',
   },
   {
     q: 'เกิดอะไรขึ้นเมื่อเข้าถึงตัวแปร `let` ก่อนบรรทัดที่ประกาศ?',
@@ -163,6 +285,29 @@ export const scopeQuiz = [
       'engine hoist และ initialise เป็น `0`',
     ],
     answer: 2,
+    explain: '`let`/`const` ถูก hoist ไปบนสุดของ block เหมือน `var` แต่ถูกปล่อยไว้แบบ uninitialised ใน Temporal Dead Zone — การอ่านก่อนบรรทัดที่ประกาศจะ throw แทนที่จะคืน `undefined` เงียบๆ',
+  },
+  {
+    q: '```js\nconst fns = [];\nfor (var i = 0; i < 3; i++) {\n  fns.push(function() { return i; });\n}\nconsole.log(fns.map(function(fn) { return fn(); }));\n```\nโค้ดนี้พิมพ์อะไร?',
+    options: [
+      '[0, 1, 2]',
+      '[3, 3, 3]',
+      '[undefined, undefined, undefined]',
+      'ReferenceError',
+    ],
+    answer: 1,
+    explain: '`var i` คือ binding เดียวที่แชร์กันทั้ง loop พอถึงเวลาที่ฟังก์ชันที่ push ไว้ตัวไหนทำงาน loop ก็จบไปแล้วและ `i` เป็น `3` — closure ทุกตัวอ่านค่าสุดท้ายตัวเดียวกันนั้น',
+  },
+  {
+    q: '```js\nfunction scheduleGreetings(names) {\n  for (var i = 0; i < names.length; i++) {\n    setTimeout(function() {\n      console.log(names[i]);\n    }, 0);\n  }\n}\nscheduleGreetings([\'Alice\', \'Bob\']);\n```\nโค้ดนี้พิมพ์อะไร และวิธีแก้ที่น้อยที่สุดคืออะไร?',
+    options: [
+      'Alice แล้วตามด้วย Bob — โค้ดถูกต้องอยู่แล้ว',
+      'undefined สองครั้ง — เปลี่ยน `var` เป็น `let` ใน for statement',
+      'TypeError — `names` เข้าถึงไม่ได้ภายใน `setTimeout`',
+      'Alice แล้วตามด้วย Bob แต่สลับลำดับแบบสุ่ม',
+    ],
+    answer: 1,
+    explain: '`setTimeout` callback ทุกตัวแชร์ `var i` binding เดียวกัน พอถึงเวลาที่มันทำงาน `i` เป็น `2` (เกิน index สุดท้ายที่ถูกต้อง) และ `names[2]` เป็น `undefined` การเปลี่ยน `var i` เป็น `let i` ทำให้แต่ละ callback มี `i` ของตัวเองสำหรับ iteration ที่ถูกต้อง',
   },
 ];
 

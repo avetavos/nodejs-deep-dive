@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Primitives vs objects
 
@@ -115,6 +117,171 @@ console.log('typeof null:', typeof null);
 operator `===` ไม่เคย coerce types ดังนั้นการเปรียบเทียบจะทำงานตรงตามที่เขียน ใช้ `==` เฉพาะกรณีที่ตั้งใจ: ตรวจสอบทั้ง `null` และ `undefined` พร้อมกันด้วย `value == null`
 </Callout>
 
+## กับดัก coercion เพิ่มเติม
+
+`if`, `+`, `-`, `Number()` และ `parseInt()` แต่ละตัว coerce ในแบบที่ต่างกันและจำสับสนได้ง่าย
+
+**`if` สนใจแค่ truthy/falsy — ไม่สนว่า "นี่คือค่าที่มีความหมายหรือเปล่า"** `0`, `NaN` และ `''` เป็น falsy ทั้งหมดและตกอยู่ branch เดียวกับ `null`/`undefined` แม้ว่า `0` และ `''` จะเป็นข้อมูลที่ถูกต้องได้:
+
+```js
+if (0)        console.log('never — 0 is falsy');
+if (NaN)      console.log('never — NaN is falsy');
+if ('')       console.log('never — empty string is falsy');
+if ([])       console.log('runs — an empty array is truthy');
+if ({})       console.log('runs — an empty object is truthy');
+```
+
+**`+` และ `-` ไม่เห็นตรงกันเรื่องสตริง** `+` ถูก overload ทั้งบวกเลขและต่อสตริง ดังนั้นถ้า operand ฝั่งใดฝั่งหนึ่งเป็นสตริง `+` จะต่อสตริง ส่วน `-` ไม่มีความหมายสำหรับสตริงเลย จึง coerce ทั้งสองฝั่งเป็นตัวเลขก่อนเสมอ:
+
+```js
+console.log(1 + '1');   // '11'  — + sees a string, concatenates
+console.log(1 - '1');   // 0     — - always coerces to number
+console.log([5] - 1);   // 4     — [5] coerces to the number 5 first
+console.log([] + []);   // ''    — both sides coerce to '', then concatenate
+```
+
+**`Number('')` เป็น `0` ไม่ใช่ `NaN`** สตริงว่างหรือมีแต่ whitespace จะแปลงเป็น `0` ด้วย `Number()` แต่ `parseInt('')` ให้ `NaN` — ทั้งสองฟังก์ชันไม่ตรงกันสำหรับ input ว่าง:
+
+```js
+console.log(Number(''));      // 0
+console.log(Number('   '));   // 0
+console.log(parseInt(''));    // NaN
+```
+
+**`parseInt` ที่ไม่มี radix เป็นกับดักจริง — แต่ไม่ใช่ตัวที่คนพูดซ้ำๆ กัน** เรื่อง "leading zero แปลว่า octal" แบบเก่าไม่จริงแล้ว (`parseInt('08')` ให้ `8` บน engine สมัยใหม่ทุกตัว ตาม spec ES5+) กับดักจริงในปัจจุบันคือสตริงที่ขึ้นต้นด้วย `0x` ที่ auto-detect เป็น hex และการเรียกโดยไม่ระบุ radix ชัดเจนที่เชื่อพฤติกรรมนั้นเงียบๆ:
+
+```js
+console.log(parseInt('08'));      // 8   — no octal trap on modern JS engines
+console.log(parseInt('0x10'));    // 16  — auto-detected as hex, radix defaulted to 16
+console.log(parseInt('10', 2));   // 2   — radix 2: '10' means binary two
+console.log(parseInt('19,000'));  // 19  — stops at the first non-digit character
+```
+
+ระบุ radix ชัดเจนเสมอ — `parseInt(str, 10)` — เมื่อต้องการฐาน 10
+
+**`Array.isArray()` คือการตรวจ array ที่เชื่อถือได้ตัวเดียว** `typeof` รายงาน `'object'` สำหรับ array (ดูด้านบน) และ `[] instanceof Array` ก็ fail ข้าม realm ต่างกัน (iframe, worker thread, vm context):
+
+```js
+console.log(Array.isArray([]));        // true
+console.log(Array.isArray({}));        // false
+console.log(typeof []);                // 'object' — no help here
+```
+
+## Optional chaining และ nullish coalescing เทียบกับ `||`
+
+`?.` short-circuit เป็น `undefined` แทนที่จะ throw เมื่อลิงก์ใน chain ของ property/method เป็น `null` หรือ `undefined` `??` เลือกค่าฝั่งขวาเฉพาะเมื่อฝั่งซ้ายเป็น `null` หรือ `undefined` เท่านั้น — ต่างจาก `||` ที่ fall through สำหรับ falsy value **ทุกตัว** รวมถึง `0` และ `''`:
+
+```js
+const config = { retries: 0, name: '' };
+
+console.log(config.retries || 3);   // 3  — WRONG: 0 is a valid retry count, but || treats it as missing
+console.log(config.retries ?? 3);   // 0  — RIGHT: ?? only falls back on null/undefined
+
+console.log(config.timeout ?? 5000); // 5000 — timeout is genuinely absent
+console.log(config.user?.profile?.email); // undefined — no throw, even though user is missing
+```
+
+<Mermaid code={coercionDecisionDiagram} title="|| fall through สำหรับ falsy value ใดๆ; ?? fall through เฉพาะ null/undefined" />
+
+export const coercionDecisionDiagram = `flowchart TD
+  A["left ?? right"] --> B{"Is left null or undefined?"}
+  B -->|"yes"| C["use right"]
+  B -->|"no, even if 0, '', false, NaN"| D["use left"]
+  E["left || right"] --> F{"Is left falsy? (0, '', false, NaN, null, undefined)"}
+  F -->|"yes"| C
+  F -->|"no"| D`;
+
+## การ Clone object: structuredClone vs spread
+
+การ spread object (`{ ...obj }`) หรือ array (`[...arr]`) copy แค่ **ระดับบนสุด** เท่านั้น — nested object ยังคงถูกแชร์โดยการอ้างอิง `structuredClone()` ทำ **deep clone** ที่แท้จริง (และสร้าง `Date`, `Map`, `Set`, typed array ใหม่อย่างถูกต้อง) แต่ clone function ไม่ได้:
+
+```js
+const original = { name: 'demo', tags: ['a', 'b'], meta: { count: 1 } };
+
+const shallow = { ...original };
+shallow.meta.count = 99;
+console.log(original.meta.count); // 99 — shallow copy shared the nested "meta" object
+
+const deep = structuredClone(original);
+deep.meta.count = 1;
+console.log(original.meta.count); // still 99 — deep clone is fully independent
+```
+
+`JSON.parse(JSON.stringify(obj))` เป็นเทคนิค deep-clone ad hoc ที่ใช้กันบ่อย แต่มันทิ้งค่า `undefined` และ function ไปเงียบๆ และเปลี่ยน `Date` object เป็นสตริงธรรมดา — `structuredClone()` จัดการสิ่งเหล่านี้ได้ถูกต้องทั้งหมดและควรเลือกใช้แทน
+
+## Demo coercion และ cloning ที่รันได้
+
+export const coercionDeepCode = `
+console.log('--- if traps ---');
+console.log('if (0):', Boolean(0));
+console.log('if (NaN):', Boolean(NaN));
+console.log('if ([]):', Boolean([]));
+console.log('--- + vs - ---');
+console.log('1 + "1":', 1 + '1');
+console.log('1 - "1":', 1 - '1');
+console.log('[5] - 1:', [5] - 1);
+console.log('--- Number vs parseInt ---');
+console.log('Number(""):', Number(''));
+console.log('parseInt(""):', parseInt(''));
+console.log('parseInt("0x10"):', parseInt('0x10'));
+console.log('parseInt("10", 2):', parseInt('10', 2));
+console.log('--- Array.isArray ---');
+console.log('Array.isArray([]):', Array.isArray([]));
+console.log('--- ?? vs || ---');
+const config = { retries: 0 };
+console.log('retries || 3:', config.retries || 3);
+console.log('retries ?? 3:', config.retries ?? 3);
+console.log('--- structuredClone vs spread ---');
+const original = { meta: { count: 1 } };
+const shallow = { ...original };
+shallow.meta.count = 99;
+console.log('shallow leaked into original:', original.meta.count);
+const deep = structuredClone(original);
+deep.meta.count = 1;
+console.log('deep left original alone:', original.meta.count);
+`;
+
+<NodeRunner client:visible code={coercionDeepCode} />
+
+## Mental Model
+
+operator ที่ coerce แต่ละตัวตอบคำถามที่ต่างกันเล็กน้อย: `if` ถาม "นี่ truthy ไหม?", `+` ถาม "ฝั่งใดฝั่งหนึ่งดูเหมือนสตริงไหม?", `-`/`Number()` ถาม "นี่คือเลขอะไร?" และ `??` ถาม "นี่คือ null หรือ undefined จริงๆ ไหม?" ไม่มีตัวไหนถาม "ผู้เรียกให้ค่าที่มีความหมายมาจริงไหม?" — คำถามนั้นเป็นคำถามที่ `0`, `''` และ `NaN` ตอบให้คุณไม่ได้เลย เพราะมันเป็นค่าที่ถูกต้องแต่บังเอิญเป็น falsy การอ่านโค้ดที่มี coercion เยอะๆ ให้เข้าใจดี หมายถึงการลอง substitute `0`, `''`, `[]` และ `{}` เข้าไปในใจก่อนที่จะเชื่อ truthy check ทุกตัว
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `if (value)` / `value \|\| fallback` | สั้น อ่านง่ายสำหรับ "นี่หายไปไหม" | บอกไม่ได้ว่า "หายไป" ต่างจาก `0`, `''` หรือ `false` จริงๆ |
+| `value ?? fallback` | ถือว่า `null`/`undefined` เท่านั้นที่หายไป | คุ้นเคยน้อยกว่าสำหรับนักพัฒนาที่เคยชินกับ `\|\|` อย่างเดียว |
+| `{ ...obj }` spread | เร็ว ไม่มี dependency เหมาะกับ object แบน | nested object/array ถูกแชร์โดยการอ้างอิง — mutate clone อาจ mutate ต้นฉบับ |
+| `structuredClone(obj)` | deep clone จริง จัดการ `Date`/`Map`/`Set` ได้ถูกต้อง | clone function หรือ DOM node ไม่ได้; ช้ากว่า shallow spread เล็กน้อย |
+
+## Common Misconceptions
+
+- **"`0` และ `''` มีความหมายเหมือน `null`/`undefined` ใน `if`"** ทั้งหมดเป็น falsy แต่ `0` และ `''` เป็นค่าที่มีอยู่จริง — `??` (ไม่ใช่ `||` ไม่ใช่ `if (!value)`) คือ operator ที่แยก "หายไป" ออกจาก "falsy แต่มีอยู่" ได้จริง
+- **"`parseInt('08')` ให้คำตอบผิดเพราะ octal parsing"** เป็นจริงใน engine ก่อน ES5 บน engine ทุกตัวที่คอร์สนี้ยึด `parseInt('08') === 8` กับดัก `parseInt` จริงในวันนี้คือการไม่ระบุ radix บน input ที่กำกวมหรือขึ้นต้นด้วย `0x`
+- **"การ spread object (`{ ...obj }`) สร้าง copy ที่เป็นอิสระเต็มที่"** มัน copy แค่ระดับเดียวเท่านั้น — nested object หรือ array ยังเป็น reference เดิมในทั้งสอง copy
+- **"`typeof arr === 'object'` ใช้ตรวจ array ได้"** มันเป็น true ทั้งกับ plain object และ array จึงแยกไม่ได้ — ใช้ `Array.isArray()` แทน
+
+## Reading AI-generated code
+
+รูปแบบที่พบบ่อยมากในโค้ดที่ AI สร้างคือ truthy check ที่ใช้แทนการเช็ค "ค่านี้ถูกส่งมาไหม" — `if (user.count)`, `value || 'default'` หรือ `data.length && doSomething()` — ไม่มีตัวไหนทำงานถูกต้องเลยเมื่อค่าจริงเป็น `0`, `''` หรือ `false` เมื่อไหร่ก็ตามที่ค่า falsy-but-valid เป็นไปได้ การเช็คต้องเป็น `!== undefined`, `!== null` หรือ `??`
+
+<SpotTheBug code={`function renderBadge(user) {
+  if (user.count) {
+    return user.count + ' items';
+  }
+  return 'No items yet';
+}
+
+console.log(renderBadge({ count: 0 })); // meant to show "0 items"`}>
+`if (user.count)` มองว่า `0` เป็น falsy ดังนั้น user ที่มี count เป็นศูนย์พอดีจะตกไปที่ branch "No items yet" — แม้ `0` จะเป็น count ที่ถูกต้องและรู้ค่าแล้ว ไม่ใช่ค่าที่หายไป วิธีแก้คือเช็คการ *ไม่มี* ค่านั้นโดยตรง: `if (user.count !== undefined)` หรือปรับโครงสร้างด้วย nullish coalescing เพื่อให้ `undefined`/`null` เท่านั้นที่ fallback ไปค่า default ในขณะที่ `0` จริงยังพิมพ์เป็น "0 items"
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Falsy ไม่ใช่คำถามเดียวกับ missing: `0`, `''` และ `NaN` เป็นค่าจริงที่บังเอิญ falsy ดังนั้นให้ใช้ `??` หรือเช็ค `!== undefined`/`!== null` อย่างชัดเจนแทน `if (value)` หรือ `value || fallback` เมื่อไหร่ก็ตามที่ falsy value อาจเป็นข้อมูลที่ถูกต้อง
+</Callout>
+
 export const coercionQuiz = [
   {
     q: '`typeof null` คืนค่าอะไรใน JavaScript?',
@@ -125,6 +292,7 @@ export const coercionQuiz = [
       '"boolean"',
     ],
     answer: 2,
+    explain: '`typeof null === \'object\'` เป็น bug ที่ฝังอยู่ในภาษาตั้งแต่ JavaScript 1.0 และแก้ไม่ได้เลยโดยไม่ทำลายเว็บ ให้เช็ค null โดยเฉพาะด้วย `value === null`',
   },
   {
     q: 'ค่าใดต่อไปนี้เป็น falsy?',
@@ -135,6 +303,7 @@ export const coercionQuiz = [
       'ตัวเลข `0`',
     ],
     answer: 3,
+    explain: 'มี falsy value อยู่แค่หกตัวเท่านั้น: `false`, `0`, `\'\'`, `null`, `undefined`, `NaN` ส่วน `[]`, `{}` และสตริง `"0"` ที่ไม่ว่าง ล้วนเป็น truthy — มีแค่ตัวเลข `0` ตัวเดียวในลิสต์นี้ที่เป็น falsy',
   },
   {
     q: 'ผลลัพธ์ของ `null == undefined` คืออะไร?',
@@ -145,6 +314,29 @@ export const coercionQuiz = [
       'true — ทั้งคู่ coerces เป็น 0',
     ],
     answer: 1,
+    explain: 'Spec เจาะจงกรณีพิเศษไว้: `==` ถือว่า `null` และ `undefined` เท่ากันกับกันเองและไม่เท่ากับอะไรอื่น นี่คือการใช้ `==` แบบถูกต้องเพียงหนึ่งเดียวในโค้ดสมัยใหม่: `value == null` เช็คทั้งคู่พร้อมกัน',
+  },
+  {
+    q: '```js\nconst config = { retries: 0 };\nconsole.log(config.retries || 3);\nconsole.log(config.retries ?? 3);\n```\nโค้ดนี้พิมพ์อะไร?',
+    options: [
+      '0 แล้วตามด้วย 0',
+      '3 แล้วตามด้วย 3',
+      '3 แล้วตามด้วย 0',
+      '0 แล้วตามด้วย 3',
+    ],
+    answer: 2,
+    explain: '`||` fallback สำหรับ falsy value *ใดๆ* และ `0` เป็น falsy ดังนั้น `config.retries || 3` พิมพ์ `3` — เสียค่าจริงไป `??` fallback เฉพาะ `null`/`undefined` เท่านั้น ดังนั้น `config.retries ?? 3` พิมพ์ `0` ถูกต้อง',
+  },
+  {
+    q: '```js\nfunction renderBadge(user) {\n  if (user.count) {\n    return user.count + \' items\';\n  }\n  return \'No items yet\';\n}\nconsole.log(renderBadge({ count: 0 }));\n```\nโค้ดนี้พิมพ์อะไร และทำไมถึงเป็น bug?',
+    options: [
+      '"0 items" — count ถูกอ่านถูกต้อง',
+      '"No items yet" — 0 เป็น falsy จึงถูกปฏิบัติเหมือน count ที่หายไป',
+      'undefined — count ไม่เคยถูกอ่าน',
+      'TypeError เพราะ count เป็น 0',
+    ],
+    answer: 1,
+    explain: '`if (user.count)` แยก "count เป็น 0" ออกจาก "count หายไป" ไม่ได้ — ทั้งคู่เป็น falsy วิธีแก้คือเช็คการไม่มีอยู่โดยตรง เช่น `if (user.count !== undefined)` เพื่อให้ 0 จริงยังแสดงเป็น "0 items"',
   },
 ];
 

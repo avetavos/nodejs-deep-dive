@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is this?
 
@@ -77,6 +79,26 @@ const boundIntroduce = introduce.bind(obj);
 boundIntroduce('Hi', '?');            // 'Hi, I am Carol?'
 ```
 
+export const callApplyBindCode = `// @browser
+function introduce(greeting, punctuation) {
+  return greeting + ', I am ' + this.name + punctuation;
+}
+
+const obj = { name: 'Carol' };
+
+console.log('call:', introduce.call(obj, 'Hello', '!'));
+console.log('apply:', introduce.apply(obj, ['Hey', '.']));
+
+const boundIntroduce = introduce.bind(obj);
+console.log('bind:', boundIntroduce('Hi', '?'));
+
+// bind is permanent — a second .bind() or .call() cannot override it
+const reboundIntroduce = boundIntroduce.bind({ name: 'Someone else' });
+console.log('re-bind is ignored:', reboundIntroduce('Yo', '!'));
+`;
+
+<NodeRunner client:visible code={callApplyBindCode} />
+
 ## Arrow functions and this
 
 Arrow functions do **not** have their own `this`. They inherit `this` from the **lexical enclosing scope** — the surrounding regular function or module scope at the point where they are written.
@@ -132,6 +154,130 @@ console.log('bound call:', bound()); // 3
 Arrow functions do not create their own `this` binding. This makes them ideal for callbacks and nested functions inside class methods or object methods, where you want to keep the outer `this`. However, never use an arrow function as an object method itself — there is no outer `this` to inherit from there, so `this` will be `undefined` or `globalThis`.
 </Callout>
 
+## The full `this` table
+
+Six call shapes cover essentially every `this` bug you will meet in real code:
+
+| Call shape | What `this` is | Loses binding? |
+|---|---|---|
+| `obj.method()` | `obj` — the object before the dot | No |
+| `const fn = obj.method; fn()` (detached) | `undefined` in strict mode (throws on access); the global object in sloppy mode | **Yes** |
+| Arrow function nested inside a method | Whatever `this` was in the enclosing method — inherited, not its own | No |
+| Class field arrow (`prop = () => { ... }`) | The instance, permanently — bound once at construction | No |
+| Regular function passed to `setTimeout`/array callback | Not the object you expected — a timer object or `undefined`, never the object it was "on" | **Yes** |
+| `fn.bind(obj)` / `.call(obj)` / `.apply(obj)` | Explicitly `obj`, forced regardless of how the result is later called | No (that is the point) |
+
+<Mermaid code={thisTableDiagram} title="Which call shapes keep this, and which lose it" />
+
+export const thisTableDiagram = `flowchart TD
+  A["How is the function called?"] --> B["obj.method() -- this = obj"]
+  A --> C["detached: const fn = obj.method; fn() -- this LOST"]
+  A --> D["arrow nested in a method -- this inherited from enclosing scope"]
+  A --> E["class field arrow -- this = instance, bound at construction"]
+  A --> F["passed to setTimeout / array callback as a regular function -- this LOST"]
+  A --> G["fn.bind(obj) / .call(obj) / .apply(obj) -- this forced to obj"]`;
+
+The demo above already covers the method call and the detached call. This one covers the other three shapes that most often surprise a reviewer: an arrow nested in a method, a class field arrow, and a regular function handed to `setTimeout`.
+
+export const thisTableCode = `
+// 1. Arrow nested inside a method — inherits 'this' from the method, not from the caller
+const timer = {
+  label: 'inherited-arrow',
+  start: function() {
+    setTimeout(() => {
+      console.log('nested arrow this.label:', this.label);
+    }, 0);
+  },
+};
+timer.start();
+
+// 2. Class field arrow — bound to the instance once, at construction time
+class Counter {
+  count = 0;
+  incArrow = () => {
+    this.count += 1;
+    return this.count;
+  };
+}
+const counter = new Counter();
+const detachedArrow = counter.incArrow; // detach it — does NOT lose 'this'
+console.log('detached class-field arrow still works:', detachedArrow());
+
+// 3. Regular function passed to setTimeout — 'this' is NOT the object it was defined on
+const obj = {
+  label: 'tick',
+  runRegular: function() {
+    setTimeout(function() {
+      console.log('regular setTimeout callback this.label:', this && this.label);
+    }, 0);
+  },
+  runArrow: function() {
+    setTimeout(() => {
+      console.log('arrow setTimeout callback this.label:', this.label);
+    }, 0);
+  },
+};
+obj.runRegular();
+obj.runArrow();
+`;
+
+export const thisTableOut = `detached class-field arrow still works: 1
+nested arrow this.label: inherited-arrow
+regular setTimeout callback this.label: undefined
+arrow setTimeout callback this.label: tick`;
+
+<NodeRunner client:visible code={thisTableCode} node expected={thisTableOut} />
+
+Notice the ordering in the output: the two `setTimeout` callbacks always run after the synchronous code (including the class-field arrow log) has finished — this is the event loop deferring their macrotask callbacks, covered in depth in the Event Loop & Async module.
+
+## Mental Model
+
+Think of `this` as an invisible extra parameter that JavaScript fills in **at the call site**, not at the definition site — like an unlabeled first argument every non-arrow function secretly receives. `obj.method()` fills it with `obj`. A bare `fn()` fills it with `undefined` (strict) or the global object (sloppy). `fn.call(obj)`/`fn.apply(obj)`/`fn.bind(obj)` let you fill it in yourself. Arrow functions are the one exception: they never receive this invisible parameter at all — an arrow function textually reads whatever `this` was already in scope where it was written, exactly like any other variable it closes over.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Regular function as a method | Gets its own dynamic `this`, reusable across different receiver objects (`fn.call(otherObj)`) | Easy to lose `this` by extracting or passing the function as a callback |
+| Arrow function as a callback | Cannot lose `this` — it was never its own to lose | Cannot be re-targeted with `call`/`apply`/`bind`; unsuitable as an object method itself |
+| Class field arrow | Auto-bound once, safe to pass as an event handler or callback directly | One function instance is created per object instance, not shared on the prototype (a small memory cost for many instances) |
+| `.bind(obj)` | Makes the correct `this` permanent and impossible to override, even accidentally | Creates a new function object on every call — avoid calling `.bind()` inside a hot loop |
+
+## Common Misconceptions
+
+- **"Arrow functions are just shorter syntax for regular functions."** They also change semantics: no own `this`, no own `arguments`, and they cannot be used as constructors (`new arrowFn()` throws).
+- **"If a function is defined inside an object literal, `this` always refers to that object."** Only true for a function written with `method() {}` or `method: function() {}` shorthand *and* called as `obj.method()`. The same function detached and called alone loses that binding entirely.
+- **"`bind` runs the function immediately."** `fn.bind(obj)` returns a brand-new function without calling `fn`; you must still invoke the result.
+- **"An arrow class field costs nothing compared to a prototype method."** It is bound once per instance, which is exactly what you want for a callback — but it does mean N instances create N separate function objects, unlike a prototype method which is shared by every instance.
+
+## Reading AI-generated code
+
+The most common `this` bug in AI-generated code is passing an object method directly as a callback — `setTimeout(obj.method, 1000)`, `array.map(obj.method)`, `emitter.on('event', obj.method)` — all of which detach the method from `obj` at the moment they are passed, exactly like the classic detached-call bug, just one level of indirection away from being obvious.
+
+<SpotTheBug code={`class Poller {
+  constructor(url) {
+    this.url = url;
+    this.attempts = 0;
+  }
+
+  poll() {
+    this.attempts += 1;
+    console.log('polling', this.url, 'attempt', this.attempts);
+  }
+
+  start() {
+    setInterval(this.poll, 1000); // looks fine — poll is "the method"
+  }
+}
+
+new Poller('https://example.com').start();`}>
+`setInterval(this.poll, 1000)` passes the `poll` function by itself, detached from the `Poller` instance — exactly the same bug as `const fn = obj.method; fn()`. When the timer fires, `poll` runs with `this` as `undefined` (class bodies are strict), so `this.attempts += 1` throws `TypeError: Cannot read properties of undefined`. The fix is to preserve the binding explicitly: `setInterval(this.poll.bind(this), 1000)`, `setInterval(() => this.poll(), 1000)`, or declare `poll` as a class field arrow (`poll = () => { ... }`) so it is always bound to the instance, however it is passed around.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`this` is resolved at the call site, not the definition site, for every regular function — so the instant a method is detached, passed as a callback, or handed to `setTimeout`/`setInterval`/an array method, it has lost its binding unless you fix it with an arrow function, `.bind()`, or a class field arrow.
+</Callout>
+
 export const thisQuiz = [
   {
     q: 'When is `this` determined for a regular (non-arrow) JavaScript function?',
@@ -142,6 +288,7 @@ export const thisQuiz = [
       'It is always `globalThis`',
     ],
     answer: 1,
+    explain: '`this` for a regular function is filled in fresh every time it is called, based on the call syntax used (`obj.method()`, a bare `fn()`, `fn.call(x)`, `new Fn()`) — never based on where the function happens to be written.',
   },
   {
     q: 'What does `fn.bind(obj)` return?',
@@ -152,6 +299,7 @@ export const thisQuiz = [
       'An error if `obj` is null',
     ],
     answer: 1,
+    explain: '`.bind()` does not call the function — it returns a brand-new function wrapping the original, with `this` locked to `obj` for every future call, even a later `.call()` or `.bind()` on the result.',
   },
   {
     q: 'Why do arrow functions work well as callbacks inside class methods?',
@@ -162,6 +310,29 @@ export const thisQuiz = [
       'They have access to the prototype chain directly',
     ],
     answer: 2,
+    explain: 'An arrow function has no `this` of its own — it reads `this` from the scope where it was written, so a `setTimeout` or `array.map()` callback written as an arrow inside a method keeps that method\'s `this` automatically.',
+  },
+  {
+    q: '```js\nclass Poller {\n  constructor() { this.count = 0; }\n  poll() { this.count += 1; return this.count; }\n  start() { return setTimeout(this.poll, 0); }\n}\nconst p = new Poller();\np.start();\n```\nWhat happens when the timer fires?',
+    options: [
+      '`p.count` becomes 1 — the method runs normally',
+      'It throws a `TypeError`, because `this` inside `poll` is `undefined`',
+      'Nothing happens — `setTimeout` silently ignores class methods',
+      '`this` refers to `p`, because `poll` was defined inside the class',
+    ],
+    answer: 1,
+    explain: '`setTimeout(this.poll, 0)` passes `poll` detached from `p` — exactly the classic detached-call bug. Class bodies are strict, so calling `poll` with no receiver sets `this` to `undefined`, and `this.count += 1` throws reading a property of `undefined`.',
+  },
+  {
+    q: '```js\nclass Counter {\n  count = 0;\n  inc = () => { this.count += 1; return this.count; };\n}\nconst c = new Counter();\nconst detached = c.inc;\nconsole.log(detached());\n```\nWhat does this print, and why does it differ from a normal detached method?',
+    options: [
+      'Throws a TypeError, same as a detached regular method',
+      '1 — a class field arrow is bound to the instance once, at construction, so detaching it does not lose `this`',
+      'undefined — arrow functions never have access to `this`',
+      '0 — the increment does not apply to arrow functions',
+    ],
+    answer: 1,
+    explain: 'A class field initialised to an arrow function creates one function per instance, permanently closed over that instance\'s `this` at construction time. Unlike a prototype method, detaching it and calling it standalone still works correctly.',
   },
 ];
 

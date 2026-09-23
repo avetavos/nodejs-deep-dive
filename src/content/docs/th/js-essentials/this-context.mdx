@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## this คืออะไร?
 
@@ -77,6 +79,26 @@ const boundIntroduce = introduce.bind(obj);
 boundIntroduce('Hi', '?');            // 'Hi, I am Carol?'
 ```
 
+export const callApplyBindCode = `// @browser
+function introduce(greeting, punctuation) {
+  return greeting + ', I am ' + this.name + punctuation;
+}
+
+const obj = { name: 'Carol' };
+
+console.log('call:', introduce.call(obj, 'Hello', '!'));
+console.log('apply:', introduce.apply(obj, ['Hey', '.']));
+
+const boundIntroduce = introduce.bind(obj);
+console.log('bind:', boundIntroduce('Hi', '?'));
+
+// bind is permanent — a second .bind() or .call() cannot override it
+const reboundIntroduce = boundIntroduce.bind({ name: 'Someone else' });
+console.log('re-bind is ignored:', reboundIntroduce('Yo', '!'));
+`;
+
+<NodeRunner client:visible code={callApplyBindCode} />
+
 ## Arrow functions และ this
 
 Arrow functions **ไม่มี `this` ของตัวเอง** แต่ inherit `this` จาก **lexical enclosing scope** — function หรือ module scope รอบนอกที่จุดที่เขียน
@@ -132,6 +154,130 @@ console.log('bound call:', bound()); // 3
 Arrow functions ไม่สร้าง binding `this` ของตัวเอง ทำให้เหมาะอย่างยิ่งสำหรับ callbacks และ nested functions ภายใน class methods หรือ object methods ที่ต้องการรักษา `this` ภายนอกไว้ อย่างไรก็ตาม ไม่ควรใช้ arrow function เป็น object method โดยตรง — ไม่มี `this` ภายนอกที่จะ inherit ทำให้ `this` จะเป็น `undefined` หรือ `globalThis`
 </Callout>
 
+## ตาราง this แบบครบ
+
+รูปแบบการเรียกหกแบบครอบคลุม `this` bug แทบทั้งหมดที่คุณจะเจอในโค้ดจริง:
+
+| รูปแบบการเรียก | `this` คืออะไร | สูญเสีย binding ไหม? |
+|---|---|---|
+| `obj.method()` | `obj` — object ก่อนจุด | ไม่ |
+| `const fn = obj.method; fn()` (detached) | `undefined` ใน strict mode (throw เมื่อเข้าถึง); global object ใน sloppy mode | **ใช่** |
+| Arrow function ที่ nest อยู่ใน method | `this` เดียวกับที่อยู่ใน method รอบนอก — inherit มา ไม่ใช่ของตัวเอง | ไม่ |
+| Class field arrow (`prop = () => { ... }`) | instance นั้นอย่างถาวร — bind ครั้งเดียวตอน construct | ไม่ |
+| Regular function ที่ส่งให้ `setTimeout`/array callback | ไม่ใช่ object ที่คุณคาดไว้ — timer object หรือ `undefined` ไม่เคยเป็น object ที่มัน "อยู่บน" | **ใช่** |
+| `fn.bind(obj)` / `.call(obj)` / `.apply(obj)` | `obj` อย่างชัดเจน บังคับไม่ว่าผลลัพธ์จะถูกเรียกทีหลังอย่างไร | ไม่ (นั่นคือจุดประสงค์) |
+
+<Mermaid code={thisTableDiagram} title="รูปแบบการเรียกไหนที่รักษา this ไว้ และแบบไหนที่สูญเสียไป" />
+
+export const thisTableDiagram = `flowchart TD
+  A["How is the function called?"] --> B["obj.method() -- this = obj"]
+  A --> C["detached: const fn = obj.method; fn() -- this LOST"]
+  A --> D["arrow nested in a method -- this inherited from enclosing scope"]
+  A --> E["class field arrow -- this = instance, bound at construction"]
+  A --> F["passed to setTimeout / array callback as a regular function -- this LOST"]
+  A --> G["fn.bind(obj) / .call(obj) / .apply(obj) -- this forced to obj"]`;
+
+Demo ด้านบนครอบคลุม method call และ detached call ไปแล้ว ส่วนนี้ครอบคลุมอีกสามรูปแบบที่มักทำให้ผู้ review แปลกใจที่สุด: arrow ที่ nest อยู่ใน method, class field arrow และ regular function ที่ส่งให้ `setTimeout`
+
+export const thisTableCode = `
+// 1. Arrow nested inside a method — inherits 'this' from the method, not from the caller
+const timer = {
+  label: 'inherited-arrow',
+  start: function() {
+    setTimeout(() => {
+      console.log('nested arrow this.label:', this.label);
+    }, 0);
+  },
+};
+timer.start();
+
+// 2. Class field arrow — bound to the instance once, at construction time
+class Counter {
+  count = 0;
+  incArrow = () => {
+    this.count += 1;
+    return this.count;
+  };
+}
+const counter = new Counter();
+const detachedArrow = counter.incArrow; // detach it — does NOT lose 'this'
+console.log('detached class-field arrow still works:', detachedArrow());
+
+// 3. Regular function passed to setTimeout — 'this' is NOT the object it was defined on
+const obj = {
+  label: 'tick',
+  runRegular: function() {
+    setTimeout(function() {
+      console.log('regular setTimeout callback this.label:', this && this.label);
+    }, 0);
+  },
+  runArrow: function() {
+    setTimeout(() => {
+      console.log('arrow setTimeout callback this.label:', this.label);
+    }, 0);
+  },
+};
+obj.runRegular();
+obj.runArrow();
+`;
+
+export const thisTableOut = `detached class-field arrow still works: 1
+nested arrow this.label: inherited-arrow
+regular setTimeout callback this.label: undefined
+arrow setTimeout callback this.label: tick`;
+
+<NodeRunner client:visible code={thisTableCode} node expected={thisTableOut} />
+
+สังเกตลำดับใน output: `setTimeout` callback ทั้งสองตัวรันหลังจากโค้ด synchronous (รวมถึง log ของ class-field arrow) จบไปแล้วเสมอ — นี่คือ event loop ที่ defer macrotask callback ของมันไว้ ซึ่งอธิบายลึกในโมดูล Event Loop & Async
+
+## Mental Model
+
+ให้นึกภาพ `this` เป็นพารามิเตอร์พิเศษที่มองไม่เห็นซึ่ง JavaScript เติมให้ **ณ จุดที่เรียก** ไม่ใช่ ณ จุดที่นิยาม — เหมือน argument แรกที่ไม่มี label ที่ทุก regular function ได้รับมาแบบลับๆ `obj.method()` เติมมันด้วย `obj` `fn()` เปล่าๆ เติมด้วย `undefined` (strict) หรือ global object (sloppy) `fn.call(obj)`/`fn.apply(obj)`/`fn.bind(obj)` ให้คุณเติมมันเองได้ Arrow function คือข้อยกเว้นเดียว: มันไม่ได้รับพารามิเตอร์ที่มองไม่เห็นนี้เลย — arrow function อ่าน `this` ตามตัวอักษรจาก scope ที่มันถูกเขียนไว้ เหมือนตัวแปรอื่นๆ ที่มัน close over
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Regular function เป็น method | ได้ `this` แบบ dynamic ของตัวเอง ใช้ซ้ำได้กับ receiver object ต่างกัน (`fn.call(otherObj)`) | สูญเสีย `this` ได้ง่ายเมื่อแยกฟังก์ชันออกมาหรือส่งเป็น callback |
+| Arrow function เป็น callback | สูญเสีย `this` ไม่ได้ — เพราะไม่เคยเป็นของตัวเองตั้งแต่แรก | re-target ด้วย `call`/`apply`/`bind` ไม่ได้; ไม่เหมาะเป็น object method เอง |
+| Class field arrow | Auto-bound ครั้งเดียว ปลอดภัยที่จะส่งเป็น event handler หรือ callback โดยตรง | สร้างฟังก์ชัน instance ใหม่ต่อ object instance หนึ่งตัว ไม่ได้แชร์บน prototype (ต้นทุน memory เล็กน้อยเมื่อมีหลาย instance) |
+| `.bind(obj)` | ทำให้ `this` ที่ถูกต้องถาวรและ override ไม่ได้แม้จะโดนเผลอ | สร้าง function object ใหม่ทุกครั้งที่เรียก — หลีกเลี่ยงการเรียก `.bind()` ใน loop ที่ทำงานบ่อย |
+
+## Common Misconceptions
+
+- **"Arrow functions เป็นแค่ syntax สั้นกว่าของ regular functions"** มันเปลี่ยน semantics ด้วย: ไม่มี `this` ของตัวเอง, ไม่มี `arguments` ของตัวเอง และใช้เป็น constructor ไม่ได้ (`new arrowFn()` throw)
+- **"ถ้าฟังก์ชันถูกนิยามใน object literal `this` จะอ้างถึง object นั้นเสมอ"** จริงเฉพาะฟังก์ชันที่เขียนด้วย `method() {}` หรือ `method: function() {}` shorthand *และ* ถูกเรียกเป็น `obj.method()` เท่านั้น ฟังก์ชันเดียวกันที่ถูกแยกออกมาแล้วเรียกเดี่ยวๆ จะสูญเสีย binding นั้นไปทั้งหมด
+- **"`bind` รันฟังก์ชันทันที"** `fn.bind(obj)` คืนฟังก์ชันใหม่ทั้งหมดโดยไม่เรียก `fn` คุณยังต้อง invoke ผลลัพธ์เอง
+- **"Arrow class field ไม่มีต้นทุนเทียบกับ prototype method"** มัน bind ครั้งเดียวต่อ instance ซึ่งเป็นสิ่งที่คุณต้องการสำหรับ callback พอดี — แต่มันหมายความว่า N instance สร้าง function object แยกกัน N ตัว ต่างจาก prototype method ที่แชร์กันทุก instance
+
+## Reading AI-generated code
+
+`this` bug ที่พบบ่อยที่สุดในโค้ดที่ AI สร้างคือการส่ง object method ตรงๆ เป็น callback — `setTimeout(obj.method, 1000)`, `array.map(obj.method)`, `emitter.on('event', obj.method)` — ทั้งหมดนี้แยก method ออกจาก `obj` ตรงจุดที่มันถูกส่งไป เหมือน detached-call bug แบบคลาสสิกทุกประการ เพียงแต่ห่างออกมาอีกหนึ่งชั้นจนไม่ชัดเจน
+
+<SpotTheBug code={`class Poller {
+  constructor(url) {
+    this.url = url;
+    this.attempts = 0;
+  }
+
+  poll() {
+    this.attempts += 1;
+    console.log('polling', this.url, 'attempt', this.attempts);
+  }
+
+  start() {
+    setInterval(this.poll, 1000); // looks fine — poll is "the method"
+  }
+}
+
+new Poller('https://example.com').start();`}>
+`setInterval(this.poll, 1000)` ส่งฟังก์ชัน `poll` เดี่ยวๆ ที่แยกออกจาก instance ของ `Poller` — เป็น bug เดียวกับ `const fn = obj.method; fn()` ทุกประการ พอ timer ทำงาน `poll` จะรันโดยมี `this` เป็น `undefined` (class body เป็น strict) ดังนั้น `this.attempts += 1` จะ throw `TypeError: Cannot read properties of undefined` วิธีแก้คือรักษา binding ไว้อย่างชัดเจน: `setInterval(this.poll.bind(this), 1000)`, `setInterval(() => this.poll(), 1000)` หรือประกาศ `poll` เป็น class field arrow (`poll = () => { ... }`) เพื่อให้มันถูก bind กับ instance เสมอไม่ว่าจะถูกส่งไปที่ไหน
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`this` ถูก resolve ณ จุดที่เรียก ไม่ใช่จุดที่นิยาม สำหรับ regular function ทุกตัว — ดังนั้นทันทีที่ method ถูกแยกออกมา, ส่งเป็น callback หรือส่งให้ `setTimeout`/`setInterval`/array method มันสูญเสีย binding ไปแล้ว เว้นแต่คุณจะแก้ด้วย arrow function, `.bind()` หรือ class field arrow
+</Callout>
+
 export const thisQuiz = [
   {
     q: '`this` ของ regular function (non-arrow) ใน JavaScript ถูกกำหนดเมื่อไหร่?',
@@ -142,6 +288,7 @@ export const thisQuiz = [
       'เป็น `globalThis` เสมอ',
     ],
     answer: 1,
+    explain: '`this` ของ regular function ถูกเติมใหม่ทุกครั้งที่ถูกเรียก ขึ้นอยู่กับ syntax การเรียกที่ใช้ (`obj.method()`, `fn()` เปล่าๆ, `fn.call(x)`, `new Fn()`) — ไม่ได้ขึ้นอยู่กับตำแหน่งที่ฟังก์ชันถูกเขียนไว้เลย',
   },
   {
     q: '`fn.bind(obj)` return อะไร?',
@@ -152,6 +299,7 @@ export const thisQuiz = [
       'Error หาก `obj` เป็น null',
     ],
     answer: 1,
+    explain: '`.bind()` ไม่เรียกฟังก์ชัน — มัน return ฟังก์ชันใหม่ทั้งหมดที่ห่อฟังก์ชันเดิม โดยล็อก `this` เป็น `obj` สำหรับทุกการเรียกในอนาคต แม้แต่ `.call()` หรือ `.bind()` ที่เรียกทีหลังบนผลลัพธ์นั้น',
   },
   {
     q: 'ทำไม arrow functions จึงทำงานได้ดีเป็น callbacks ภายใน class methods?',
@@ -162,6 +310,29 @@ export const thisQuiz = [
       'เข้าถึง prototype chain ได้โดยตรง',
     ],
     answer: 2,
+    explain: 'Arrow function ไม่มี `this` ของตัวเอง — มันอ่าน `this` จาก scope ที่มันถูกเขียนไว้ ดังนั้น callback ของ `setTimeout` หรือ `array.map()` ที่เขียนเป็น arrow ภายใน method จะรักษา `this` ของ method นั้นไว้ให้อัตโนมัติ',
+  },
+  {
+    q: '```js\nclass Poller {\n  constructor() { this.count = 0; }\n  poll() { this.count += 1; return this.count; }\n  start() { return setTimeout(this.poll, 0); }\n}\nconst p = new Poller();\np.start();\n```\nเกิดอะไรขึ้นเมื่อ timer ทำงาน?',
+    options: [
+      '`p.count` กลายเป็น 1 — method รันตามปกติ',
+      'throw `TypeError` เพราะ `this` ภายใน `poll` เป็น `undefined`',
+      'ไม่มีอะไรเกิดขึ้น — `setTimeout` เพิกเฉยต่อ class method อย่างเงียบๆ',
+      '`this` อ้างถึง `p` เพราะ `poll` ถูกนิยามอยู่ใน class',
+    ],
+    answer: 1,
+    explain: '`setTimeout(this.poll, 0)` ส่ง `poll` แบบแยกออกจาก `p` — เป็น detached-call bug คลาสสิกทุกประการ class body เป็น strict ดังนั้นการเรียก `poll` โดยไม่มี receiver จะตั้ง `this` เป็น `undefined` และ `this.count += 1` จะ throw เมื่ออ่าน property ของ `undefined`',
+  },
+  {
+    q: '```js\nclass Counter {\n  count = 0;\n  inc = () => { this.count += 1; return this.count; };\n}\nconst c = new Counter();\nconst detached = c.inc;\nconsole.log(detached());\n```\nโค้ดนี้พิมพ์อะไร และทำไมมันถึงต่างจาก detached method ทั่วไป?',
+    options: [
+      'throw TypeError เหมือน detached regular method',
+      '1 — class field arrow ถูก bind กับ instance ครั้งเดียวตอน construct ดังนั้นการแยกมันออกมาไม่ทำให้เสีย `this`',
+      'undefined — arrow function ไม่มีสิทธิ์เข้าถึง `this` เลย',
+      '0 — การเพิ่มค่าไม่มีผลกับ arrow function',
+    ],
+    answer: 1,
+    explain: 'Class field ที่ initialise เป็น arrow function สร้างฟังก์ชันหนึ่งตัวต่อ instance โดย close over `this` ของ instance นั้นถาวรตั้งแต่ตอน construct ต่างจาก prototype method การแยกมันออกมาแล้วเรียกเดี่ยวๆ ยังทำงานถูกต้อง',
   },
 ];
 
