@@ -28,7 +28,7 @@ greet().then(function(v) { console.log(v); }); // hello
 
 ```js
 async function loadUser() {
-  var user = await fetchUser(42);   // หยุดตรงนี้จนกว่า fetchUser resolve
+  var user = await fetchUser(42);   // pauses here until fetchUser resolves
   var posts = await fetchPosts(user.id);
   return posts;
 }
@@ -81,8 +81,8 @@ const requestContext = new AsyncLocalStorage();
 
 async function handle(req) {
   await requestContext.run({ id: req.id }, async function() {
-    await save(req);                        // await ซ้อนกี่ชั้นก็ได้…
-    console.log(requestContext.getStore()); // …ยังเห็น { id: req.id }
+    await save(req);                        // any depth of awaits…
+    console.log(requestContext.getStore()); // …still sees { id: req.id }
   });
 }
 ```

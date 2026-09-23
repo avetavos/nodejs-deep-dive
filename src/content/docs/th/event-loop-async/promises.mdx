@@ -22,7 +22,7 @@ Promise เปลี่ยนจาก pending ไปเป็น fulfilled ห�
 
 ```js
 var p = new Promise(function(resolve, reject) {
-  // เรียก resolve(value) เพื่อ fulfill หรือ reject(error) เพื่อ reject
+  // Call resolve(value) to fulfill, or reject(error) to reject
   resolve('hello');
 });
 ```

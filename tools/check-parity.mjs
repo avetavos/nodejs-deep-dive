@@ -329,8 +329,9 @@ for (const enPath of files) {
       report(`${thPath}: Thai characters inside fenced \`\`\`ts block #${i}`);
     }
   });
+  // (a literal byte-identical to EN is exempt: Thai string data is legitimate when EN carries the same bytes)
   for (const [name, code] of Object.entries(thCode)) {
-    if (THAI_RE.test(code)) {
+    if (THAI_RE.test(code) && code !== enCode[name]) {
       report(`${thPath}: Thai characters inside ${name} playground literal`);
     }
   }

@@ -51,7 +51,7 @@ event loop ประมวลผล callback แบบ async จากสอง�
 Node.js เพิ่ม API การจัดคิวอีกสองตัวที่ต้องใช้ Node runtime:
 
 ```js
-// ใช้ได้ใน Node.js เท่านั้น — ไม่ได้ในเบราว์เซอร์
+// These only work in Node.js — not in browsers
 process.nextTick(function() {
   console.log('nextTick fires before other microtasks');
 });

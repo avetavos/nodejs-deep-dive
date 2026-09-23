@@ -34,9 +34,9 @@ function pumpWithBackpressure(readable, writable) {
   readable.on('data', function(chunk) {
     var ok = writable.write(chunk);
     if (!ok) {
-      readable.pause();             // หยุด source
+      readable.pause();             // stop the source
       writable.once('drain', function() {
-        readable.resume();          // resume เมื่อพร้อม
+        readable.resume();          // resume when ready
       });
     }
   });

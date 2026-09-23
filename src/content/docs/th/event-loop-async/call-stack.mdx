@@ -25,9 +25,9 @@ function main() {
 }
 
 main();
-// Stack ที่จุดสูงสุด: [main] → [main, greet]
-// หลัง greet return: [main]
-// หลัง main return: []
+// Stack at peak: [main] → [main, greet]
+// After greet returns: [main]
+// After main returns: []
 ```
 
 เอนจินทำงานได้ **ทีละเฟรมเท่านั้น** ขณะที่เฟรมหนึ่งกำลังทำงาน ไม่มีอย่างอื่นทำงานได้ — ไม่ว่าจะเป็น callback ของ I/O, callback ของ timer หรืออะไรก็ตาม
@@ -73,7 +73,7 @@ countdown(5);
 ถ้าคุณรันงาน synchronous ที่ยาวนาน — การคำนวณหนัก, ลูปขนาดใหญ่, การอ่านไฟล์แบบ synchronous — call stack จะถูกครอบครองตลอดช่วงเวลานั้น ไม่มีโค้ดอื่นทำงานได้จนกว่า stack จะว่าง
 
 ```js
-// โค้ดนี้บล็อกราว ~200ms — ไม่มีอะไรเกิดขึ้นได้ในช่วงนี้
+// This blocks for ~200ms — nothing else can happen during this time
 var start = Date.now();
 while (Date.now() - start < 200) {
   // spinning

@@ -61,7 +61,7 @@ function writeWithDrain(writable, chunks) {
       var ok = writable.write(chunks[i]);
       i++;
       if (!ok) {
-        // buffer เต็ม — รอ drain ก่อนต่อ
+        // buffer full — wait for drain before continuing
         writable.once('drain', next);
         return;
       }

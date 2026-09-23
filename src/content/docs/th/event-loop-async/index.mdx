@@ -38,7 +38,7 @@ JavaScript ใน Node.js ทำงานบน **เธรดเดียว** 
 สนิปเป็ตด้านล่างรันโค้ดสามชิ้น สังเกตว่าโค้ด **ไม่ได้** ทำงานจากบนลงล่างตามลำดับที่เขียน — log แบบ synchronous ทำงานก่อน, callback ของ Promise ทำงานถัดมา (microtask), และ callback ของ `setTimeout` ทำงานเป็นอันสุดท้าย (macrotask)
 
 ```js
-// อะไรทำงานก่อน?
+// What runs first?
 console.log('A — sync');
 Promise.resolve().then(() => console.log('B — microtask (Promise)'));
 setTimeout(() => console.log('C — macrotask (setTimeout)'), 0);
