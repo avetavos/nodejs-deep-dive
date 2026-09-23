@@ -1,0 +1,324 @@
+---
+title: 'Module โหลดจริง ๆ ยังไง'
+description: 'Wrapper function ของ CJS, require.cache, phase ของ ESM loader และ cycle, --import hook, และความจริงเรื่อง strip-types บน Node 24'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## CommonJS: ทุกไฟล์ถูกห่อด้วย function
+
+`require`, `module`, `exports`, `__dirname`, และ `__filename` ไม่ใช่ global — มันดูเหมือนเป็น global เพราะทุกไฟล์ CJS ถูก compile ข้างใน wrapper function ที่รับสิ่งเหล่านี้เป็น parameter `Module.wrap()` คือ function ตัวจริงที่ Node ใช้สร้าง wrapper นั้น:
+
+export const cjsWrapCode = `require('node:module'); // a real require() call, to prove this file runs as CJS
+console.log('require:', typeof require, '| module:', typeof module, '| exports:', typeof exports, '| __dirname:', typeof __dirname, '| __filename:', typeof __filename);
+console.log(module.constructor.wrap('console.log(1)').slice(0, 78));
+`;
+
+export const cjsWrapOut = `require: function | module: object | exports: object | __dirname: string | __filename: string
+(function (exports, require, module, __filename, __dirname) { console.log(1)
+}`;
+
+<NodeRunner client:visible code={cjsWrapCode} node expected={cjsWrapOut} />
+
+นี่คือเหตุผลที่ไฟล์ CJS ใช้ `require` กับ `__dirname` ได้โดยไม่ต้อง import จากที่ไหนเลย และก็เป็นเหตุผลที่ทั้งห้าชื่อนี้ไม่มีอยู่ใน ESM เลย — ไฟล์ ESM ไม่ได้ถูกรันข้างใน wrapper นี้เลย
+
+## `require.cache` และเทคนิค reload
+
+การ `require()` ครั้งที่สองของ path ที่ resolve แล้วเหมือนกัน คืน exports object ตัวเดิมเป๊ะ — Node cache ตาม resolved file path ไม่ใช่ตาม content การลบ cache entry บังคับให้ `require()` ครั้งถัดไปรันไฟล์ใหม่ตั้งแต่ต้น สร้าง exports object ใหม่เอี่ยม:
+
+export const requireCacheCode = `const fs = require('node:fs');
+const path = require('node:path');
+
+const modPath = path.join(__dirname, '._runtime-internals-scratch-mod.cjs');
+fs.writeFileSync(modPath, 'module.exports = {};'); // a throwaway module file for this demo
+
+const first = require(modPath);
+const second = require(modPath);
+console.log('same object on a normal second require (cached):', first === second);
+
+delete require.cache[modPath]; // evict the cache entry
+const third = require(modPath);
+console.log('same object after deleting the cache entry:', first === third);
+
+fs.unlinkSync(modPath); // clean up the scratch file this snippet created
+`;
+
+export const requireCacheOut = `same object on a normal second require (cached): true
+same object after deleting the cache entry: false`;
+
+<NodeRunner client:visible code={requireCacheCode} node expected={requireCacheOut} />
+
+นี่คือกลไกเบื้องหลังการ hot-reload ไฟล์ config หรือ plugin ตอน runtime: resolve path ครั้งเดียว, `delete require.cache[resolvedPath]`, แล้ว `require()` มันใหม่ มันทำให้ cache entry ของไฟล์นั้นไฟล์เดียว invalid — อะไรก็ตามที่ *ไฟล์นั้น* require ยังถูก cache แยกต่างหาก ดังนั้นการ reload ไม่ cascade เว้นแต่คุณจะไล่ `require.cache` แล้วลบทุก module ใน dependency subtree เอง
+
+`require.resolve(specifier)` คือ resolution algorithm อย่างเดียว ไม่มีการรัน — มีประโยชน์สำหรับจุดประสงค์ cache-keying แบบนี้เป๊ะ ๆ และสำหรับเช็กว่า module resolve ได้หรือเปล่าโดยไม่มี side effect ของการโหลดจริง
+
+## ESM loader ก็มี phase เหมือนกัน — และมันไม่ใช่ขั้นตอนที่ข้ามการคิดได้
+
+<Mermaid title="สิ่งที่ import ทำก่อนโค้ดของคุณจะรัน" code={`flowchart LR
+  Resolve["Resolve\nspecifier -> a URL"] --> Load["Load\nURL -> source text"]
+  Load --> Link["Link\nbind imported/exported names (live bindings)"]
+  Link --> Evaluate["Evaluate\nrun the module body top to bottom"]
+`} />
+
+**Resolve** แปลง specifier อย่าง `'./a.mjs'` หรือ `'lodash'` ให้เป็น URL แบบเต็ม **Load** ดึง source text ของ URL นั้นมา **Link** เชื่อมทุกชื่อ `import`/`export` เข้ากับ *live binding* ที่มันอ้างถึง — ก่อนที่ body ของ module ใดจะรันเลย — นี่คือสิ่งที่ทำให้ ESM import เป็น live reference ไม่ใช่ค่าที่ copy มา **Evaluate** สุดท้ายรัน top-level code ของแต่ละ module ตามลำดับ dependency ครั้งเดียวเป๊ะ ๆ hook `--import`/`register()` (ด้านล่าง) ดักจับสอง phase แรก ไม่มีอะไรให้คุณดักจับ Link หรือ Evaluate จากนอก loader เองได้
+
+## Cycle ทำงานต่างกันใน CJS กับ ESM
+
+Cycle คือ module สองตัวที่ `require`/`import` กันและกัน (ตรงหรือทางอ้อม) เพราะ CJS resolve ค่า *ตอน require* (snapshot ของ `module.exports` ณ ตอนนั้น) ในขณะที่ ESM resolve *live binding* (เช็กใหม่ทุกครั้งที่เข้าถึง พร้อม temporal-dead-zone check) รูปร่าง cycle เดียวกันจึงพังต่างกัน — หรือไม่พังเลย — ขึ้นอยู่กับว่าเขียนด้วยระบบ module ไหน:
+
+export const cyclesCode = `import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+
+const dir = mkdtempSync(join(tmpdir(), 'cyc-'));
+const require = createRequire(import.meta.url); // a real require(), usable from inside an ESM script
+
+writeFileSync(join(dir, 'a.cjs'), [
+  "exports.fromA = 'partial-a';",
+  "const b = require('./b.cjs');",
+  "exports.fromBSeenFromA = b.fromB;",
+].join('\\n'));
+writeFileSync(join(dir, 'b.cjs'), [
+  "const a = require('./a.cjs');", // a is mid-execution here -- this is the cycle
+  "exports.aHadFromAAlready = 'fromA' in a;",
+  "exports.aHadFromBSeenFromAAlready = 'fromBSeenFromA' in a;",
+  "exports.fromB = 'from-b';",
+].join('\\n'));
+
+const a = require(join(dir, 'a.cjs'));
+const b = require(join(dir, 'b.cjs'));
+console.log('CJS cycle -- no error, just a partial object at the point of the cycle:');
+console.log('  b saw a.fromA already set:', b.aHadFromAAlready);
+console.log('  b saw a.fromBSeenFromA not set yet (a was still mid-execution):', !b.aHadFromBSeenFromAAlready);
+
+writeFileSync(join(dir, 'a.mjs'), [
+  "export let fromA = 'partial-a';",
+  "import './b.mjs';", // cycle back to b.mjs before fromA finishes initializing
+  "fromA = 'done-a';",
+].join('\\n'));
+writeFileSync(join(dir, 'b.mjs'), [
+  "import { fromA } from './a.mjs';",
+  "console.log('  (never reached if the import above already threw)', fromA);",
+].join('\\n'));
+
+try {
+  await import(pathToFileURL(join(dir, 'a.mjs')));
+  console.log('ESM cycle -- did not throw (unexpected)');
+} catch (err) {
+  console.log('ESM cycle -- threw ReferenceError (temporal dead zone), not a partial object:', err instanceof ReferenceError);
+}
+
+rmSync(dir, { recursive: true, force: true }); // clean up the scratch files this snippet created
+`;
+
+export const cyclesOut = `CJS cycle -- no error, just a partial object at the point of the cycle:
+  b saw a.fromA already set: true
+  b saw a.fromBSeenFromA not set yet (a was still mid-execution): true
+ESM cycle -- threw ReferenceError (temporal dead zone), not a partial object: true`;
+
+<NodeRunner client:visible code={cyclesCode} node expected={cyclesOut} />
+
+CJS ไม่เคยพังตอน cycle เลย — คุณได้ property ที่บังเอิญถูก assign ไว้ก่อน cycle เกิดขึ้นแบบเงียบ ๆ และการคิดว่าคืออะไรบ้างต้อง trace ลำดับการรันเอง live binding ของ ESM ทำให้รูปร่างเดียวกันนี้เป็น error ที่ชัดเจนและ catch ได้ทันทีที่ binding ที่ยังไม่ initialize ถูกอ่านจริง ๆ — ประสบการณ์แย่กว่าในตอนนั้น แต่มันเปลี่ยนบั๊กเงียบ ๆ ที่ขึ้นกับลำดับให้กลายเป็นบั๊กที่ดังชัดเจน
+
+## `--import` และ `register()`: ดักจับ loader จากภายนอก
+
+Node ให้คุณดักจับ resolve/load ด้วย module แบบ **customization hook** ที่ต่อเข้าด้วย `register()` และโหลดล่วงหน้าด้วย `--import`:
+
+```js title="hooks.mjs — registers the hook module"
+// @skip-verify multi-file: illustrative, run together via the CLI transcript below
+import { register } from 'node:module';
+register('./resolve-hook.mjs', import.meta.url);
+```
+
+```js title="resolve-hook.mjs — the actual hook"
+// @skip-verify multi-file: illustrative, run together via the CLI transcript below
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier === 'virtual-greeting') {
+    const source = encodeURIComponent('export default "hello from a virtual module";');
+    return { url: `data:text/javascript,${source}`, shortCircuit: true };
+  }
+  return nextResolve(specifier, context); // not ours -- defer to the default resolver
+}
+```
+
+```js title="main.mjs"
+// @skip-verify multi-file: illustrative, run together via the CLI transcript below
+const greeting = await import('virtual-greeting');
+console.log(greeting.default);
+```
+
+```bash
+node --import ./hooks.mjs main.mjs
+```
+
+```text
+hello from a virtual module
+```
+
+นี่คือกลไกที่รองรับอย่างเป็นทางการเบื้องหลังเครื่องมือที่ transpile แบบ on-the-fly, resolve URL scheme กำหนดเอง, หรือ redirect specifier — มันคือสิ่งที่ `--experimental-strip-types` และ TypeScript loader อย่าง ESM mode ของ `ts-node` สร้างต่อยอดด้วย การส่ง `--import` module ธรรมดา (โดยไม่เรียก `register()` ข้างในมัน) แค่ preload module นั้นเท่านั้น — มันไม่ได้ต่อ `resolve`/`load` interception ให้อัตโนมัติ
+
+## ความจริงเรื่อง strip-types บน Node 24.13
+
+Type stripping **เปิดโดย default** ใน Node 24.13 — การรันไฟล์ `.ts` ไม่ต้องใช้ flag เลย และ flag ที่มีอยู่ (`--no-strip-types`) คือตัว*ปิด*มัน:
+
+```bash
+node sample.ts   # no flag needed
+```
+
+```text
+port is 3000
+```
+
+```bash
+node --no-strip-types sample.ts
+```
+
+```text
+SyntaxError: Missing initializer in const declaration
+```
+
+Stripping แบบ default เป็น **erase-only**: มันลบ type annotation ทิ้ง แต่ปฏิเสธ TypeScript syntax ใด ๆ ที่ไม่มีความหมายใน JavaScript ที่ถูกต้องเมื่อ type หายไป — ที่เด่นชัดที่สุดคือ `enum` ซึ่งไม่ใช่แค่ annotation แต่เป็น construct ระดับ runtime ที่ TypeScript compile เป็น object:
+
+```bash
+node sample-with-enum.ts   # default strip-only mode
+```
+
+```text
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode
+```
+
+`--experimental-transform-types` (ยัง experimental บน 24.13 และมันพิมพ์ `ExperimentalWarning`) ไปไกลกว่าแค่ strip — มันจริง ๆ แล้ว *transform* construct อย่าง `enum` ให้เป็นสิ่งที่เทียบเท่าใน JavaScript แทนที่จะปฏิเสธมัน:
+
+```bash
+node --experimental-transform-types sample-with-enum.ts
+```
+
+```text
+(node:12345) ExperimentalWarning: Transform Types is an experimental feature and might change at any time
+0
+```
+
+สำหรับ single-file executable, `--experimental-sea-config` (Single Executable Applications) รับ JSON config แล้วรวมกับ `postject` inject script ที่ bundle ไว้เข้าไปใน copy ของ `node` binary เอง — ควรรู้ว่ามันมีอยู่ แต่มันเป็นขั้นตอน packaging สำหรับการแจกจ่าย ไม่ใช่อะไรที่คุณหยิบมาใช้ระหว่างพัฒนา
+
+## `import.meta.resolve` และ `node --print`
+
+`import.meta.resolve(specifier)` รัน resolution algorithm เดียวกับ `import` แบบ synchronous โดยไม่โหลดอะไรเลย — มีประโยชน์สำหรับเช็ก "specifier นี้ resolve ได้ไหม" และสำหรับสร้างเครื่องมือที่ต้องการ file URL จริง:
+
+export const importMetaCode = `console.log(typeof import.meta.resolve);
+console.log(import.meta.resolve('node:fs'));
+console.log(typeof import.meta.dirname, typeof import.meta.filename);
+`;
+
+export const importMetaOut = `function
+node:fs
+string string`;
+
+<NodeRunner client:visible code={importMetaCode} node expected={importMetaOut} />
+
+`import.meta.dirname`/`import.meta.filename` คือ equivalent ตรง ๆ ของ `__dirname`/`__filename` แบบ CJS ใน ESM — ไม่ต้องมี boilerplate `fileURLToPath(dirname(import.meta.url))` อีกต่อไปสำหรับกรณีทั่วไป แยกกันไป `node --print "expr"` (`-p`) evaluate expression แล้วพิมพ์ผลลัพธ์ — สะดวกสำหรับเช็กเร็ว ๆ (`node -p "process.version"`, `node -p "require('node:os').cpus().length"`) โดยไม่ต้องเปิด REPL หรือเขียนไฟล์
+
+## Mental Model
+
+ไฟล์ CJS คือการเรียก function: `require()` เรียก wrapper function แบบ synchronous ตรงนั้นเลย และ `module.exports` มีหน้าตายังไง *ณ ตอนนั้นเป๊ะ ๆ* คือสิ่งที่คุณได้กลับมา — snapshot หนึ่งอัน Module แบบ ESM เหมือนสัญญาที่ถูกเจรจากันก่อนที่ใครจะรันอะไรเลยมากกว่า: exports ของทุกไฟล์ถูกต่อเป็น reference ที่ live และถูกเช็กก่อน (Link) และมีแค่ตอนที่ทุกไฟล์ใน graph ตกลงกันแล้วว่าอะไรต่อกับอะไร โค้ดของใครก็ตามถึงจะรันจริง (Evaluate) — นี่คือเหตุผลที่การอ่านผิดจังหวะระหว่างการเจรจานั้นเป็น error ที่ชัดเจน แทนที่จะเป็น snapshot ที่ผิดแบบเงียบ ๆ
+
+## Trade-offs
+
+โมเดลแบบ synchronous snapshot ของ CJS คิดตามได้ง่ายกว่าทีละบรรทัดและไม่ต้องมีขั้นตอน loader แบบ async เลย แลกกับ cycle ที่ resolve ไปเป็น partial state อะไรก็ตามที่บังเอิญมีอยู่ — กับดักด้าน correctness ที่พลาดง่ายตอน review โมเดลแบบ phased live-binding ของ ESM จับกับดักตัวนั้นเป๊ะ ๆ ให้กลายเป็น error ที่ชัดเจน แลกกับ mental model ที่ซับซ้อนกว่า (สี่ phase ไม่ใช่ function call เดียว) และ loader ที่เป็น asynchronous โดยธรรมชาติ ซึ่งเป็นส่วนหนึ่งของเหตุผลที่ interop ระหว่างสองระบบ (`require(esm)`, dynamic `import()` จาก CJS) มีข้อจำกัดจริงที่บันทึกไว้ ไม่ใช่สะพานที่ไร้รอยต่อ
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`require()` อ่านและรันไฟล์ใหม่ทุกครั้ง"** มีแค่ `require()` ครั้งแรกของ resolved path หนึ่งเท่านั้นที่รันไฟล์ `require()` ครั้งถัดไปของ path เดียวกันคืน exports object ที่ cache ไว้จนกว่าคุณจะ evict มันออกจาก `require.cache` เอง
+- **"Cycle ของ ESM เป็นไปไม่ได้ หรือพังเสมอ"** มันเป็นไปได้และพบบ่อย (module สองตัวที่อ้างอิงกันก็พอแล้ว) — มันจะพังก็ต่อเมื่อโค้ด*อ่าน*live binding จริง ๆ ก่อนที่ declaration ของมันจะ initialize เสร็จ cycle ที่แต่ละฝั่งแค่ define function (ไม่ได้อ่านตอน cycle) ทำงานได้ปกติ
+- **"Type stripping แปลว่า Node รัน TypeScript"** Type stripping แบบ default ลบ annotation และ syntax ที่ไม่มีความหมายตอน runtime ทิ้ง — มันไม่เช็ก type และมันปฏิเสธ TypeScript syntax ที่ต้องการการ transform จริง (อย่าง `enum`) แทนที่จะ compile มันแบบเงียบ ๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างซึ่งสมมติว่า `require()` กับ `import()` ใช้แทนกันได้ หรือ cyclic import จะ "ทำงานได้เอง" แบบที่ดูเหมือนมันทำได้ใน CJS เป็นแหล่งบั๊ก ESM ที่ subtle และพบบ่อย
+
+<SpotTheBug code={`// AI-written pair of ESM modules meant to share state
+// config.mjs
+export let ready = false;
+import './init.mjs';
+
+// init.mjs
+import { ready } from './config.mjs';
+console.log('config ready at init time:', ready);
+// ... later, some other module sets ready = true after real init work
+`}>
+นี่สะท้อน ESM cycle ที่พิสูจน์ไว้ข้างบนพอดี: `init.mjs` import `ready` จาก `config.mjs` ในขณะที่ `config.mjs` ยัง evaluate ไม่เสร็จ (มันอยู่บรรทัดที่ import `init.mjs` พอดี) เพราะ `ready` ถูกประกาศด้วย `let` (live binding ที่มี temporal dead zone) การอ่านมันจาก `init.mjs` ณ จุดนี้ใน cycle จะ throw `ReferenceError` แทนที่จะคืน `false` แบบเงียบ ๆ อย่างที่ setup แบบ CJS เทียบเท่าจะทำ โค้ดที่ AI สร้างสมมติว่าลำดับ import "ทำงานได้เอง" แบบที่ลำดับ require() ทำได้อย่างเป็นธรรมชาติ — วิธีแก้คือทำลาย cycle (มี module ที่สามที่ทั้งคู่พึ่งพา โดยไม่ import กลับไปหาฝั่งไหนเลย) หรืออ่าน `ready` จากข้างใน function ที่ถูกเรียกหลังจากทั้งสอง module evaluate เสร็จแล้วเท่านั้น ไม่ใช่ที่ top level ของ module เองระหว่าง cycle
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+CJS require() คือ synchronous snapshot ที่ไม่เคย throw ตอน cycle; ESM import คือ live binding แบบมี phase ที่ throw ReferenceError จริงถ้า cycle อ่านค่าก่อนมันถูก initialize -- รู้ให้ได้ว่ากำลังอ่านแบบไหนก่อนจะเชื่อ cyclic import ที่ "ดูเหมือนโอเค"
+</Callout>
+
+export const quizModuleLoading = [
+  {
+    q: 'Module.wrap() เปิดเผยอะไรเกี่ยวกับ `require`, `module`, และ `__dirname` ในไฟล์ CJS?',
+    options: [
+      'มันคือ global variable จริง ๆ ที่มีอยู่ทุกที่ใน Node',
+      'มันคือ parameter ของ wrapper function ที่ทุกไฟล์ CJS ถูก compile ข้างใน ไม่ใช่ global',
+      'มันมีอยู่ก็ต่อเมื่อคุณ import จาก node:module เอง',
+      'มันเป็นของ TypeScript เท่านั้นและถูก strip ตอน runtime',
+    ],
+    answer: 1,
+    explain: 'ทุกไฟล์ CJS ถูกห่อด้วย `function (exports, require, module, __filename, __dirname) { ... }` ก่อนถูกรัน -- wrapper นั้นแหละคือที่มาของทั้งห้าชื่อจริง ๆ',
+  },
+  {
+    q: 'บรรทัดนี้พิมพ์อะไร?\n```js\nconst first = require(resolvedPath);\ndelete require.cache[resolvedPath];\nconst second = require(resolvedPath);\nconsole.log(first === second);\n```',
+    options: [
+      'ยังคืน object เดิมที่ cache ไว้ -- การลบ cache entry ไม่มีผลอะไร',
+      'มัน throw เพราะ cache entry ไม่มีอยู่แล้ว',
+      'ไฟล์ถูกรันใหม่ตั้งแต่ต้น สร้าง exports object ใหม่เอี่ยม',
+      'มัน resolve path ใหม่แต่ใช้ exports object เดิมซ้ำ',
+    ],
+    answer: 2,
+    explain: 'การลบ entry ใน require.cache แค่เอา reference ที่ cache ไว้ออก require() ครั้งถัดไปของ resolved path นั้นรัน top-level code ของไฟล์ใหม่และสร้าง module.exports ใหม่',
+  },
+  {
+    q: 'ทำไม cyclic ESM import ถึง throw ReferenceError ได้ ในขณะที่ CJS cycle เทียบเท่าไม่ throw?',
+    options: [
+      'ESM ไม่รองรับ cycle เลย -- มันเป็น parse error',
+      'Binding ของ ESM เป็น live และถูกเช็กทุกครั้งที่เข้าถึง (พร้อม temporal-dead-zone check) การอ่านค่าก่อนที่ declaration ของมันจะ initialize เสร็จระหว่าง cycle คือ error ที่ชัดเจน ต่างจาก snapshot แบบ synchronous ของ CJS',
+      'มันเป็นบั๊กใน Node ที่จะถูกแก้ในที่สุด',
+      'มีแค่ dynamic import() เท่านั้นที่เป็นส่วนหนึ่งของ cycle ได้ static import ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'CJS require() คืนสิ่งที่ module.exports มีหน้าตา ณ ตอนเรียก -- snapshot ที่ปลอดภัยจาก cycle โดยธรรมชาติ ESM resolve live binding ล่วงหน้าก่อน evaluate และบังคับ TDZ semantics ดังนั้นการอ่านเร็วเกินไประหว่าง cycle จึง throw',
+  },
+  {
+    q: 'บน Node 24.13 การรัน `node script.ts` โดยไม่มี flag เลย จะเกิดอะไรขึ้น ถ้าไฟล์มีเนื้อหานี้?\n```js\n// script.ts\nconst port: number = 3000;\nconsole.log(port);\n```',
+    options: [
+      'ล้มเหลว -- ไฟล์ TypeScript ต้องมี --experimental-strip-types เสมอ',
+      'ทำงานได้กับ type annotation แต่ throw ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX กับ construct อย่าง enum ที่ต้องการการ transform จริง ไม่ใช่แค่ strip',
+      'เพิกเฉยไฟล์แบบเงียบ ๆ ไม่ทำอะไรเลย',
+      'compile และ type-check ไฟล์เต็มรูปแบบเหมือน tsc',
+    ],
+    answer: 1,
+    explain: 'Type stripping เปิดโดย default ใน 24.13 (--no-strip-types ปิดมัน) และจัดการ annotation ธรรมดาได้ แต่มันเป็น strip-only -- syntax อย่าง enum ที่มีความหมายตอน runtime นอกเหนือจาก annotation ต้องใช้ --experimental-transform-types แทน',
+  },
+  {
+    q: 'ผลจริงของการส่ง hook module ให้ `--import` โดยไม่ได้เรียก `register()` ข้างในคืออะไร?',
+    options: [
+      'Node ต่อ resolve/load function ที่ export ไว้ให้อัตโนมัติ',
+      'มันแค่ preload module นั้นเพื่อ side effect เท่านั้น -- การดักจับ resolve/load ต้องเรียก register() จาก node:module อย่างชัดเจน',
+      'มัน throw error ทันที',
+      'มันแทนที่ module resolution algorithm ทั้งหมด',
+    ],
+    answer: 1,
+    explain: '`--import` แค่ preload module ก่อน entry point จะรัน เพื่อดักจับ resolve/load จริง ๆ module ที่ preload นั้น (หรือตัวที่มันเรียกต่อ) ต้องเรียก `register()` จาก node:module ชี้ไปที่ hook implementation',
+  },
+];
+
+<Quiz client:visible id="runtime-internals/module-loading" questions={quizModuleLoading} />
+
+<ProgressTracker client:visible id="runtime-internals/module-loading" />

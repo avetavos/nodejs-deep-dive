@@ -31,6 +31,8 @@ export default defineConfig({
         { label: 'HTTP & Networking', translations: { th: 'HTTP และเครือข่าย' }, items: [{ autogenerate: { directory: 'http-networking' } }] },
         { label: 'Modules & npm', translations: { th: 'Modules และ npm' }, items: [{ autogenerate: { directory: 'modules-npm' } }] },
         { label: 'Testing & Tooling', translations: { th: 'การทดสอบและเครื่องมือ' }, items: [{ autogenerate: { directory: 'testing-tooling' } }] },
+        { label: 'Runtime Internals', translations: { th: 'กลไกภายใน Runtime' }, items: [{ autogenerate: { directory: 'runtime-internals' } }] },
+        { label: 'Reading & Reviewing Node.js', translations: { th: 'อ่านและรีวิวโค้ด Node.js' }, items: [{ autogenerate: { directory: 'reading-node' } }] },
         { label: 'Glossary', translations: { th: 'อภิธานศัพท์' }, link: 'glossary' },
       ],
       }), preact()],

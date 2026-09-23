@@ -1,0 +1,255 @@
+---
+title: 'Security Model'
+description: '--permission, --env-file, การใช้ node:crypto ให้ถูกต้อง, prototype pollution, ทำไม vm ไม่ใช่ sandbox, และความเสี่ยง dependency supply-chain'
+sidebar:
+  order: 6
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+โดย default โค้ด Node รันด้วยสิทธิ์เต็มของ OS user ที่เริ่มมัน — ไม่มี sandbox, ไม่มี capability system เว้นแต่คุณจะ opt-in เข้าไปเอง บทนี้ครอบคลุมขอบเขตที่ Node ให้คุณจริง ๆ และ — สำคัญพอกัน — จุดที่ดูเหมือนเป็นขอบเขตแต่จริง ๆ ไม่ใช่
+
+## `--permission`: allowlist ที่ชัดเจน แบบ opt-in
+
+ด้วย `--permission` Node ปฏิเสธการเข้าถึง filesystem, network, child-process, และ worker โดย default และคุณให้สิทธิ์คืนเฉพาะที่ process ต้องการ:
+
+```bash
+node read-secret.js
+```
+
+```text
+top secret
+```
+
+```bash
+node --permission read-secret.js
+```
+
+```text
+Error: Access to this API has been restricted. Use --allow-fs-read to manage permissions.
+    code: 'ERR_ACCESS_DENIED',
+    permission: 'FileSystemRead',
+    resource: './secret.txt'
+```
+
+```bash
+node --permission --allow-fs-read=./secret.txt read-secret.js
+```
+
+```text
+top secret
+```
+
+นี่คือขอบเขตความปลอดภัยจริง (ต่างจากสอง "ขอบเขต" ด้านล่าง): permission model ถูกบังคับใช้โดย Node เองก่อน operation จะรัน ไม่ใช่แค่ตามธรรมเนียม มันยังถูกติดป้าย experimental อยู่ — ปฏิบัติกับมันเป็น defense-in-depth สำหรับ process ที่รันโค้ดที่เชื่อถือได้น้อยกว่า ไม่ใช่สิ่งเดียวที่กั้นระหว่าง process ของคุณกับ filesystem ยัง
+
+## `--env-file`: โหลด secret โดยไม่ต้องมี dependency
+
+Node อ่านไฟล์สไตล์ `.env` ได้ตรง ๆ ไม่ต้องมี package `dotenv`:
+
+export const envFileCode = `console.log('API_KEY without --env-file:', process.env.API_KEY ?? 'undefined');
+`;
+
+export const envFileOut = `API_KEY without --env-file: undefined`;
+
+<NodeRunner client:visible code={envFileCode} node expected={envFileOut} />
+
+```bash
+node --env-file=.env read-env.js
+```
+
+```text
+API_KEY is super-secret-value
+```
+
+นิสัยที่เกี่ยวกับความปลอดภัยที่สิ่งนี้แทนที่: การพิมพ์ `process.env` (หรือ object ที่รวมมันไว้) ใน error handler หรือ debug log เป็นวิธีที่ secret รั่วเข้าไปใน log aggregator ที่คนจำนวนมากอ่านได้ — ปฏิบัติกับ `process.env` เองว่าเป็นข้อมูล sensitive ไม่ใช่แค่ไฟล์ `.env` ที่มันมาจาก
+
+## `node:crypto` ใช้อย่างถูกต้อง
+
+ความผิดพลาดที่พบบ่อยสามอย่างเจาะจงและวิธีแก้ ทั้งหมดเป็น behavior จริงบน Node 24.13:
+
+export const cryptoCorrectCode = `import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+
+// Math.random() is a fast, predictable PRNG -- never use it for tokens, IDs meant to be unguessable, or secrets
+console.log('tokens must come from a CSPRNG, not Math.random');
+
+// randomBytes() is CSPRNG-backed and safe for tokens/session IDs
+const token = randomBytes(16).toString('hex');
+console.log('random token length (hex chars):', token.length);
+
+// scrypt is a correct password hash: slow and memory-hard on purpose -- never sha256(password) alone
+const salt = randomBytes(16);
+const hash1 = scryptSync('correct horse battery staple', salt, 64);
+const hash2 = scryptSync('correct horse battery staple', salt, 64);
+console.log('same password + same salt -> same hash:', hash1.equals(hash2));
+
+// timingSafeEqual compares in constant time, avoiding a timing side-channel that === or Buffer.equals can leak
+console.log('timingSafeEqual result:', timingSafeEqual(hash1, hash2));
+`;
+
+export const cryptoCorrectOut = `tokens must come from a CSPRNG, not Math.random
+random token length (hex chars): 32
+same password + same salt -> same hash: true
+timingSafeEqual result: true`;
+
+<NodeRunner client:visible code={cryptoCorrectCode} node expected={cryptoCorrectOut} />
+
+ใช้ `scrypt`/`pbkdf2` (ไม่ใช่ `sha256`/`sha512` ตรง ๆ) สำหรับ password เพราะ hash ทั่วไปที่เร็วเปิดโอกาสให้ผู้โจมตีที่มี hash database ที่หลุดออกไปลองเดาเป็นพันล้านครั้งต่อวินาทีบนฮาร์ดแวร์ทั่วไป — ต้นทุน memory ที่ scrypt จงใจใส่ไว้ทำให้แพงขึ้นมาก `timingSafeEqual` สำคัญทุกที่ที่คุณเทียบ secret กับ input ที่ผู้ใช้ส่งมา (API key, HMAC signature): `===` แบบไร้เดียงสา short-circuit ที่ byte แรกที่ไม่ตรงกัน และความต่างของเวลาเล็กน้อยระหว่าง "พังที่ byte 1" กับ "พังที่ byte 30" คือ side channel ที่ใช้โจมตีได้จริงถ้ายิง request มากพอ
+
+## Prototype pollution: deep-merge แบบไร้เดียงสาคือช่องโจมตี
+
+Recursive merge ที่ไม่เช็ก key `__proto__`/`constructor`/`prototype` เปิดให้ JSON ที่ผู้โจมตีควบคุมไปถึง `Object.prototype` เอง:
+
+export const protoPollutionCode = `function merge(target, source) {
+  for (const key in source) {
+    if (typeof source[key] === 'object' && source[key] !== null) {
+      if (!target[key]) target[key] = {};
+      merge(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
+
+const userConfig = JSON.parse('{"__proto__": {"isAdmin": true}}');
+merge({}, userConfig);
+
+const innocentObject = {}; // a completely unrelated object, created elsewhere in the app
+console.log('innocentObject.isAdmin (should not exist):', innocentObject.isAdmin);
+`;
+
+export const protoPollutionOut = `innocentObject.isAdmin (should not exist): true`;
+
+<NodeRunner client:visible code={protoPollutionCode} node expected={protoPollutionOut} />
+
+การ merge ไม่เคยแตะ `innocentObject` ตรง ๆ เลย — มันปนเปื้อน `Object.prototype` ดังนั้น plain object *ทุกตัว* ใน process ตอนนี้ inherit `isAdmin: true` รวมถึงตัวที่ถูกสร้างก่อนหรือหลังการ merge ที่เป็นอันตรายนั้นนานแล้วก็ตาม นี่ไม่ใช่ตัวอย่างที่สร้างขึ้นมาลอย ๆ — มันคือ vulnerability class จริงที่ถูกเปิดเผยซ้ำแล้วซ้ำเล่าใน npm package ที่ implement deep-merge/clone/extend ของตัวเอง วิธีแก้: ปฏิเสธ key `__proto__`/`constructor`/`prototype` อย่างชัดเจนก่อน recurse, ใช้ `Object.create(null)` สำหรับ object ที่ตั้งใจให้ถือ key จากผู้ใช้แบบใดก็ได้, หรือใช้ merge utility จาก library ที่แพตช์เรื่องนี้ไว้แล้ว (แล้วอัปเดตมันไว้เสมอ — บั๊กประเภทนี้เป๊ะ ๆ ถูกนำกลับมาโดย library ที่ "แก้แล้ว" มากกว่าหนึ่งครั้ง) โมดูล practical-mastery ของคอร์ส TypeScript เดินผ่าน vulnerability เดียวกันนี้จากมุม type-safety ถ้าคุณอยากได้อีกครึ่งหนึ่งของภาพ
+
+## `eval`, `new Function`, และ `vm` ไม่ใช่ sandbox
+
+`vm.createContext` ดูเหมือนจะแยกโค้ดออกจากกัน — มันแยก *global* ไม่ใช่ object model ที่อยู่ข้างใต้ `constructor.constructor` เข้าถึง `Function` constructor ตัวจริงจากข้างใน context ที่ "sandboxed" ได้ และ constructor นั้นไม่ได้ถูก scope ให้อยู่ใน vm เลย:
+
+export const vmEscapeCode = `import vm from 'node:vm';
+
+const context = { greeting: 'hello' };
+vm.createContext(context);
+
+// Looks contained -- but constructor.constructor reaches the real Function
+// constructor, which runs with the full authority of the host process.
+const result = vm.runInContext(
+  "this.constructor.constructor('return process.version')()",
+  context
+);
+console.log('escaped the vm context, read a value from the host process:', result);
+`;
+
+export const vmEscapeOut = `escaped the vm context, read a value from the host process: v24.13.0`;
+
+<NodeRunner client:visible code={vmEscapeCode} node expected={vmEscapeOut} />
+
+บรรทัดเดียวนั้นใช้แค่ `this.constructor.constructor` ไม่มี import ไม่มีอะไรผิดปกติ — และมันอ่าน `process.version` จาก process *host* ได้ ซึ่งเป็นสิ่งที่ object `context` ที่ "sandboxed" ไม่เคยได้รับ reference ไปหาเลย `eval()` และ `new Function()` ไม่มีเรื่อง isolation เลยแม้แต่น้อย — ทั้งคู่รันใน scope ที่เรียกมันด้วยสิทธิ์เต็มตรง ๆ ถ้าคุณต้องรันโค้ดที่ไม่น่าเชื่อถือจริง ๆ เอกสารของ Node เองระบุชัดว่า `vm` เพียวๆ ไม่พอ — คุณต้องการ isolation ระดับ OS (process แยกที่ใช้ permission model, container, หรือ project sandboxing เฉพาะทาง) ไม่ใช่เทคนิคระดับ JavaScript
+
+## Dependency supply chain
+
+โค้ดส่วนใหญ่ของ Node application ทั่วไปไม่ใช่โค้ดที่ทีมเขียนเอง — มันคือ `node_modules` checklist ที่ใช้งานได้จริง: `npm audit` สำหรับ vulnerability ที่รู้จักแล้วใน dependency tree ปัจจุบัน; lockfile ที่ commit ไว้ (`package-lock.json`) เพื่อให้ "ใช้ได้บนเครื่องฉัน" หมายถึง dependency version เดียวกันทุกที่จริง ๆ ไม่ใช่อะไรก็ตามที่ range `^` บังเอิญ resolve ไปเจอวันนี้; provenance attestation (`npm audit signatures`, package ที่ publish ด้วย `--provenance`) เป็นวิธีใหม่ที่กำลังเกิดขึ้นเพื่อยืนยันว่า package ถูก build จาก source ที่ publish จริง ๆ ไม่ได้ถูกแก้ไขหลัง publish; และ `--ignore-scripts` ตอน install ใน environment ของ CI/build ที่คุณไม่ต้องการ (และไม่อยากเชื่อใจ) ให้ `postinstall` script ใด ๆ จาก third-party package รันได้ตามใจ
+
+## Mental Model
+
+ลองนึกถึง Node process แบบ default เป็นบ้านที่ทุกประตูไม่ได้ล็อก — ไม่ใช่เพราะใครเลือกแบบนั้น แต่เพราะไม่มีใครติดตั้งกุญแจ `--permission` คือการเลือกล็อกทุกประตูแล้วแจกกุญแจเฉพาะห้องที่ process นั้นต้องการจริง ๆ `vm`/`eval`/`new Function` ไม่ใช่กุญแจล็อกเลย — มันคือม่าน: มันดูเหมือนกำแพงจากมุมมองของโค้ดเอง แต่อะไรก็ตามที่รู้วิธีเอื้อมผ่านม่านไป (`constructor.constructor`) จะเจอบ้านเปิดโล่งเหมือนเดิมอยู่ข้างหลังมัน Prototype pollution คือบ้านที่ทุกห้องแอบใช้ blueprint แม่แบบเดียวกัน (`Object.prototype`) — ทำลาย blueprint ครั้งเดียว ทุกห้องที่สร้างจากมัน ทั้งในอดีตและอนาคต มีการเปลี่ยนแปลงของผู้ทำลายติดไปด้วย
+
+## Trade-offs
+
+Allowlist model ของ `--permission` คือความปลอดภัยจริง แลกกับการต้องระบุล่วงหน้าว่า process ต้องการอะไรบ้าง — สำหรับ codebase ใหญ่ที่มีอยู่แล้ว การหารายการ path/host/operation ที่มันแตะจริง ๆ ทั้งหมดคืองานที่ไม่เล็กเลยและยังถูกติดป้าย experimental อยู่ การที่ `scrypt`/`pbkdf2` ช้าและกิน memory โดยตั้งใจคือประเด็นทั้งหมดสำหรับ password hashing แต่ต้นทุนเดียวกันนั้นทำให้มันเป็นตัวเลือกที่ผิดทุกที่ที่คุณไม่ได้ป้องกัน offline guessing โดยเฉพาะ (เช่น hash cache key ที่ไม่ secret แต่มี volume สูง) — ใช้ hash ที่เร็วแทนตรงนั้น การ audit dependency (`npm audit`, lockfile ที่ pin ไว้, `--ignore-scripts`) มีต้นทุนการดูแลจริง — ต้องมีคนมา review ผล audit แล้วตัดสินว่าอะไรคือความเสี่ยงจริงกับอะไรคือ noise — แต่การข้ามมันไปเลยหมายถึงการเชื่อใจผู้เขียน transitive dependency ทุกคน รวมถึงคนที่คุณไม่เคยเลือก package ของเขาโดยตรงด้วยซ้ำ
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`vm` sandbox โค้ดที่ไม่น่าเชื่อถือได้"** เอกสารของ Node เองระบุชัดเจนว่า `vm` ไม่ใช่กลไกความปลอดภัยสำหรับโค้ดที่ไม่น่าเชื่อถือ — `constructor.constructor` (และเทคนิค prototype-chain อื่น) เข้าถึง global ของ host จริงได้จากข้างใน vm context
+- **"Prototype pollution กระทบแค่ object ที่ถูก merge เข้าไป"** มันปนเปื้อน `Object.prototype` เอง กระทบ plain object ทุกตัวใน process — รวมถึงตัวที่มีอยู่ก่อนการปนเปื้อนเกิดขึ้นและตัวที่ถูกสร้างหลังจากนั้น ที่ไหนก็ได้ใน codebase
+- **"Lockfile ที่ commit ไว้อย่างเดียวพอสำหรับป้องกัน supply-chain"** มัน pin ว่าจะได้ version *ไหน* ซึ่งจำเป็นแต่ไม่พอ — มันไม่บอกอะไรเลยว่า version เหล่านั้นปลอดภัยหรือเปล่า มันไม่แทนที่ `npm audit`, การ review `postinstall` script, หรือการเช็ก provenance
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างซึ่งสร้าง environment การ evaluate แบบ "จำกัด" เป็นหนึ่งใน pattern ที่อันตรายที่สุดที่จะรับไว้โดยไม่ตรวจสอบ เพราะมันมักดูเหมือนใส่ใจความปลอดภัยโดยตั้งใจ ทั้งที่จริง ๆ แล้วไม่มั่นคงเลยในเชิงพื้นฐาน
+
+<SpotTheBug code={`// AI-written "plugin system" -- runs user-submitted expressions
+import vm from 'node:vm';
+
+function runUserExpression(expr, allowedVars) {
+  const context = vm.createContext({ ...allowedVars }); // "sandboxed" -- only exposes allowedVars
+  return vm.runInContext(expr, context);
+}
+
+// Usage: runUserExpression('a + b', { a: 1, b: 2})
+`}>
+Comment อ้างว่านี่ "sandboxed" เพราะ `context` มีแค่ `allowedVars` ที่ระบุไว้ชัดเจนเท่านั้น — แต่ตามที่พิสูจน์ไว้ข้างบน `expr` เข้าถึงได้ไกลเกิน object นั้นผ่าน `this.constructor.constructor(...)()` ซึ่งคืน `Function` constructor ตัวจริงและรันด้วยสิทธิ์เต็มของ host process ไม่ว่าจะมีอะไรถูกใส่หรือไม่ใส่ใน `context` ก็ตาม ไม่มีวิธีแก้ที่ยังคงใช้ `vm` เปล่า ๆ สำหรับ expression ที่ไม่น่าเชื่อถือจริง ๆ ได้เลย — ทางเลือกจริงคือ: ไม่รับ expression ใดก็ได้จากผู้ใช้เลย (เสนอชุด operation ที่ปลอดภัยและตายตัวแทน), ใช้ expression-evaluator library ที่สร้างมาเฉพาะทางและไม่มีทางเข้าถึง `Function`/`constructor` โดยโครงสร้าง, หรือรันการ evaluate ใน process แยกที่ isolated ระดับ OS เต็มรูปแบบ (child process ที่ล็อกไว้แน่น, container) ที่การหนี "sandbox" ไปถึงแค่ process ที่ทิ้งได้นั้น ไม่ใช่ server หลักของคุณ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+--permission และการใช้ node:crypto อย่างถูกต้องคือขอบเขตจริงที่ Node บังคับใช้ให้คุณ; vm/eval/new Function และ deep-merge แบบไร้เดียงสาไม่ใช่ -- รู้ให้ได้ว่าโค้ดชิ้นหนึ่งอยู่ประเภทไหนจริง ๆ ก่อนจะเชื่อใจมันกับอะไรที่ไม่น่าเชื่อถือ
+</Callout>
+
+export const quizSecurity = [
+  {
+    q: 'รัน `node --permission script.js` โดยไม่มี flag --allow-* เลย จะเกิดอะไรขึ้นเมื่อ script เรียก fs.readFileSync?',
+    options: [
+      'ทำงานเหมือนไม่มี --permission ทุกอย่าง',
+      'มัน throw ERR_ACCESS_DENIED -- --permission ปฏิเสธการเข้าถึง filesystem, network, child-process, และ worker โดย default จนกว่าจะอนุญาตอย่างชัดเจน',
+      'มันคืน buffer ว่างแบบเงียบ ๆ',
+      'มันบล็อกแค่การเขียนเท่านั้น ไม่บล็อกการอ่าน',
+    ],
+    answer: 1,
+    explain: '--permission เปลี่ยน Node ให้เป็น model แบบ deny-by-default สำหรับ operation กลุ่มนี้; คุณให้สิทธิ์คืนเฉพาะที่จำเป็นด้วย flag อย่าง --allow-fs-read',
+  },
+  {
+    q: 'ทำไมถึงใช้ scrypt/pbkdf2 แทน hash ที่เร็วอย่าง sha256 สำหรับเก็บ password?',
+    options: [
+      'sha256 ไม่ใช่ hash function จริง',
+      'scrypt/pbkdf2 ช้าและกิน memory โดยตั้งใจ ทำให้การเดา password แบบ offline brute-force กับ hash database ที่หลุดออกไปแพงขึ้นมาก',
+      'ไม่มีความต่างจริง -- hash function ไหนก็เหมาะกับ password เท่ากัน',
+      'sha256 คำนวณใน Node ไม่ได้เลย',
+    ],
+    answer: 1,
+    explain: 'Hash ทั่วไปที่เร็วเปิดโอกาสให้ผู้โจมตีที่มี database ที่หลุดออกไปลองเดา password จำนวนมหาศาลต่อวินาที ต้นทุน CPU/memory ที่ scrypt/pbkdf2 จงใจใส่ไว้ต่อการ hash ทำให้เป็นไปไม่ได้ในสเกลเดียวกัน',
+  },
+  {
+    q: 'ความเสี่ยงจริงของโค้ดนี้คืออะไร ถ้า untrustedInput คือ `{"__proto__": {"isAdmin": true}}`?\n```js\nfunction merge(target, source) {\n  for (const key in source) target[key] = source[key]; // no key filtering\n  return target;\n}\nmerge({}, JSON.parse(untrustedInput));\n```',
+    options: [
+      'ไม่มีอะไรเลย -- __proto__ เป็นแค่ชื่อ property ธรรมดาที่ไม่มีพิษภัยใน JSON',
+      'มันปนเปื้อน Object.prototype เอง ดังนั้น plain object ทุกตัวใน process inherit isAdmin: true ไม่ใช่แค่ merge target',
+      'มันแค่ throw TypeError แล้วไม่มีอะไรเกิดขึ้นอีก',
+      'มันกระทบแค่ object เฉพาะที่ถูกส่งเป็น merge target เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'การ assign เข้า target.__proto__ ระหว่าง recursive merge ที่ไม่มีการป้องกันไปถึง Object.prototype ตรง ๆ กระทบ plain object ทุกตัวทั้ง process -- vulnerability class คลาสสิกที่ยังเกิดซ้ำอยู่',
+  },
+  {
+    q: 'ทำไมโค้ดนี้ถึงคืน process.version ของ host process ได้ ทั้งที่ `process` ไม่เคยถูกใส่เข้า context เลย?\n```js\nconst context = vm.createContext({ a: 1 });\nvm.runInContext("this.constructor.constructor(\'return process.version\')()", context);\n```',
+    options: [
+      'มันเป็นบั๊กเฉพาะ Node version นี้ ที่ถูกแพตช์ใน release หลัง',
+      'constructor.constructor เข้าถึง Function constructor ตัวจริงที่ไม่ถูกจำกัด ซึ่งไม่ได้ถูก scope ให้อยู่ใน vm context และรันด้วยสิทธิ์ host เต็มรูปแบบ',
+      'vm.createContext expose process ให้อัตโนมัติเพื่อความสะดวก',
+      'จริง ๆ แล้วมันไม่ทำงาน -- นี่เป็นเรื่องสมมติที่ล้มเหลวใน Node จริง',
+    ],
+    answer: 1,
+    explain: 'vm แยกแค่ global object ที่ script มองเห็น ไม่ใช่ prototype chain ที่อยู่ข้างใต้ -- constructor.constructor คือวิธีที่มีเอกสารรองรับในการเข้าถึง Function constructor ตัวจริงจากข้างใน vm context ซึ่งเป็นเหตุผลเป๊ะ ๆ ที่เอกสารของ Node เองบอกว่า vm ไม่ใช่ขอบเขตความปลอดภัยสำหรับโค้ดที่ไม่น่าเชื่อถือ',
+  },
+  {
+    q: 'package-lock.json ที่ commit ไว้รับประกันอะไรจริง ๆ และ*ไม่*รับประกันอะไร?',
+    options: [
+      'มันรับประกัน dependency version ที่ resolve แล้วเป๊ะ ๆ ในทุกการ install แต่ไม่บอกอะไรเลยว่า version เหล่านั้นปลอดจาก vulnerability หรือโค้ดอันตรายหรือเปล่า',
+      'มันรับประกันว่าโค้ดปลอดจาก vulnerability',
+      'มันแทนที่ความจำเป็นของ npm audit ไปเลย',
+      'มันป้องกันไม่ให้ postinstall script รัน',
+    ],
+    answer: 0,
+    explain: 'Lockfile pin ว่า version ไหนถูกติดตั้ง (reproducibility) ซึ่งจำเป็นแต่ไม่พอ -- มันไม่ตรวจสอบ version เหล่านั้นหา vulnerability ที่รู้จักแล้วหรือยืนยันว่าไม่ถูกแก้ไข ซึ่งเป็นหน้าที่ของ npm audit และการเช็ก provenance',
+  },
+];
+
+<Quiz client:visible id="runtime-internals/security-model" questions={quizSecurity} />
+
+<ProgressTracker client:visible id="runtime-internals/security-model" />

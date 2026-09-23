@@ -1,0 +1,275 @@
+---
+title: 'libuv & Event Loop แบบลึกอีกขั้น'
+description: 'การเรียงลำดับ timer, การ block ของ poll phase, nextTick vs setImmediate ระดับ implementation, monitorEventLoopDelay, และอะไรที่ block loop จริง ๆ'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+บทนี้ถือว่าคุณรู้ 6 phase จาก [libuv & the Threadpool](/nodejs/th/event-loop-async/libuv-and-threadpool/) แล้ว — จะไม่ทำ diagram นั้นซ้ำ ที่นี่เราจะลึกลงไปอีกขั้น: timer ถูกเรียงลำดับจริง ๆ ยังไง, "poll phase block" มีค่าใช้จ่ายกี่มิลลิวินาทีจริง ๆ, และลำดับการ drain queue ที่แม่นยำระหว่าง `process.nextTick` กับ microtask
+
+## Timer คือ priority queue ไม่ใช่ list
+
+ภายใน `uv_run` เก็บ timer ที่รอไว้ใน data structure ที่เรียงตามเวลาครบกำหนดแบบ absolute (min-heap ใน implementation ของ libuv) ไม่ใช่ตามลำดับที่ลงทะเบียน timer สองตัวที่มี delay **เท่ากัน** ยังคงยิงตามลำดับที่ *ถูกตั้งเวลา* เพราะมันลงเอยด้วยเวลาครบกำหนดเท่ากันและ heap รักษาลำดับการใส่เข้าไว้เมื่อเสมอกัน — แต่ timer ที่มี delay สั้นกว่าจะแซงหน้า timer ที่ delay ยาวกว่าเสมอ ไม่ว่าตัวไหนจะถูกตั้งก่อน:
+
+export const timerOrderCode = `setTimeout(() => console.log('A: scheduled 1st, delay 10ms'), 10);
+setTimeout(() => console.log('B: scheduled 2nd, delay 10ms'), 10);
+setTimeout(() => console.log('C: scheduled 3rd, delay 0ms (floor is ~1ms) -- shorter delay wins'), 0);
+`;
+
+export const timerOrderOut = `C: scheduled 3rd, delay 0ms (floor is ~1ms) -- shorter delay wins
+A: scheduled 1st, delay 10ms
+B: scheduled 2nd, delay 10ms`;
+
+<NodeRunner client:visible code={timerOrderCode} node expected={timerOrderOut} />
+
+`setTimeout(fn, 0)` ไม่ได้แปลว่า "รันทันที" — Node บังคับ floor ประมาณ 1ms และ callback ยังต้องรอโค้ด synchronous ปัจจุบันและ queue ของ microtask/nextTick drain ให้หมดก่อน แล้วค่อยรอให้ถึง timers phase
+
+## Poll phase block และ timer ที่รออยู่ทำให้มันสั้นลงยังไง
+
+phase **poll** เป็น phase เดียวที่ block ได้จริง ๆ ขณะรอ I/O มันไม่ block ตลอดไป: ถ้ามี timer ที่ active อยู่ libuv จะคำนวณว่าอีกนานแค่ไหนกว่า timer นั้นจะครบกำหนด แล้ว block poll phase *มากที่สุด* เท่านั้น เพื่อไม่ให้ timer ที่ครบกำหนดถูกเลื่อนออกไปเพราะรอ I/O แบบไม่มีกำหนด ถ้าไม่มี I/O พร้อมและไม่มี timer ที่รออยู่เลย poll สามารถ block ได้จนกว่า I/O event ถัดไปจะมาโดยไม่มี timeout — นี่ก็เป็นเหตุผลที่ Node process ที่ไม่มีอะไรเหลือให้ทำ (ไม่มี timer, ไม่มี I/O ที่รออยู่, ไม่มี handle ที่เปิดอยู่) จบตัวเองแทนที่จะค้าง
+
+## `setImmediate` กับ `process.nextTick` แบบแม่นยำ
+
+`process.nextTick` และ microtask (`Promise.then`, `queueMicrotask`) **ไม่ใช่** phase ของ libuv loop เลย — มันถูก drain โดย Node เองจนหมด ทันทีหลัง operation ปัจจุบันจบและก่อนที่ loop จะได้รับอนุญาตให้ไปยัง phase ถัดไป `setImmediate` ตรงข้ามกัน มันเป็น phase จริง ๆ ของ libuv (`check`) ซึ่งรันหลัง `poll` เท่านั้น ข้างใน callback ใดก็ตาม ลำดับการ drain คือ: queue ของ `nextTick` ทั้งหมดก่อน แล้ว queue ของ microtask ทั้งหมด วนซ้ำจนทั้งคู่ว่าง ก่อนที่อย่างอื่น (รวมถึง `setImmediate`) จะรัน:
+
+export const tickOrderCode = `setTimeout(() => {
+  process.nextTick(() => console.log('2: nextTick (drained first, in full)'));
+  queueMicrotask(() => console.log('3: queueMicrotask (drained after nextTick, in full)'));
+  Promise.resolve().then(() => console.log('4: promise .then (also the microtask queue)'));
+  setImmediate(() => console.log('5: setImmediate (a real loop phase -- runs after nextTick/microtasks)'));
+  console.log('1: sync code in the timer callback');
+}, 0);
+`;
+
+export const tickOrderOut = `1: sync code in the timer callback
+2: nextTick (drained first, in full)
+3: queueMicrotask (drained after nextTick, in full)
+4: promise .then (also the microtask queue)
+5: setImmediate (a real loop phase -- runs after nextTick/microtasks)`;
+
+<NodeRunner client:visible code={tickOrderCode} node expected={tickOrderOut} />
+
+internal เก่าของ Node ที่ชื่อ `process._tickCallback` หายไปแล้วใน Node สมัยใหม่ — queue นี้ถูกขับเคลื่อนภายในโดยไม่มี hook เฉพาะนั้น expose ออกมา แต่ behavior ที่สังเกตได้ข้างบน (nextTick drain หมดก่อน แล้ว microtask drain หมด หลังทุก callback) ไม่เปลี่ยนและยังเป็นวิธีคิดเรื่องลำดับที่ถูกต้อง มีจุดพลิกจริงหนึ่งจุด: ที่ top level ของ module แบบ **ESM** โดยเฉพาะ (ไม่ใช่ข้างใน callback ใด ๆ และไม่ใช่ใน CommonJS) การ evaluate module เองถูกห่อเป็น async job ซึ่งทำให้ microtask ระดับ top-level ดูเหมือนรันก่อน `nextTick` ระดับ top-level ได้ — ข้างใน callback จริงใด ๆ (timer, I/O event, immediate) ลำดับข้างบนเป็นจริงเสมอ
+
+## วัด loop lag ด้วย `monitorEventLoopDelay`
+
+`perf_hooks.monitorEventLoopDelay()` เก็บ histogram ว่า loop ใช้เวลาจริง ๆ นานแค่ไหนระหว่างแต่ละรอบ ซึ่งเปลี่ยน "loop กำลังถูก block" จากการเดาให้กลายเป็นตัวเลข:
+
+export const monitorDelayCode = `import { monitorEventLoopDelay } from 'node:perf_hooks';
+
+const h = monitorEventLoopDelay({ resolution: 10 });
+h.enable();
+
+setImmediate(() => {
+  const start = Date.now();
+  while (Date.now() - start < 100) { /* busy-wait: blocks the loop for ~100ms, on purpose */ }
+
+  setTimeout(() => {
+    h.disable();
+    const maxMs = h.max / 1e6;
+    const meanMs = h.mean / 1e6;
+    console.log('max delay landed in the expected ~100ms range:', maxMs > 80 && maxMs < 150);
+    console.log('mean delay stayed well below the max (most iterations were fast):', meanMs < maxMs / 2);
+  }, 50);
+});
+`;
+
+export const monitorDelayOut = `max delay landed in the expected ~100ms range: true
+mean delay stayed well below the max (most iterations were fast): true`;
+
+<NodeRunner client:visible code={monitorDelayCode} node expected={monitorDelayOut} />
+
+## อะไร block loop จริง ๆ
+
+อะไรก็ตามที่ synchronous บน main thread จะ block *ทุกอย่างที่เหลือ* — ทุก socket, ทุก timer, ทุก promise ที่รออยู่ — นานเท่าที่มันรัน สามรูปแบบครอบคลุมกรณีจริงส่วนใหญ่:
+
+**`fs` แบบ synchronous ใน hot path** `readFileSync` กับไฟล์ใหญ่ block ตลอดการอ่านทั้งหมด:
+
+export const blockFsCode = `import { writeFileSync, readFileSync, unlinkSync } from 'node:fs';
+
+const path = './._runtime-internals-scratch.bin';
+writeFileSync(path, 'x'.repeat(50 * 1024 * 1024)); // 50 MB, written once for the demo
+
+const start = process.hrtime.bigint();
+readFileSync(path); // synchronous -- blocks the whole event loop for the entire read
+const ms = Number(process.hrtime.bigint() - start) / 1e6;
+
+console.log('sync read of 50MB blocked the loop for over 5ms:', ms > 5);
+
+unlinkSync(path); // clean up the scratch file this snippet created
+`;
+
+export const blockFsOut = `sync read of 50MB blocked the loop for over 5ms: true`;
+
+<NodeRunner client:visible code={blockFsCode} node expected={blockFsOut} />
+
+**`JSON.parse` ของ payload ใหญ่** การ parse เป็น synchronous เต็มตัว — ไม่มี `JSON.parse` แบบ async ใน Node:
+
+export const blockJsonCode = `const bigArray = Array.from({ length: 1000000 }, (_, i) => ({ id: i, name: 'user' + i }));
+const json = JSON.stringify(bigArray);
+console.log('payload size, rounded to nearest 10 MB:', Math.round(json.length / 1024 / 1024 / 10) * 10);
+
+const start = process.hrtime.bigint();
+const parsed = JSON.parse(json); // synchronous -- blocks the loop for the entire parse
+const ms = Number(process.hrtime.bigint() - start) / 1e6;
+
+console.log('parsed item count:', parsed.length);
+console.log('JSON.parse of a ~30MB payload blocked the loop for over 20ms:', ms > 20);
+`;
+
+export const blockJsonOut = `payload size, rounded to nearest 10 MB: 30
+parsed item count: 1000000
+JSON.parse of a ~30MB payload blocked the loop for over 20ms: true`;
+
+<NodeRunner client:visible code={blockJsonCode} node expected={blockJsonOut} />
+
+**Regex backtracking แบบหายนะ** pattern แบบ `/^(a+)+$/` กับ input ที่จงใจสร้างให้ไม่ match ใช้เวลาแบบ exponential ทั้งหมดเป็น synchronous:
+
+export const blockRegexCode = `const evilRegex = /^(a+)+$/;
+const input = 'a'.repeat(25) + '!'; // never matches, but forces exponential backtracking
+
+const start = process.hrtime.bigint();
+const matched = evilRegex.test(input);
+const ms = Number(process.hrtime.bigint() - start) / 1e6;
+
+console.log('matched:', matched);
+console.log('took over 50ms from catastrophic backtracking on 25 characters:', ms > 50);
+`;
+
+export const blockRegexOut = `matched: false
+took over 50ms from catastrophic backtracking on 25 characters: true`;
+
+<NodeRunner client:visible code={blockRegexCode} node expected={blockRegexOut} />
+
+string ที่ควบคุมโดยผู้ใช้ไปเจอ regex ที่มีช่องโหว่คือ denial-of-service vector จริง ("ReDoS"): 25 ตัวอักษรกินเวลาหลายสิบมิลลิวินาทีแล้ว; ตัวอักษรที่เพิ่มมาแต่ละตัวเพิ่มเวลาเป็นสองเท่าโดยประมาณ
+
+## `async_hooks` และ `AsyncLocalStorage` มีต้นทุนจริง
+
+`AsyncLocalStorage` (สร้างบน `async_hooks`) คือวิธีมาตรฐานในการพก request ID หรือ trace context ข้าม `await` โดยไม่ต้องส่ง parameter ผ่านทุก function มันไม่ฟรี — การส่งต่อ context ผ่านทุก async continuation มี overhead ที่วัดได้เทียบกับโค้ดที่ไม่มี context เลย:
+
+export const alsOverheadCode = `import { AsyncLocalStorage } from 'node:async_hooks';
+
+const als = new AsyncLocalStorage();
+const N = 200000;
+
+function bucket(ratio) {
+  if (ratio < 1.5) return 'small (<1.5x)';
+  if (ratio < 4) return 'moderate (1.5x-4x)';
+  return 'large (>4x)';
+}
+
+function time(fn) {
+  const start = process.hrtime.bigint();
+  fn();
+  return Number(process.hrtime.bigint() - start) / 1e6;
+}
+
+const baseline = time(() => { for (let i = 0; i < N; i++) Promise.resolve(i); });
+const withALS = time(() => { for (let i = 0; i < N; i++) als.run({ id: i }, () => Promise.resolve(i)); });
+
+console.log('AsyncLocalStorage overhead per call, bucketed:', bucket(withALS / baseline));
+console.log('context is correctly scoped per call:', als.run({ id: 'x' }, () => als.getStore().id) === 'x');
+`;
+
+export const alsOverheadOut = `AsyncLocalStorage overhead per call, bucketed: large (>4x)
+context is correctly scoped per call: true`;
+
+<NodeRunner client:visible code={alsOverheadCode} node expected={alsOverheadOut} />
+
+overhead นั้นคิดต่อ async continuation ไม่ใช่ต่อ request — สำหรับ HTTP handler ทั่วไป (`await` แค่ไม่กี่ตัว ไม่ใช่ `Promise.resolve()` เปล่า ๆ เป็นแสนครั้งใน loop แน่น ๆ) มันแทบไม่ใช่คอขวดเลย แต่มันไม่ใช่ศูนย์ และ "ห่อทุกอย่างด้วย `AsyncLocalStorage`" คือ trade-off จริง ไม่ใช่ abstraction ที่ฟรี
+
+## Mental Model
+
+Event loop คือ loop เดียวที่มีจุดจอดที่แน่นอนเรียงตามลำดับ (timers, pending callbacks, idle/prepare, poll, check, close) `nextTick` กับ microtask ไม่ใช่จุดจอดบนเส้นทางนั้นเลย — มันคือด่านเก็บเงินที่รันจนจบระหว่างทุกจุดจอด และแม้กระทั่งระหว่าง statement ภายในจุดจอดหนึ่ง ก่อนที่ loop จะได้รับอนุญาตให้ไปต่อ โค้ดที่ block คือรถที่จอดเสียกลางถนน: ไม่สำคัญว่ามันเกิดที่จุดจอดไหน ไม่มีอะไรข้างหลังมันขยับได้จนกว่ามันจะเคลียร์ เพราะมีถนนเส้นเดียวและรถวิ่งได้ทีละคันเท่านั้น
+
+## Trade-offs
+
+Loop แบบ single-threaded ทำให้การคิดเรื่องลำดับ deterministic — ไม่มี race จริงระหว่างโค้ด JS สองชิ้นของคุณแบบที่จะเกิดกับ thread จริงและ shared memory ต้นทุนคือไม่มีอะไรอื่นรันเลยขณะที่โค้ดคุณอยู่บน stack ดังนั้นงาน synchronous ใด ๆ ที่ "ช้าเกินไป" สำหรับ process ที่เสิร์ฟ request (`JSON.parse` ก้อนใหญ่, regex ที่มีช่องโหว่, `fs` แบบ sync ก้อนใหญ่) ไม่มีทางออกราคาถูกข้างใน main thread — วิธีแก้จริงคือ streaming แทนการโหลด-แล้ว-parse, regex library ที่ไม่ backtrack ซึ่งผ่านการตรวจสอบแล้ว, `fs` แบบ async, หรือย้ายงานไป worker thread ไปเลย (ดู [Native Code & Workers](/nodejs/th/runtime-internals/native-and-workers/))
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`setImmediate` ยิงก่อน `setTimeout(fn, 0)` เสมอ"** รับประกันได้เฉพาะข้างใน I/O callback (ผ่าน poll มาแล้ว ดังนั้น `check` คือ phase ถัดไปทันที) จาก main module หรือ timer callback ลำดับระหว่างสองอย่างนี้ไม่รับประกันและอาจสลับกันได้แต่ละครั้งที่รัน
+- **"`process.nextTick` กับ microtask คือ queue เดียวกัน"** มันคือ queue แยกกันสองอัน ถูก drain ตามลำดับที่แน่นอน (nextTick แล้วค่อย microtask) หลังทุก operation — สับสนสองอย่างนี้นำไปสู่การทำนายที่ผิดเรื่องลำดับ interleave ที่แน่นอน แม้ว่าทั้งคู่จะ drain ก่อน loop phase ถัดไปเหมือนกันก็ตาม
+- **"โค้ด async block event loop ไม่ได้"** `async`/`await` และ promise ควบคุมแค่ *เมื่อไร* continuation จะรัน ไม่ใช่ว่าโค้ดข้างในเป็น synchronous หรือเปล่า `JSON.parse` หรือ regex `.test()` ข้างใน async function block พอ ๆ กับตอนอยู่นอก async function
+
+## อ่านโค้ดที่ AI เขียน
+
+Request handler ที่ AI สร้างมักมี operation แบบ synchronous "เร็ว ๆ" ที่ดูไม่มีพิษภัยเมื่อมองแยก แต่จริง ๆ ไม่ใช่
+
+<SpotTheBug code={`// AI-written request handler
+app.post('/import', (req, res) => {
+  const data = JSON.parse(req.body); // req.body can be arbitrarily large
+  const result = data.items.map(processItem);
+  res.json({ count: result.length });
+});
+`}>
+`JSON.parse` เป็น synchronous และไม่มีทางออกตามขนาด — สำหรับ request body ที่บังเอิญมีขนาดหลายสิบ MB (พิสูจน์ข้างบนแล้ว: ประมาณ 20ms ขึ้นไปสำหรับ payload ~30MB และมันสเกลตามขนาด) บรรทัดเดียวนี้ block event loop ทั้งหมด ทำให้ request อื่นที่กำลังทำอยู่บน process ล่าช้าเท่ากันหมด รวมกับการไม่มี body-size limit ก่อนหน้า (บั๊กแยกที่เกี่ยวข้องกัน) upload ก้อนใหญ่หรือที่เป็นอันตรายเพียงครั้งเดียวสามารถทำให้ server ทั้งตัวค้างได้ วิธีแก้คือ body-size limit ก่อน parse และสำหรับ payload ที่ใหญ่จริง ๆ ใช้ streaming JSON parser แทน `JSON.parse` บน body ที่ buffer ไว้ทั้งก้อน
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+nextTick และ microtask drain หมดระหว่างทุกก้าวที่ loop เดิน, setImmediate เป็น phase จริงที่รันหลัง poll เท่านั้น, และอะไรก็ตามที่ synchronous -- JSON.parse, regex ที่มีช่องโหว่, fs แบบ sync -- block ทั้งหมดนั้นนานเท่าที่มันรันพอดี
+</Callout>
+
+export const quizLibuv = [
+  {
+    q: 'Timer สองตัวถูกตั้งด้วย delay 10ms เท่ากัน ตัวหนึ่งตามหลังอีกตัวทันที มันยิงตามลำดับไหน?',
+    options: [
+      'ย้อนกลับลำดับที่ตั้ง',
+      'ตามลำดับที่ถูกตั้ง (FIFO เมื่อ delay เท่ากัน)',
+      'ลำดับสุ่มในแต่ละครั้งที่รัน',
+      'พร้อมกันใน tick เดียวกัน',
+    ],
+    answer: 1,
+    explain: 'Timer ถูกเรียงตามเวลาครบกำหนด; สำหรับ delay เท่ากันจะได้เวลาครบกำหนดเท่ากัน และเมื่อเสมอกันจะตัดสินด้วยลำดับที่ตั้ง (insertion order)',
+  },
+  {
+    q: 'อันไหนรันก่อน?\n```js\nsetTimeout(() => {\n  process.nextTick(() => console.log("fn1"));\n  queueMicrotask(() => console.log("fn2"));\n}, 0);\n```',
+    options: ['fn2 เพราะ microtask ชนะเสมอ', 'fn1 เพราะ nextTick queue ถูก drain จนหมดก่อน microtask queue', 'อันไหนก็ตามที่เขียนไว้บนสุดในไฟล์', 'ทั้งคู่รันพร้อมกันใน call เดียว'],
+    answer: 1,
+    explain: 'ข้างใน callback จริงใด ๆ Node drain process.nextTick queue ทั้งหมดก่อน แล้วค่อย microtask queue ทั้งหมด ก่อนไปต่อ -- ไม่ว่าอันไหนจะถูกตั้งก่อนระหว่างสอง queue นี้',
+  },
+  {
+    q: 'perf_hooks.monitorEventLoopDelay() วัดอะไร?',
+    options: [
+      'มี callback อยู่ใน queue กี่ตัว',
+      'Histogram ว่า event loop ใช้เวลาจริง ๆ นานแค่ไหนระหว่างแต่ละรอบ -- คือ loop ถูก block มากแค่ไหน',
+      'จำนวน timer ที่ active',
+      'ขนาดของ V8 heap',
+    ],
+    answer: 1,
+    explain: 'มัน sample เวลาของแต่ละรอบ loop เก็บเป็น histogram (max, mean, percentile) ซึ่งเป็นวิธีมาตรฐานในการเปลี่ยน "loop รู้สึกช้า" ให้เป็นตัวเลขที่วัดได้จริง',
+  },
+  {
+    q: 'ทำไมโค้ดนี้ถึง block event loop ทั้งที่อยู่ข้างใน async function?\n```js\nasync function handleImport(req) {\n  const data = JSON.parse(req.body); // req.body can be tens of MB\n  return data.items.length;\n}\n```',
+    options: [
+      'ไม่จริง -- JSON.parse เป็น asynchronous ใน Node',
+      'async/await ควบคุมแค่เมื่อไร continuation จะรัน โค้ดข้างในยังรันแบบ synchronous บน JS thread เดียว รวมถึง JSON.parse',
+      'JSON.parse รันบน threadpool อัตโนมัติ',
+      'มัน block แค่ตอนที่คุณลืม await เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'ไม่มี JSON.parse แบบ async ใน Node -- การห่อ call ด้วย async function ไม่ได้ทำให้ call นั้น non-blocking มันยังรัน synchronous จนจบบน JS thread เดียว',
+  },
+  {
+    q: 'Handler ที่ AI เขียนทำ `JSON.parse(req.body)` โดยไม่มี body-size limit ก่อนหน้า ความเสี่ยงระดับ runtime ที่แท้จริงคืออะไร?',
+    options: [
+      'ไม่มีเลย -- JSON.parse เร็วเสมอไม่ว่า input จะขนาดไหน',
+      'body ที่ใหญ่หรือเป็นอันตรายทำให้การ parse แบบ synchronous ใช้เวลานานขึ้นตามสัดส่วน block event loop (และทุก request ที่กำลังทำอยู่) นานเท่านั้นทั้งหมด',
+      'เสี่ยงแค่ memory leak เท่านั้น ไม่ block อะไรเลย',
+      'เสี่ยงแค่ stack overflow เท่านั้น ไม่มีการล่าช้า',
+    ],
+    answer: 1,
+    explain: 'เพราะ JSON.parse เป็น synchronous และรันบน JS thread เดียว เวลาที่ใช้สเกลตามขนาด input และ block งานอื่นทั้งหมดบน process ตลอดเวลานั้น -- ความเสี่ยงด้าน availability จริงถ้าไม่มี body-size cap',
+  },
+];
+
+<Quiz client:visible id="runtime-internals/libuv-event-loop" questions={quizLibuv} />
+
+<ProgressTracker client:visible id="runtime-internals/libuv-event-loop" />

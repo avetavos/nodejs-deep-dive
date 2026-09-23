@@ -1,0 +1,139 @@
+---
+title: 'ทำไมโมเดล Runtime ถึงสำคัญ'
+description: 'JS, V8, libuv, และ OS — 4 layer ที่อยู่ใต้โปรแกรม Node ทุกตัว และบท 5 บทของโมดูลนี้เชื่อมกันอย่างไร'
+sidebar:
+  order: 1
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## ทำไมโมดูลนี้ถึงมีอยู่
+
+ทุกโมดูลก่อนหน้านี้ในคอร์สสอนให้คุณ *ใช้* Node: เขียน promise, อ่านไฟล์, เปิด socket, publish package นั่นเพียงพอสำหรับเขียนโค้ด Node ที่ถูกต้องด้วยมือตัวเอง แต่**ไม่พอ**สำหรับ review โค้ด Node ที่คุณไม่ได้เขียนเอง — และทุกวันนี้ โค้ด Node ที่อยู่ตรงหน้าคุณจำนวนมากขึ้นเรื่อย ๆ ถูกสร้างโดยเครื่องมือที่ reproduce รูปแบบที่พบบ่อย ไม่ใช่คนที่คิดเรื่อง threadpool, heap, หรือ module loader ขณะพิมพ์
+
+โค้ด Node ที่ AI เขียนรันผ่านได้ด้วยเหตุผลสองแบบที่ต่างกันมาก: เพราะมันถูกต้องจริง ๆ หรือเพราะ input เฉพาะที่ใช้ทดสอบไม่เคยกระตุ้น runtime behavior ที่จะทำให้มันพัง `Promise.all` กับ 500 item ที่ "ใช้ได้ตอน demo", `require()` ที่บังเอิญไม่ชน cycle, deep-merge ที่ไม่เคยได้รับ key `__proto__` เลย — ทั้งหมดนี้รันผ่านโดย**ไม่มี error เลย**ในกรณีทั่วไป และทั้งหมดดูเหมือนโค้ดที่ถูกต้อง สำหรับคนที่รู้แค่ศัพท์ของ Node การแยกแยะสองแบบนี้ออกจากกันต้องใช้โมเดลว่าอะไรทำงานจริง ๆ อยู่ข้างใต้ JavaScript ไม่ใช่แค่ความคุ้นเคยกับ API
+
+## 4 layer หนึ่งโปรแกรม
+
+Node process ทุกตัวคือ stack เดียวกัน จากบนลงล่าง:
+
+<Mermaid title="สิ่งที่ Node process ประกอบขึ้นมาจริง ๆ" code={`flowchart TB
+  JS["Your JavaScript\nfunctions, promises, closures"] --> V8["V8\nparses, JITs, and runs JS; owns the heap and the garbage collector"]
+  V8 --> Libuv["libuv\nthe event loop, the threadpool, and OS-level async I/O bindings"]
+  Libuv --> OS["Operating system\nfiles, sockets, processes, signals"]
+`} />
+
+**V8** คือ JavaScript engine — มันคือที่ที่ heap อาศัยอยู่ด้วย ซึ่งหมายความว่าทุก object ที่คุณ allocate และทุก "memory leak" ที่คุณไล่ตามคือ concept ของ V8 ไม่ใช่ของ Node **libuv** คือ C library ที่ให้ event loop, threadpool ขนาดคงที่เล็ก ๆ, และตัวเชื่อมไปยัง async I/O ระดับ native ของ OS (epoll, kqueue, IOCP) แก่ Node — นี่คือสิ่งที่ทำให้ "non-blocking" เป็นจริง ไม่ใช่แค่คำโฆษณา ตัว Node เองคือ layer ที่เชื่อมสองอย่างนี้เข้าด้วยกันและ expose ออกมาเป็น `fs`, `http`, `worker_threads`, และ standard library ส่วนที่เหลือที่คุณรู้จักอยู่แล้ว
+
+5 บทของโมดูลนี้เดินผ่าน stack นี้จากข้างในออกมา: [V8 & Memory](/nodejs/th/runtime-internals/v8-and-memory/) ครอบคลุม heap และ garbage collection — leak อยู่ตรงไหนจริง ๆ และวัดมันยังไง [libuv & the Event Loop](/nodejs/th/runtime-internals/libuv-event-loop/) ลึกกว่าโมดูล event-loop เดิมในเรื่อง phase ภายใน, การเรียงลำดับ timer, และ blocking มีค่าใช้จ่ายจริง ๆ เท่าไร [Module Loading](/nodejs/th/runtime-internals/module-loading/) คือกลไกที่ CommonJS และ ESM ใช้แปลงไฟล์ให้กลายเป็น module ที่รันอยู่ รวมถึงจุดที่สองระบบนี้ไม่ตรงกัน [Native Code & Workers](/nodejs/th/runtime-internals/native-and-workers/) คืองานที่ออกจาก JS thread เดียวไปเลย — worker thread, shared memory, และ child process [The Security Model](/nodejs/th/runtime-internals/security-model/) ครอบคลุมขอบเขตที่ Node ให้คุณ (และที่มันไม่ให้อย่างชัดเจน) ระหว่างโค้ดของคุณกับเครื่องส่วนที่เหลือ
+
+## Process ที่พิสูจน์ว่า stack นี้มีจริง
+
+`process.versions` ไม่ใช่แค่ของแปลก — มันคือ version ของทุก layer เหล่านี้ที่ฝังอยู่ใน binary ที่คุณกำลังรัน และมันทำให้ภาพ 4-layer ข้างบนเป็นรูปธรรม ไม่ใช่แค่แนวคิด:
+
+export const versionsCode = `console.log('Node.js itself:', process.version);
+console.log('V8 engine (the JS layer):', process.versions.v8);
+console.log('libuv (the event loop + threadpool layer):', process.versions.uv);
+`;
+
+export const versionsOut = `Node.js itself: v24.13.0
+V8 engine (the JS layer): 13.6.233.17-node.37
+libuv (the event loop + threadpool layer): 1.51.0`;
+
+<NodeRunner client:visible code={versionsCode} node expected={versionsOut} />
+
+Node แต่ละ release มาพร้อม V8 และ libuv version ที่เจาะจงหนึ่งคู่เท่านั้น — นี่คือเหตุผลที่คำกล่าวอ้างอย่าง "strip-types เป็นค่า default ใน Node 24" หรือ "threadpool มี 4 thread" คือข้อเท็จจริงเกี่ยวกับ *version หนึ่ง* ไม่ใช่เกี่ยวกับ "Node" แบบเป็นนามธรรม และเหตุผลที่โมดูลนี้ระบุเสมอว่าตัวเลขที่ verify แล้วแต่ละอันด้านล่างมาจาก Node version ไหน
+
+## Mental Model
+
+ลองนึกถึงร้านอาหาร ห้องอาหารคือ V8 — นี่คือที่ JavaScript ของคุณรันจริง ๆ ทีละ order (ทีละ call stack) โดยบริกรคนเดียว (main thread) ที่ถือของได้ทีละอย่างเท่านั้น ครัวคือ libuv: ห้องหลังเล็ก ๆ ที่มีพ่อครัว 4 คน (threadpool ค่า default) สำหรับอาหารกลุ่มที่ต้องทำในครัวเท่านั้น (`fs`, `crypto`, `dns.lookup`, `zlib` บางตัว) บวกสายโทรศัพท์ตรงไปหา vendor ข้างนอก (async I/O ของ OS kernel) สำหรับทุกอย่างที่เหลือ — socket, timer — ที่ไม่ต้องการพ่อครัวเลย ตัวอาคารเองคือ OS: ท่อแก๊ส, ไฟฟ้า, กำแพงจริง ๆ ที่ทั้งห้องอาหารและครัวต้องพึ่งพาและมองผ่านไม่ได้
+
+## Trade-offs
+
+การเข้าใจ stack นี้มีต้นทุน: มันคือโมเดลในหัวอีกอันที่ต้องถือไว้ นอกเหนือจากตัวภาษา JavaScript เอง ก่อนที่คุณจะอ่านไฟล์ Node ได้อย่างมั่นใจ ผลตอบแทนคือต้นทุนนี้จ่ายครั้งเดียวแล้วคุ้มไปตลอดทุกไฟล์ที่คุณจะ review ต่อจากนี้ — "ทำไม `Promise.all` นี้ช้า", "ทำไมสิ่งนี้ leak", "ทำไมมันทำงานต่างกันใน worker" ทั้งหมดลดรูปเหลือแค่ *layer ไหนรับผิดชอบ* แทนที่จะต้องเดาใหม่ทุกครั้ง
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"Node เป็น single-threaded จบข่าว"** JavaScript ของคุณรันบน thread เดียว แต่ตัว process ไม่ได้ single-threaded — threadpool ของ libuv และการจัดการ I/O ของ OS เองรันอยู่นอก JS thread เดียวนั้น ซึ่งเป็นเหตุผลที่มันไม่ block thread นั้น
+- **"event loop กับ threadpool คือสิ่งเดียวกัน"** event loop คือ loop หลักของ libuv ที่รันบน thread เดียวกับ JS ของคุณ threadpool คือชุด worker thread ขนาดคงที่แยกต่างหากที่ loop ส่งงานเฉพาะทางไปให้ทำ การสับสนสองอย่างนี้นำไปสู่คำกล่าวอ้างที่ผิดว่า "async" parallelize อะไรได้บ้าง (ดู [libuv & the Event Loop](/nodejs/th/runtime-internals/libuv-event-loop/))
+- **"memory leak เป็นบั๊กประเภทเฉพาะของ Node"** "leak" ในโปรแกรม Node คือปัญหา heap-retention ของ V8 — บั๊กประเภทเดียวกับที่เกิดในภาษาที่มี garbage collector ใด ๆ เพียงแต่เข้าถึงได้ผ่านรูปแบบเฉพาะของ Node เช่น closure ที่โตขึ้นเรื่อย ๆ หรือ listener list ของ `EventEmitter` ที่ไม่มีขอบเขต (ดู [V8 & Memory](/nodejs/th/runtime-internals/v8-and-memory/))
+
+## อ่านโค้ดที่ AI เขียน
+
+snippet ที่ AI สร้างแล้ว "ใช้ได้" ในการทดสอบเร็ว ๆ ไม่ใช่หลักฐานว่ามันปลอดภัยภายใต้ load, ภายใต้ input ที่เป็นอันตราย, หรือข้าม version — ทั้งสามอย่างนั้นขึ้นอยู่กับ runtime layer ข้างบน ไม่ใช่แค่ syntax ของ JavaScript
+
+<SpotTheBug code={`// AI-written helper, added to a request handler
+async function hashAllPasswords(candidates) {
+  // "async, so it runs all of these in parallel" -- comment from the AI
+  return Promise.all(candidates.map((c) => hashPassword(c)));
+}
+// hashPassword() uses crypto.pbkdf2, which runs on libuv's threadpool
+`}>
+สิ่งนี้ดูเหมือนจะ "parallelize" งานเพราะห่อด้วย `Promise.all` และมันจะผ่านการทดสอบใด ๆ ที่มี candidate แค่หยิบมือ แต่ `crypto.pbkdf2` รันบน threadpool ขนาดคงที่ของ libuv (4 thread โดย default) — ภายใต้ request จริงที่มี candidate เป็นร้อย มีแค่ 4 ตัวที่รันแบบ parallel จริงบนฮาร์ดแวร์พร้อมกัน และเพราะ pool นี้แชร์กันทั้ง process การเรียกนี้ยังทำให้งาน `fs`/`dns.lookup`/`zlib` ที่ไม่เกี่ยวข้องซึ่งเกิดขึ้นที่อื่นใน process เดียวกันช้าลงได้ด้วย บั๊กไม่ได้อยู่ที่ JavaScript แต่อยู่ที่การไม่รู้ว่า `pbkdf2` รันบน layer ไหนจริง ๆ [V8 & Memory](/nodejs/th/runtime-internals/v8-and-memory/) และ [libuv & the Event Loop](/nodejs/th/runtime-internals/libuv-event-loop/) ครอบคลุมบั๊กแบบนี้พอดี — "โค้ด JS ดูถูกต้อง แต่สมมติฐานเรื่อง runtime ผิด"
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+JavaScript ของคุณรันบน thread เดียวข้างใน V8 แต่ process รอบตัวมัน — loop ของ libuv, threadpool ของมัน, และ OS — คือที่ที่บั๊กแปลก ๆ ที่มีรูปร่างแบบโค้ด AI เขียนส่วนใหญ่อาศัยอยู่จริง ๆ
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'Layer ไหนใน Node stack เป็นเจ้าของ heap และ garbage collector?',
+    options: ['libuv', 'V8', 'OS kernel', 'npm'],
+    answer: 1,
+    explain: 'V8 คือ JavaScript engine และ heap ที่มันจัดการ (พร้อม garbage collector) คือ concept ระดับ V8 ไม่ใช่ของ libuv หรือ OS',
+  },
+  {
+    q: 'บรรทัดนี้พิมพ์อะไร?\n```js\nconsole.log(typeof process.versions.uv, typeof process.versions.v8);\n```',
+    options: [
+      "'number' 'number'",
+      "'string' 'string'",
+      "'undefined' 'undefined'",
+      "'string' 'undefined'",
+    ],
+    answer: 1,
+    explain: '`process.versions` แสดง version ของ component หลักทุกตัวที่ compile เข้าไปใน Node binary เป็น string รวมถึง `uv` สำหรับ libuv และ `v8` สำหรับ JS engine',
+  },
+  {
+    q: 'ทำไม "Node เป็น single-threaded" ถึงเป็นการทำให้เรื่องง่ายเกินไป?',
+    options: [
+      'มันไม่ได้ง่ายเกินไป -- Node มี OS thread แค่หนึ่งเดียวจริง ๆ',
+      'JavaScript ของคุณรันบน thread เดียว แต่ threadpool ของ libuv และ async I/O ของ OS ทำงานอยู่นอก thread นั้น',
+      'Node จริง ๆ แล้วรันแต่ละ function call บน thread ใหม่',
+      'มีแค่โค้ด worker_threads เท่านั้นที่ single-threaded ส่วนที่เหลือ multi-threaded',
+    ],
+    answer: 1,
+    explain: 'การรับประกัน single-thread ใช้กับ call stack ของ JavaScript คุณเท่านั้น process ทั้งหมดใช้ OS thread เพิ่มเติมผ่าน threadpool ของ libuv และพึ่งพา async I/O ของ OS kernel เอง ซึ่งทั้งคู่รันอยู่นอก JS thread เดียวนั้น',
+  },
+  {
+    q: 'Comment ที่ AI เขียนไว้บนบรรทัดนี้ผิดตรงไหน?\n```js\nasync function hashAllPasswords(candidates) {\n  // "async, so it runs all of these in parallel" -- comment from the AI\n  return Promise.all(candidates.map((c) => hashPassword(c)));\n}\n```\nhashPassword() เรียก crypto.pbkdf2 ข้างใน ซึ่งรันบน threadpool ของ libuv',
+    options: [
+      '`Promise.all` ไม่มีอยู่จริงสำหรับ promise มากกว่าไม่กี่ตัว',
+      'มันเริ่ม operation ทั้งหมดพร้อมกันจริง แต่ pbkdf2 ผูกกับ threadpool -- มีแค่ 4 ตัวที่รัน parallel จริงพร้อมกันโดย default และ pool นี้แชร์กับงาน fs/crypto/dns/zlib อื่น',
+      'crypto.pbkdf2 จริง ๆ แล้วเป็น synchronous function ดังนั้นไม่มีอะไรรัน parallel เลย',
+      'Comment นี้ถูกต้องทั้งหมดไม่มีข้อยกเว้น',
+    ],
+    answer: 1,
+    explain: 'การที่ `Promise.all` เริ่ม operation หลายตัวพร้อมกันไม่เหมือนกับ operation ข้างใต้มี parallelism ของฮาร์ดแวร์แบบไม่จำกัด -- pbkdf2 แชร์ threadpool 4 thread คงที่ของ libuv กับทุก call ที่ผูกกับ threadpool ตัวอื่นใน process',
+  },
+  {
+    q: 'ข้อไหนถูกต้องเกี่ยวกับ libuv?',
+    options: [
+      'มันคือการ reimplement JavaScript เฉพาะของ Node',
+      'มันคือ C library ที่ implement event loop, threadpool, และ OS-level async I/O binding ของ Node',
+      'มันมีอยู่แค่ใน test suite ของ Node เท่านั้น ไม่มีใน production build',
+      'มันแทนที่ V8 เป็น JavaScript engine ของ Node ใน Node 20',
+    ],
+    answer: 1,
+    explain: 'libuv คือ C library แยกต่างหากที่ Node ฝังไว้ มันไม่เกี่ยวข้องกับการรัน JavaScript (นั่นเป็นหน้าที่ของ V8) และให้ event loop, threadpool, และ async I/O แบบ cross-platform',
+  },
+];
+
+<Quiz client:visible id="runtime-internals/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="runtime-internals/index" />

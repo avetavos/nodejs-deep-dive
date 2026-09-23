@@ -1,0 +1,324 @@
+---
+title: 'How Modules Actually Load'
+description: 'The CJS wrapper function, require.cache, ESM loader phases and cycles, --import hooks, and the strip-types truth on Node 24.'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## CommonJS: every file is wrapped in a function
+
+`require`, `module`, `exports`, `__dirname`, and `__filename` are not globals — they look like they are because every CJS file is compiled inside a wrapper function that receives them as parameters. `Module.wrap()` is the exact function Node uses to build that wrapper:
+
+export const cjsWrapCode = `require('node:module'); // a real require() call, to prove this file runs as CJS
+console.log('require:', typeof require, '| module:', typeof module, '| exports:', typeof exports, '| __dirname:', typeof __dirname, '| __filename:', typeof __filename);
+console.log(module.constructor.wrap('console.log(1)').slice(0, 78));
+`;
+
+export const cjsWrapOut = `require: function | module: object | exports: object | __dirname: string | __filename: string
+(function (exports, require, module, __filename, __dirname) { console.log(1)
+}`;
+
+<NodeRunner client:visible code={cjsWrapCode} node expected={cjsWrapOut} />
+
+This is why a CJS file can use `require` and `__dirname` without importing them from anywhere, and also why none of those five identifiers exist in ESM — an ESM file is not run inside this wrapper at all.
+
+## `require.cache` and the reload trick
+
+The second `require()` of the same resolved path returns the exact same exports object — Node caches by resolved file path, not by content. Deleting the cache entry forces the next `require()` to re-execute the file from scratch, producing a brand-new exports object:
+
+export const requireCacheCode = `const fs = require('node:fs');
+const path = require('node:path');
+
+const modPath = path.join(__dirname, '._runtime-internals-scratch-mod.cjs');
+fs.writeFileSync(modPath, 'module.exports = {};'); // a throwaway module file for this demo
+
+const first = require(modPath);
+const second = require(modPath);
+console.log('same object on a normal second require (cached):', first === second);
+
+delete require.cache[modPath]; // evict the cache entry
+const third = require(modPath);
+console.log('same object after deleting the cache entry:', first === third);
+
+fs.unlinkSync(modPath); // clean up the scratch file this snippet created
+`;
+
+export const requireCacheOut = `same object on a normal second require (cached): true
+same object after deleting the cache entry: false`;
+
+<NodeRunner client:visible code={requireCacheCode} node expected={requireCacheOut} />
+
+This is the mechanism behind hot-reloading a config file or a plugin at runtime: resolve the path once, `delete require.cache[resolvedPath]`, then `require()` it again. It only invalidates that one file's cache entry — anything *that file* required is still cached separately, so a reload does not cascade unless you walk `require.cache` and delete every module in the dependency subtree yourself.
+
+`require.resolve(specifier)` is the resolution algorithm alone, with no execution — useful for exactly this cache-keying purpose, and for checking whether a module is resolvable at all without the side effects of actually loading it.
+
+## The ESM loader has phases too — and they are not optional steps you can skip reasoning about
+
+<Mermaid title="What import does before your code runs" code={`flowchart LR
+  Resolve["Resolve\nspecifier -> a URL"] --> Load["Load\nURL -> source text"]
+  Load --> Link["Link\nbind imported/exported names (live bindings)"]
+  Link --> Evaluate["Evaluate\nrun the module body top to bottom"]
+`} />
+
+**Resolve** turns a specifier like `'./a.mjs'` or `'lodash'` into a fully-qualified URL. **Load** fetches the source text for that URL. **Link** connects every `import`/`export` name to the *live binding* it refers to — before any module body has run — which is what makes ESM imports live references rather than copied values. **Evaluate** finally runs each module's top-level code, in dependency order, exactly once. `--import`/`register()` hooks (below) intercept the first two phases; nothing lets you intercept Link or Evaluate from outside the loader itself.
+
+## Cycles behave differently in CJS and ESM
+
+A cycle is two modules that (directly or transitively) `require`/`import` each other. Because CJS resolves values *at require time* (a snapshot of whatever `module.exports` looked like at that moment) while ESM resolves *live bindings* (checked again on every access, with a temporal-dead-zone check), the same cyclic shape fails differently — or does not fail at all — depending on which module system it is written in:
+
+export const cyclesCode = `import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+
+const dir = mkdtempSync(join(tmpdir(), 'cyc-'));
+const require = createRequire(import.meta.url); // a real require(), usable from inside an ESM script
+
+writeFileSync(join(dir, 'a.cjs'), [
+  "exports.fromA = 'partial-a';",
+  "const b = require('./b.cjs');",
+  "exports.fromBSeenFromA = b.fromB;",
+].join('\\n'));
+writeFileSync(join(dir, 'b.cjs'), [
+  "const a = require('./a.cjs');", // a is mid-execution here -- this is the cycle
+  "exports.aHadFromAAlready = 'fromA' in a;",
+  "exports.aHadFromBSeenFromAAlready = 'fromBSeenFromA' in a;",
+  "exports.fromB = 'from-b';",
+].join('\\n'));
+
+const a = require(join(dir, 'a.cjs'));
+const b = require(join(dir, 'b.cjs'));
+console.log('CJS cycle -- no error, just a partial object at the point of the cycle:');
+console.log('  b saw a.fromA already set:', b.aHadFromAAlready);
+console.log('  b saw a.fromBSeenFromA not set yet (a was still mid-execution):', !b.aHadFromBSeenFromAAlready);
+
+writeFileSync(join(dir, 'a.mjs'), [
+  "export let fromA = 'partial-a';",
+  "import './b.mjs';", // cycle back to b.mjs before fromA finishes initializing
+  "fromA = 'done-a';",
+].join('\\n'));
+writeFileSync(join(dir, 'b.mjs'), [
+  "import { fromA } from './a.mjs';",
+  "console.log('  (never reached if the import above already threw)', fromA);",
+].join('\\n'));
+
+try {
+  await import(pathToFileURL(join(dir, 'a.mjs')));
+  console.log('ESM cycle -- did not throw (unexpected)');
+} catch (err) {
+  console.log('ESM cycle -- threw ReferenceError (temporal dead zone), not a partial object:', err instanceof ReferenceError);
+}
+
+rmSync(dir, { recursive: true, force: true }); // clean up the scratch files this snippet created
+`;
+
+export const cyclesOut = `CJS cycle -- no error, just a partial object at the point of the cycle:
+  b saw a.fromA already set: true
+  b saw a.fromBSeenFromA not set yet (a was still mid-execution): true
+ESM cycle -- threw ReferenceError (temporal dead zone), not a partial object: true`;
+
+<NodeRunner client:visible code={cyclesCode} node expected={cyclesOut} />
+
+CJS never throws on a cycle — you silently get whichever properties happened to be assigned before the cycle occurred, and reasoning about which those are requires tracing execution order by hand. ESM's live bindings make the same shape a hard, catchable error the moment an uninitialized binding is actually read — worse ergonomics in the moment, but it turns a silent, order-dependent bug into a loud one.
+
+## `--import` and `register()`: hooking the loader from outside
+
+Node lets you intercept resolve/load with a **customization hook** module, wired in with `register()` and loaded up front with `--import`:
+
+```js title="hooks.mjs — registers the hook module"
+// @skip-verify multi-file: illustrative, run together via the CLI transcript below
+import { register } from 'node:module';
+register('./resolve-hook.mjs', import.meta.url);
+```
+
+```js title="resolve-hook.mjs — the actual hook"
+// @skip-verify multi-file: illustrative, run together via the CLI transcript below
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier === 'virtual-greeting') {
+    const source = encodeURIComponent('export default "hello from a virtual module";');
+    return { url: `data:text/javascript,${source}`, shortCircuit: true };
+  }
+  return nextResolve(specifier, context); // not ours -- defer to the default resolver
+}
+```
+
+```js title="main.mjs"
+// @skip-verify multi-file: illustrative, run together via the CLI transcript below
+const greeting = await import('virtual-greeting');
+console.log(greeting.default);
+```
+
+```bash
+node --import ./hooks.mjs main.mjs
+```
+
+```text
+hello from a virtual module
+```
+
+This is the supported mechanism behind tools that transpile on the fly, resolve custom URL schemes, or redirect specifiers — it is also exactly what `--experimental-strip-types` and TypeScript loaders like `ts-node`'s ESM mode build on. Just passing `--import` a plain module (without calling `register()` inside it) only preloads that module; it does not, by itself, wire up `resolve`/`load` interception.
+
+## The strip-types truth on Node 24.13
+
+Type stripping is **on by default** in Node 24.13 — running a `.ts` file needs no flag at all, and the flag that exists (`--no-strip-types`) turns it *off*:
+
+```bash
+node sample.ts   # no flag needed
+```
+
+```text
+port is 3000
+```
+
+```bash
+node --no-strip-types sample.ts
+```
+
+```text
+SyntaxError: Missing initializer in const declaration
+```
+
+Default stripping is **erase-only**: it deletes type annotations but refuses any TypeScript syntax that has no valid JavaScript meaning once types are gone — most notably `enum`, which is not just an annotation but a runtime construct TypeScript compiles into an object:
+
+```bash
+node sample-with-enum.ts   # default strip-only mode
+```
+
+```text
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode
+```
+
+`--experimental-transform-types` (still experimental on 24.13, and it prints an `ExperimentalWarning`) goes further than stripping — it actually *transforms* constructs like `enum` into their JavaScript equivalent instead of refusing them:
+
+```bash
+node --experimental-transform-types sample-with-enum.ts
+```
+
+```text
+(node:12345) ExperimentalWarning: Transform Types is an experimental feature and might change at any time
+0
+```
+
+For a single-file executable, `--experimental-sea-config` (Single Executable Applications) takes a JSON config and, combined with `postject`, injects a bundled script into a copy of the `node` binary itself — worth knowing this exists, but it is a packaging step for distribution, not something you reach for while developing.
+
+## `import.meta.resolve` and `node --print`
+
+`import.meta.resolve(specifier)` runs the same resolution algorithm as `import`, synchronously, without loading anything — useful for "does this specifier even resolve" checks and for building tooling that needs a real file URL:
+
+export const importMetaCode = `console.log(typeof import.meta.resolve);
+console.log(import.meta.resolve('node:fs'));
+console.log(typeof import.meta.dirname, typeof import.meta.filename);
+`;
+
+export const importMetaOut = `function
+node:fs
+string string`;
+
+<NodeRunner client:visible code={importMetaCode} node expected={importMetaOut} />
+
+`import.meta.dirname`/`import.meta.filename` are the direct ESM equivalents of CJS's `__dirname`/`__filename` — no more `fileURLToPath(dirname(import.meta.url))` boilerplate needed for the common case. Separately, `node --print "expr"` (`-p`) evaluates an expression and prints the result — handy for one-off checks (`node -p "process.version"`, `node -p "require('node:os').cpus().length"`) without opening a REPL or writing a file.
+
+## Mental Model
+
+A CJS file is a function call: `require()` invokes the wrapper function synchronously, right there, and whatever `module.exports` looks like *at that exact moment* is what you get back — a snapshot. An ESM module is more like a contract that gets negotiated before anyone runs anything: every file's exports are wired up as live, checked references first (Link), and only once every file in the graph has agreed on what connects to what does anyone's code actually run (Evaluate) — which is why a badly-timed read during that negotiation is a hard error instead of a silently wrong snapshot.
+
+## Trade-offs
+
+CJS's synchronous, snapshot-based model is simpler to reason about line by line and never needs an async loader step, at the cost of cycles resolving to whatever partial state happened to exist — a correctness footgun that is easy to miss in review. ESM's phased, live-binding model catches that exact footgun as a hard error, at the cost of a more complex mental model (four phases, not one function call) and a loader that is asynchronous by nature, which is part of why interop between the two (`require(esm)`, dynamic `import()` from CJS) has real, documented limits rather than being a seamless bridge.
+
+## Common Misconceptions
+
+- **"`require()` re-reads and re-runs the file every time."** Only the first `require()` of a given resolved path executes the file; every subsequent `require()` of that same path returns the cached exports object until you manually evict it from `require.cache`.
+- **"ESM cycles are impossible, or always crash."** They are possible and common (two modules that reference each other is enough) — they only crash when code actually *reads* a live binding before its declaration has finished initializing. A cycle where each side only defines functions (not read at cycle time) works fine.
+- **"Type stripping means Node runs TypeScript."** Default type stripping deletes annotations and syntax that has no runtime meaning — it does not check types, and it rejects TypeScript syntax that requires actual transformation (like `enum`) rather than silently compiling it.
+
+## Reading AI-generated code
+
+Generated code that assumes `require()` and `import()` are interchangeable, or that a cyclic import will "just work" the way it apparently does in CJS, is a frequent, subtle source of ESM bugs.
+
+<SpotTheBug code={`// AI-written pair of ESM modules meant to share state
+// config.mjs
+export let ready = false;
+import './init.mjs';
+
+// init.mjs
+import { ready } from './config.mjs';
+console.log('config ready at init time:', ready);
+// ... later, some other module sets ready = true after real init work
+`}>
+This mirrors the ESM cycle demonstrated above: `init.mjs` imports `ready` from `config.mjs` while `config.mjs` is still in the middle of evaluating (it is on the very line that imports `init.mjs`). Because `ready` is declared with `let` (a live binding with a temporal dead zone), reading it from `init.mjs` at this exact point in the cycle throws a `ReferenceError`, rather than silently returning `false` the way an equivalent CJS setup would. The generated code assumed import ordering "just works" the way require() ordering intuitively does — the fix is to break the cycle (have a third module both depend on, with no import back to either) or to only read `ready` from inside a function called after both modules have finished evaluating, never at a module's own top level during the cycle.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+CJS require() is a synchronous snapshot that never throws on a cycle; ESM import is a live, phased binding that throws a real ReferenceError if a cycle reads a value before it is initialized -- know which one you are reading before you trust a "this looks fine" cyclic import.
+</Callout>
+
+export const quizModuleLoading = [
+  {
+    q: 'What does Module.wrap() reveal about `require`, `module`, and `__dirname` in a CJS file?',
+    options: [
+      'They are true global variables available everywhere in Node',
+      'They are parameters of a wrapper function every CJS file is compiled inside, not globals',
+      'They only exist if you explicitly import them from node:module',
+      'They are TypeScript-only and stripped at runtime',
+    ],
+    answer: 1,
+    explain: 'Every CJS file is wrapped in `function (exports, require, module, __filename, __dirname) { ... }` before being run -- that wrapper is where all five identifiers actually come from.',
+  },
+  {
+    q: 'What does this print?\n```js\nconst first = require(resolvedPath);\ndelete require.cache[resolvedPath];\nconst second = require(resolvedPath);\nconsole.log(first === second);\n```',
+    options: [
+      'It still returns the old cached object -- deleting the cache entry has no effect',
+      'It throws, because the cache entry no longer exists',
+      'The file is re-executed from scratch, producing a brand-new exports object',
+      'It re-resolves the path but reuses the old exports object',
+    ],
+    answer: 2,
+    explain: 'Deleting the require.cache entry only removes the cached reference; the next require() of that resolved path re-runs the file\'s top-level code and produces a fresh module.exports.',
+  },
+  {
+    q: 'Why can a cyclic ESM import throw a ReferenceError where the equivalent CJS cycle would not?',
+    options: [
+      'ESM does not support cycles at all -- it is a parse error',
+      'ESM bindings are live and checked on each access (with a temporal-dead-zone check); reading one before its declaration finishes initializing during a cycle is a hard error, unlike CJS\'s synchronous exports snapshot',
+      'It is a bug in Node that will eventually be fixed',
+      'Only dynamic import() can be part of a cycle; static import cannot',
+    ],
+    answer: 1,
+    explain: 'CJS require() returns whatever module.exports looks like at the moment of the call -- a snapshot, cycle-safe by construction. ESM resolves live bindings ahead of evaluation and enforces TDZ semantics, so an early read during a cycle throws.',
+  },
+  {
+    q: 'On Node 24.13, what happens when you run `node script.ts` with no flags, given this file content?\n```js\n// script.ts\nconst port: number = 3000;\nconsole.log(port);\n```',
+    options: [
+      'Fails -- TypeScript files always require --experimental-strip-types',
+      'Works for type annotations, but throws ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX on constructs like enum that need real transformation, not just stripping',
+      'Silently ignores the file and does nothing',
+      'Fully compiles and type-checks the file like tsc would',
+    ],
+    answer: 1,
+    explain: 'Type stripping is on by default in 24.13 (--no-strip-types turns it off) and handles plain annotations, but it is strip-only -- syntax like enum that has runtime meaning beyond annotations needs --experimental-transform-types instead.',
+  },
+  {
+    q: 'What is the actual effect of passing a hook module to `--import` without that module calling `register()`?',
+    options: [
+      'Node automatically wires up any exported resolve/load functions',
+      'It only preloads the module for its side effects -- resolve/load interception requires explicitly calling register() from node:module',
+      'It throws an error immediately',
+      'It replaces the entire module resolution algorithm',
+    ],
+    answer: 1,
+    explain: '`--import` just preloads a module before the entry point runs. To actually intercept resolve/load, that preloaded module (or one it calls into) must call `register()` from node:module, pointing at the hook implementation.',
+  },
+];
+
+<Quiz client:visible id="runtime-internals/module-loading" questions={quizModuleLoading} />
+
+<ProgressTracker client:visible id="runtime-internals/module-loading" />

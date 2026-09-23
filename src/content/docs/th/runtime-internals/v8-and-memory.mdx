@@ -1,0 +1,300 @@
+---
+title: 'V8 & Memory'
+description: 'Heap generation, process.memoryUsage(), leak pattern จริงพร้อมวิธีแก้, WeakRef/FinalizationRegistry, และการอ่าน transcript ของ --heap-prof/OOM'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Heap มี generation
+
+Garbage collector ของ V8 ไม่ได้ปฏิบัติกับทุก object เหมือนกัน มันแบ่ง heap ออกเป็น space ต่าง ๆ และสองตัวที่สำคัญสำหรับการคิดในชีวิตประจำวันคือ `new_space` (**young generation**) กับ `old_space` (**old generation**) — นี่คือชื่อเป๊ะ ๆ ที่ `v8.getHeapSpaceStatistics()` รายงานบน Node 24.13:
+
+<Mermaid title="object อยู่ที่ไหนขณะที่มันรอดจากการเก็บขยะแต่ละครั้ง" code={`flowchart LR
+  Alloc["new object\nallocated"] --> New["new_space\nyoung generation"]
+  New -->|"Scavenge\nsurvives one collection"| New
+  New -->|"survives a few Scavenges"| Old["old_space\nold generation"]
+  Old -->|"Mark-Compact\n(mark-sweep-compact)"| Old
+`} />
+
+object ส่วนใหญ่ตายตั้งแต่ยังเด็ก — array ชั่วคราว, object ที่ผูกกับ request เดียว — และ V8 optimize สำหรับสิ่งนี้: การเก็บขยะแบบ **Scavenge** รันบ่อยบน `new_space` ที่เล็ก และถูกมาก เพราะสิ่งที่มันดูส่วนใหญ่เป็นขยะอยู่แล้ว object ที่รอดจาก Scavenge ไปได้สองสามครั้งจะถูก **promote** ไปที่ `old_space` ซึ่งถูกเก็บด้วย pass แบบ **Mark-Compact** (mark-sweep-compact) — ช้ากว่า เพราะต้อง trace object ที่ยังมีชีวิตข้าม space ที่ใหญ่กว่ามาก แต่มันรันน้อยกว่ามาก นี่คือเหตุผลที่ leak ซึ่งแตะแค่ object อายุสั้นเป็นเรื่องหายาก — leak จริงเกือบทุกครั้งหมายความว่ามีบางอย่างถือ reference ที่ทำให้ object รอดเข้าไปใน `old_space` แล้วไม่เคยถูกปล่อยที่นั่นเลย
+
+## อ่าน `process.memoryUsage()`
+
+Node process ทุกตัว expose memory footprint ปัจจุบันของมันตรง ๆ:
+
+export const memoryUsageCode = `function bucketMB(bytes) {
+  return Math.round(bytes / 1024 / 1024 / 10) * 10; // nearest 10 MB, for a stable reading
+}
+
+const m = process.memoryUsage();
+console.log('rss (total OS memory for this process, MB):', bucketMB(m.rss));
+console.log('heapTotal (V8 heap currently reserved, MB):', bucketMB(m.heapTotal));
+console.log('heapUsed (V8 heap currently live, MB):', bucketMB(m.heapUsed));
+console.log('external (C++ objects bound to JS, e.g. some Buffers, MB):', m.external >= 0);
+console.log('arrayBuffers (a subset of external, MB):', m.arrayBuffers >= 0);
+`;
+
+export const memoryUsageOut = `rss (total OS memory for this process, MB): 40
+heapTotal (V8 heap currently reserved, MB): 10
+heapUsed (V8 heap currently live, MB): 0
+external (C++ objects bound to JS, e.g. some Buffers, MB): true
+arrayBuffers (a subset of external, MB): true`;
+
+<NodeRunner client:visible code={memoryUsageCode} node expected={memoryUsageOut} />
+
+`rss` (resident set size) คือ process ทั้งหมดตามที่ OS มองเห็น — V8 heap, native code, และทุกอย่างที่เหลือ `heapTotal` กับ `heapUsed` คือ JavaScript memory ที่ V8 จัดการเท่านั้น `external` กับ `arrayBuffers` คือคู่ที่สำคัญสำหรับใครก็ตามที่ทำงานกับ binary data: **memory ของ `Buffer` ถูก allocate นอก V8 heap** และโผล่มาตรงนี้ ไม่ใช่ใน `heapUsed` — script ที่ allocate แค่ `Buffer` ก้อนใหญ่สามารถมี `heapUsed` เล็กนิดเดียวแต่ `rss` ใหญ่ และมีแค่ `external`/`arrayBuffers` เท่านั้นที่จะแสดงมัน
+
+## Leak pattern 3 แบบ วัดจริง
+
+สิ่งเหล่านี้ไม่ใช่เรื่องสมมติ แต่ละอันคือรูปแบบที่โค้ดที่ AI เขียนสร้างออกมาตลอด และแต่ละอันวัดได้ด้วย `process.memoryUsage()` เพียงอย่างเดียว
+
+**1. Closure ที่ครอบ array ที่โตขึ้นเรื่อย ๆ** counter, cache, หรือ logger ที่ capture array ไว้ใน closure แล้วมีแต่ push เข้าไปเรื่อย ๆ:
+
+export const leakClosureCode = `function bucketMB(bytes) {
+  return Math.round(bytes / 1024 / 1024 / 10) * 10;
+}
+
+function makeTracker() {
+  const history = []; // captured by the closure below, never trimmed
+  return function track(event) {
+    history.push(event);
+    return history.length;
+  };
+}
+
+const track = makeTracker();
+const before = process.memoryUsage().heapUsed;
+for (let i = 0; i < 500000; i++) track({ id: i, payload: 'x'.repeat(100) });
+const after = process.memoryUsage().heapUsed;
+
+console.log('heapUsed before (MB):', bucketMB(before));
+console.log('heapUsed after 500,000 tracked events (MB):', bucketMB(after));
+console.log('grew by well over 10 MB with nothing ever freed:', after - before > 10 * 1024 * 1024);
+`;
+
+export const leakClosureOut = `heapUsed before (MB): 0
+heapUsed after 500,000 tracked events (MB): 140
+grew by well over 10 MB with nothing ever freed: true`;
+
+<NodeRunner client:visible code={leakClosureCode} node expected={leakClosureOut} />
+
+วิธีแก้แทบทุกครั้งคือใส่ขนาด cap หรือ TTL: จำกัด `history.length` แล้วทิ้ง entry เก่าสุด หรือแทนที่ด้วยอะไรที่มีขอบเขตตั้งแต่ต้น (ring buffer หรือ metrics library จริงจัง)
+
+**2. Listener ที่เพิ่มต่อ request แล้วไม่เคยเอาออก** `EventEmitter` เตือนเรื่องนี้โดยเฉพาะ:
+
+export const leakListenerCode = `import { EventEmitter } from 'node:events';
+
+const bus = new EventEmitter();
+
+function handleRequest() {
+  // Bug: a fresh listener on every "request" instead of registering one listener up front
+  bus.on('data', function onData() {});
+}
+
+let warned = false;
+process.on('warning', (w) => { if (w.name === 'MaxListenersExceededWarning') warned = true; });
+
+for (let i = 0; i < 15; i++) handleRequest();
+
+console.log('listener count after 15 simulated requests:', bus.listenerCount('data'));
+console.log('EventEmitter default max listeners:', bus.getMaxListeners());
+await new Promise((resolve) => setImmediate(resolve));
+console.log('MaxListenersExceededWarning fired:', warned);
+`;
+
+export const leakListenerOut = `listener count after 15 simulated requests: 15
+EventEmitter default max listeners: 10
+MaxListenersExceededWarning fired: true`;
+
+<NodeRunner client:visible code={leakListenerCode} node expected={leakListenerOut} />
+
+`MaxListenersExceededWarning` ที่ listener เกิน 10 ตัวสำหรับ event เดียวไม่ใช่ noise ที่ปิดเสียงด้วย `setMaxListeners(0)` — มันคือ Node กำลังบอกว่ามันสงสัยว่านี่คือ leak pattern แบบนี้เป๊ะ ๆ วิธีแก้คือลงทะเบียน listener แค่ครั้งเดียว (นอก path ที่รันต่อ request) หรือเรียก `emitter.off()`/`removeListener()` เมื่อ request จบ
+
+**3. `Map` ที่ไม่มีขอบเขตใช้เป็น cache** ทุก key ที่ต่างกันกลายเป็น entry ถาวร:
+
+export const leakCacheCode = `function bucketMB(bytes) {
+  return Math.round(bytes / 1024 / 1024 / 10) * 10;
+}
+
+const cache = new Map(); // no size limit and no eviction -- grows forever
+function getUser(id) {
+  if (!cache.has(id)) cache.set(id, { id, blob: 'x'.repeat(1000) });
+  return cache.get(id);
+}
+
+const before = process.memoryUsage().heapUsed;
+for (let i = 0; i < 200000; i++) getUser(i); // 200,000 distinct ids -> 200,000 permanent entries
+const after = process.memoryUsage().heapUsed;
+
+console.log('cache size:', cache.size);
+console.log('heapUsed before (MB):', bucketMB(before));
+console.log('heapUsed after (MB):', bucketMB(after));
+`;
+
+export const leakCacheOut = `cache size: 200000
+heapUsed before (MB): 0
+heapUsed after (MB): 100`;
+
+<NodeRunner client:visible code={leakCacheCode} node expected={leakCacheOut} />
+
+Cache ที่ไม่มีขอบเขตคือ leak ที่มีขั้นตอนเพิ่มมานิดเดียว วิธีแก้คือ cache จริงจัง: LRU ที่มีขนาดสูงสุด, TTL, หรือ (เมื่อ cache เป็นแค่การ optimize ประสิทธิภาพและ value เข้าถึงได้จากที่อื่นอยู่แล้ว) `WeakMap` ที่ key เป็น object identity เพื่อให้ entry หายไปเองเมื่อไม่มีอะไรอ้างอิง key นั้นแล้ว
+
+## `WeakRef`, `FinalizationRegistry`, และ `WeakMap`
+
+ทั้งสามอย่างมีอยู่เพื่อให้ cache หรือ lookup table ถือ reference ได้*โดยไม่ต้อง*เป็นเหตุผลที่ทำให้ object นั้นยังมีชีวิตอยู่:
+
+export const weakRefCode = `const cache = new Map();
+let obj = { name: 'cached value' };
+cache.set('key', new WeakRef(obj));
+
+console.log('deref while still referenced elsewhere:', cache.get('key').deref()?.name);
+
+obj = null; // drop the only strong reference
+
+// A WeakRef's target may or may not be collected by the time you check --
+// this is why WeakRef is for caches that can tolerate a miss, not for logic
+// that requires the value to still be there.
+console.log('typeof deref after dropping the strong reference:', typeof cache.get('key').deref());
+`;
+
+export const weakRefOut = `deref while still referenced elsewhere: cached value
+typeof deref after dropping the strong reference: object`;
+
+<NodeRunner client:visible code={weakRefCode} node expected={weakRefOut} />
+
+สังเกตบรรทัดที่สอง: ทันทีหลังจากตัด reference ทิ้ง object นั้นมีโอกาสสูงที่จะ*ยังไม่ถูก*เก็บ (GC รันตามตารางของตัวเอง) ดังนั้น `deref()` ยังคืนมันได้อยู่ — `typeof` จะเป็น `'object'` ทั้งสองกรณี (ถ้าถูกเก็บจริงมันจะเป็น `'undefined'` แทน) ความไม่แน่นอนนั้นแหละคือประเด็นทั้งหมด: `WeakRef` กับ `FinalizationRegistry` (ซึ่งรัน cleanup callback *สักช่วงหนึ่ง* หลัง object ถูกเก็บ โดยไม่มีการรับประกันเรื่องเวลา) ถูกต้องเฉพาะสำหรับการทำความสะอาดแบบ best-effort ที่เป็นทางเลือกเท่านั้น — ไม่ใช่สำหรับอะไรก็ตามที่ความถูกต้องของโปรแกรมคุณต้องพึ่งพา `WeakMap`/`WeakSet` คือกรณีทั่วไปที่หลีกเลี่ยงความคลุมเครือนี้ไปเลย: ใช้มันตรง ๆ เป็น cache ที่ key คือ object identity แล้วปล่อยให้ entry หายไปเองเมื่อไม่มีอะไรถือ key นั้นอีก โดยไม่ต้องจัดการ `WeakRef` เองเลย
+
+## อ่าน crash แบบ out-of-memory
+
+การจำกัด heap โดยตั้งใจคือวิธีหา leak ก่อนที่ production จะเจอมัน รัน closure-leak pattern ข้างบน แต่รันตลอดไป กับ heap limit เล็ก ๆ:
+
+```bash
+node --max-old-space-size=48 leaky-forever.js
+```
+
+```text
+
+<--- Last few GCs --->
+
+[pid] Mark-Compact (reduce) ~38 (46) -> ~38 (46) MB, external memory pressure; GC in old space requested
+[pid] Mark-Compact (reduce) ~38 (46) -> ~38 (46) MB, external memory pressure; GC in old space requested
+
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+  ... (omitted -- V8/libuv internal frames)
+
+$ echo $?
+134
+```
+
+`--max-old-space-size` (หน่วย MB) จำกัด `old_space` โดยเฉพาะ "Ineffective mark-compacts near heap limit" หมายความว่า V8 รัน Mark-Compact ซ้ำ ๆ ปล่อยคืนแทบไม่ได้เลยแต่ละครั้ง แล้วยอมแพ้แทนที่จะวนไปเรื่อย ๆ — รูปแบบนี้ (ขนาด heap แทบไม่เปลี่ยนตลอด Mark-Compact ติดต่อกัน ก่อน crash) คือลายเซ็นของ leak จริง ตรงข้ามกับ process ที่แค่ใช้ memory เยอะด้วยเหตุผลที่ถูกต้อง
+
+`--heap-prof` เขียนไฟล์ `.heapprofile` (โหลดได้ใน tab Memory ของ Chrome DevTools) โดย sample การ allocate ตลอดการรัน ซึ่งเป็นวิธีเปลี่ยนจาก "มี leak" ไปเป็น "function นี้แหละคือที่มาของการ allocate ที่โตขึ้นเรื่อย ๆ":
+
+```bash
+node --heap-prof allocate-a-lot.js
+ls *.heapprofile
+```
+
+```text
+Heap.<timestamp>.<pid>.0.001.heapprofile
+```
+
+## Mental Model
+
+ลองนึกภาพ heap เป็นสองห้อง ห้องหน้า (`new_space`) เล็กและถูกกวาดสะอาดตลอดเวลา — ของส่วนใหญ่ที่ทิ้งไว้ที่นั่นเป็นขยะไปแล้วตอนที่การกวาดมาถึง ดังนั้นการกวาดมันจึงเร็ว อะไรก็ตามที่รอดจากการกวาดไปสองสามรอบจะถูกย้ายไปห้องหลัง (`old_space`) ซึ่งถูกทำความสะอาดเป็นครั้งคราวเท่านั้น ด้วย pass ที่ช้ากว่าและละเอียดกว่าที่ต้องตรวจทุกชิ้นเทียบกับ inventory ที่ใหญ่กว่ามาก leak ไม่ใช่ "ของในห้องหน้าเยอะเกินไป" — มันคือบางอย่างในห้องหลังที่ส่วนที่ถูกต้องของโปรแกรมยังถือ reference อยู่ ทำให้ pass ทำความสะอาดที่ละเอียดนั้นเว้นมันไว้ถูกต้องทุกครั้งไป
+
+## Trade-offs
+
+Generational GC คือการพนัน: object ส่วนใหญ่ตายตั้งแต่เด็ก ดังนั้นการจ่ายแทบไม่มีต้นทุนเพื่อตรวจ young generation ตลอดเวลา แล้วจ่ายมากขึ้นเพื่อตรวจ old generation นาน ๆ ครั้ง ชนะโดยเฉลี่ย มันแพ้เมื่อ pattern การ allocate จริงของโปรแกรมไม่ตรงกับการพนันนั้น — เช่น อะไรที่ allocate object อายุปานกลางจำนวนมหาศาลอาจจบด้วยการ promote มากกว่าปกติ ทำให้ Mark-Compact รันบ่อยกว่า workload ทั่วไป `--max-old-space-size` แลกเพดานที่แน่นอน (failure mode ที่คาดเดาได้: OOM crash ที่คุณดักจับใน monitoring ได้) กับความเสี่ยงที่จะ crash process ที่อาจฟื้นตัวเองได้ การปล่อยไว้ที่ค่า default แลกความแน่นอนนั้นกับ process ที่โดยหลักการแล้วโตไปเรื่อย ๆ จนกว่า OS จะฆ่ามันด้วยเหตุผลที่คลุมเครือกว่ามาก
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`heapUsed` คือ memory usage ทั้งหมดของ process"** มันคือ JS heap ของ V8 เท่านั้น `Buffer` และข้อมูลที่ backed ด้วย C++ นอก heap อื่น ๆ โผล่ใน `external`/`arrayBuffers`; ยอดรวมระดับ OS คือ `rss` process ที่ allocate แค่ `Buffer` ก้อนใหญ่สามารถดูโอเคตาม `heapUsed` แต่ยังใช้ memory เยอะอยู่
+- **"`WeakRef` รับประกันว่า object จะถูกเก็บ"** มันรับประกันทิศตรงข้ามเท่านั้น: การถือ `WeakRef` ไม่เคย*ป้องกัน*การเก็บขยะ ส่วนว่าจะถูกเก็บเมื่อไรและถูกเก็บหรือไม่ขึ้นอยู่กับตารางของ GC เองทั้งหมด
+- **"`--max-old-space-size` ที่ใหญ่ขึ้นแก้ memory leak ได้"** มันแค่เลื่อนเวลา crash ออกไป — อัตราการโตไม่เปลี่ยน ดังนั้น leak จริงยังไงก็ไปถึงเพดานใดก็ตามในที่สุด วิธีแก้ที่ถูกต้องคือหาว่าอะไรถือ reference อยู่ ไม่ใช่ยกเพดานขึ้น
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด caching ที่ AI สร้างเป็นแหล่งบั๊กประเภทนี้บ่อย เพราะ "cache ผลลัพธ์ไว้" เป็น pattern ที่สร้างง่าย และ "จำกัดขอบเขตของ cache" ก็ตกหล่นง่ายโดยที่โค้ดยังดูถูกต้อง
+
+<SpotTheBug code={`// AI-written response cache for an API client
+const responseCache = new Map();
+
+async function getWithCache(url) {
+  if (responseCache.has(url)) return responseCache.get(url);
+  const data = await fetch(url).then((r) => r.json());
+  responseCache.set(url, data);
+  return data;
+}
+`}>
+ไม่มีการ evict ที่ไหนเลย: `responseCache` โตขึ้นทีละ entry ต่อ URL ที่ต่างกันทุกตัวที่เคยถูก request ตลอดอายุของ process โดยไม่มีขนาดสูงสุดและไม่มี TTL สำหรับ server ที่รันนานและถูกยิงด้วย URL ที่ต่างกันจำนวนมาก (รวมถึงที่มี query string หรือ user id ฝังอยู่) นี่คือ leak pattern แบบ "`Map` cache ที่ไม่มีขอบเขต" จากบทนี้ ซึ่งพิสูจน์ข้างบนแล้วว่าโตไปถึงหลักร้อย MB ในสเกลจริงได้ วิธีแก้คือ cache ที่มีขอบเขต — LRU ที่มีจำนวน entry สูงสุด, TTL ต่อ entry, หรือถ้าข้อมูลเก่าเก็บไว้ไม่ได้เลย ก็ไม่ต้องมี cache เลยดีกว่ามีแบบไม่มีขอบเขต
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Leak คือบางอย่างใน old_space ที่ live reference ยังตรึงไว้อยู่ -- `process.memoryUsage()` และ `v8.getHeapStatistics()` พิสูจน์การโตได้ แต่การเอา reference ออกเท่านั้น (size cap, TTL, หรือ WeakMap) ที่แก้ได้จริง
+</Callout>
+
+export const quizV8Memory = [
+  {
+    q: 'Object ที่เพิ่งถูก allocate และอายุสั้น เริ่มต้นอยู่ใน heap space ไหนของ V8?',
+    options: ['old_space', 'new_space (young generation)', 'code_space', 'large_object_space เสมอ'],
+    answer: 1,
+    explain: 'การ allocate ใหม่เริ่มที่ new_space (young generation) ซึ่งถูกเก็บบ่อยและถูกด้วย Scavenge; object ที่รอดจะถูก promote ไปที่ old_space',
+  },
+  {
+    q: 'Script นี้รันโค้ดนี้ใน loop และไม่แตะ JS object ปกติเลย:\n```js\nconst buf = Buffer.allocUnsafe(10 * 1024 * 1024); // 10 MB, repeated many times\n```\nคุณควรคาดหวังจะเห็นอะไรจาก process.memoryUsage()?',
+    options: [
+      'heapUsed โตมาก; external อยู่ใกล้ศูนย์',
+      'heapUsed เล็ก; external/arrayBuffers โต และ rss โตตามไปด้วย',
+      'ไม่มีอะไรแสดงใน process.memoryUsage() เลย',
+      'rss คงที่ไม่ว่าจะ allocate Buffer กี่ตัว',
+    ],
+    answer: 1,
+    explain: 'Memory ของ Buffer ถูก allocate นอก V8 heap ดังนั้นมันสะท้อนใน external/arrayBuffers (และใน rss ซึ่งเป็นยอดรวมระดับ OS) แทนที่จะเป็นใน heapUsed',
+  },
+  {
+    q: '"Ineffective mark-compacts near heap limit" ใน OOM crash บ่งชี้อะไร?',
+    options: [
+      'Syntax error ใน script',
+      'V8 รัน Mark-Compact ซ้ำ ๆ ปล่อยคืนแทบไม่ได้เลยแต่ละครั้ง แล้วยอมแพ้แทนที่จะวนไปเรื่อย ๆ -- ลายเซ็นของ leak จริง',
+      'Threadpool หมด thread',
+      'OS ฆ่า process เพราะใช้ CPU มากเกินไป',
+    ],
+    answer: 1,
+    explain: 'ข้อความนี้เฉพาะเจาะจงหมายความว่าการเก็บขยะของ old_space รันต่อเนื่องโดยไม่ทำให้ heap เล็กลงอย่างมีนัยสำคัญ ซึ่งเป็นสิ่งที่ leak จริงที่กำลังโตขึ้น (ต่างจากการใช้ memory เยอะแต่คงที่ตามปกติ) มีลักษณะเป็นแบบนี้ก่อน crash',
+  },
+  {
+    q: 'ทำไม `--max-old-space-size` ถึงไม่แก้ memory leak แค่ปิดบังมันเท่านั้น?',
+    options: [
+      'มันแก้ leak จริง ๆ โดยบังคับให้ GC รันบ่อยขึ้น',
+      'มันจำกัดขนาด old generation ทำให้โปรแกรม crash เร็วขึ้นและคาดเดาได้มากขึ้น -- แต่อัตราการโตที่แท้จริงไม่เปลี่ยน ดังนั้น leak จริงยังไงก็ไปถึงเพดานใดก็ตามในที่สุด',
+      'มันปิด garbage collector ไปเลย',
+      'มันมีผลแค่กับ new_space ไม่ใช่ old_space ที่เสี่ยง leak',
+    ],
+    answer: 1,
+    explain: 'Flag นี้เปลี่ยนแค่ตอนที่คุณ crash ไม่ใช่ว่าคุณ leak หรือเปล่า process ที่สะสม memory ที่เข้าถึงไม่ได้แต่ยังถูกอ้างอิงอยู่ยังไงก็จะชนเพดานที่คุณตั้งไว้',
+  },
+  {
+    q: 'Cache ที่ AI เขียนนี้ไม่เคยลบ entry ออกเลย:\n```js\nconst responseCache = new Map();\nasync function getWithCache(url) {\n  if (responseCache.has(url)) return responseCache.get(url);\n  const data = await fetch(url).then((r) => r.json());\n  responseCache.set(url, data);\n  return data;\n}\n```\nวิธีแก้ที่ถูกต้องคืออะไร?',
+    options: [
+      'ไม่ต้องทำอะไร -- entry ของ Map จะถูกเก็บขยะอัตโนมัติเมื่อไม่ได้ใช้แล้ว',
+      'เปลี่ยน Map เป็น plain object ซึ่งจะถูกเก็บอัตโนมัติ',
+      'จำกัดขอบเขตของ cache: LRU ที่มีขนาดสูงสุด, TTL ต่อ entry, หรือไม่มี cache เลยถ้าข้อมูลเก่าเก็บไว้ไม่ได้',
+      'เรียก process.memoryUsage() เป็นระยะเพื่อบังคับให้ล้างข้อมูล',
+    ],
+    answer: 2,
+    explain: 'Map (เหมือน plain object) ถือ strong reference ไปยังทุกอย่างที่ใส่เข้าไป -- entry จะไม่ถูกเก็บขยะแค่เพราะมันเลิก "มีประโยชน์" แล้ว มีแค่การจำกัดขอบเขตของ cache จริง ๆ (size limit, TTL, หรือ WeakMap ที่ key เป็น object identity) เท่านั้นที่แก้การโตแบบไม่มีขอบเขตได้',
+  },
+];
+
+<Quiz client:visible id="runtime-internals/v8-and-memory" questions={quizV8Memory} />
+
+<ProgressTracker client:visible id="runtime-internals/v8-and-memory" />

@@ -37,13 +37,15 @@ src/content/docs/
     http-networking/
     modules-npm/
     testing-tooling/
+    runtime-internals/
+    reading-node/
     index.mdx          # EN landing (splash)
   th/                  # Thai — served at /th/...
     (same module directories)
     index.mdx          # TH landing (splash)
 ```
 
-### The 7 Modules
+### The 9 Modules
 
 | Directory | Module | Runner |
 | --------- | ------ | ------ |
@@ -54,6 +56,8 @@ src/content/docs/
 | `http-networking` | HTTP & Networking | node (StackBlitz) |
 | `modules-npm` | Modules & npm | code / node |
 | `testing-tooling` | Testing & Tooling | code / node |
+| `runtime-internals` | Runtime Internals (V8/GC, libuv internals, module loading, worker_threads, security model) | node (StackBlitz) |
+| `reading-node` | Reading & Reviewing Node.js (AI-bug catalog, review checklist, worked reviews) | node (StackBlitz) |
 
 ### Lesson Template
 

