@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Node.js as a networking platform
 
@@ -24,6 +26,24 @@ This module teaches you to work with HTTP at the level that matters: the request
 | Routing | Manual routing on `req.method` and `req.url` |
 | Outbound Requests | Global `fetch`, JSON, error handling |
 | JSON API | Parse body, route, respond with JSON |
+| Production Server | Error handling, limits, timeouts, graceful shutdown |
+
+## The request lifecycle
+
+Every request follows the same shape, no matter which lesson below you are in: Node parses the incoming bytes into a `req` object, your callback runs, you write a `res`, and the connection either closes or waits for the next request:
+
+<Mermaid title="One HTTP request, start to finish" code={`flowchart TD
+  A["Client sends an HTTP request"] --> B["Node parses headers into an IncomingMessage (req)"]
+  B --> C["The request listener callback runs"]
+  C --> D["Handler reads the body, if any (data/end events)"]
+  D --> E["Handler calls res.writeHead(status, headers)"]
+  E --> F["Handler calls res.end(body)"]
+  F --> G{"Connection: keep-alive?"}
+  G -->|yes| H["Socket stays open, waits for the next request"]
+  G -->|no| I["Socket closes"]
+`} />
+
+Later lessons in this module fill in the sharp edges of this diagram: what happens if step D never finishes (body limits), what happens if step E or F is skipped or repeated (error listeners, `ERR_HTTP_HEADERS_SENT`), and how "waits for the next request" is bounded by real timeouts.
 
 ## A minimal server — right now
 
@@ -65,6 +85,45 @@ Three lines of logic — that is all it takes. The rest of this module unpacks e
 You never need to install `node:http`. It is part of the Node.js standard library. Import it with `require('node:http')` (CommonJS) or `import http from 'node:http'` (ESM). The `node:` prefix is the modern convention — it makes clear you are importing a built-in, not an npm package.
 </Callout>
 
+## Mental Model
+
+Think of `node:http` as the actual wire-protocol implementation, and every framework — Express, Fastify, Hono, Koa — as ergonomics layered on top of the same `req`/`res` objects from the diagram above. A framework's `app.get('/path', handler)` is a router that eventually calls `res.writeHead()` and `res.end()` for you; a middleware chain is just a sequence of functions sharing the same `req`/`res`. Nothing a framework does is magic — it is all reachable with the module you already have installed.
+
+## Trade-offs
+
+Writing directly against `node:http` gives you full control and zero dependencies, but it also means *you* own every edge case this module covers: body size limits, malformed input, timeouts, graceful shutdown. A framework buys productivity — routing, middleware, validation helpers — by making reasonable choices for those edge cases on your behalf. Neither is "correct": a small internal tool might be better off with three routes and no framework at all, while a public-facing API benefits from a framework's tested defaults. Either way, understanding the raw model means a framework's behavior is never a black box.
+
+## Common Misconceptions
+
+- **"You need Express to build a real HTTP server."** `node:http` already is a real, production-capable HTTP server — Express adds routing conventions and middleware, not HTTP itself.
+- **"`http.createServer` handles error cases for you."** It does not. Forgetting an `'error'` listener, a body size limit, or a shutdown handler are all silent gaps you have to fill yourself — covered later in this module.
+- **"A demo that works once is production ready."** A demo proves the happy path. The rest of this module is about the paths that are not happy: bad input, slow clients, a server that needs to restart.
+
+## Reading AI-generated code
+
+AI-generated `node:http` servers reliably nail the happy path — a route that responds correctly — and just as reliably skip the response lifecycle details that only show up under real traffic, like actually finishing every response.
+
+<SpotTheBug code={`const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    // TODO: send the body once we decide on a format
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not found');
+  }
+});
+
+server.listen(3000);
+`}>
+The `/health` branch calls `res.writeHead()` but never calls `res.end()`. Node does not close the response for you — the client is left waiting until it eventually times out on its own. The fix is the same one-liner every branch needs: make sure every code path that starts a response also calls `res.end()` (or `res.destroy()` if you are deliberately aborting it).
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`node:http` is the real HTTP implementation every framework sits on — learn its request/response lifecycle here, and no framework's abstractions will feel like a black box again.
+</Callout>
+
 export const indexQuiz = [
   {
     q: 'Which module do you use to create an HTTP server in Node.js without any npm packages?',
@@ -75,6 +134,7 @@ export const indexQuiz = [
       'node:fetch',
     ],
     answer: 1,
+    explain: '`node:http` is Node\'s built-in module for creating HTTP servers and clients — no package install is required.',
   },
   {
     q: 'What does the `node:` prefix in `require("node:http")` indicate?',
@@ -85,6 +145,7 @@ export const indexQuiz = [
       'An ES module that requires a flag to enable',
     ],
     answer: 2,
+    explain: 'The `node:` prefix explicitly marks a Node.js core module, distinguishing it from any same-named package that might exist on npm.',
   },
   {
     q: 'Which frameworks use `node:http` under the hood?',
@@ -95,6 +156,29 @@ export const indexQuiz = [
       'None — they use native C++ bindings directly',
     ],
     answer: 2,
+    explain: 'Every popular Node.js HTTP framework (and node:http2-based ones for HTTP/2) is a layer over the same core module, not a replacement for it.',
+  },
+  {
+    q: 'What happens when a matched route never calls `res.end()`?\n```js\nconst server = http.createServer(function (req, res) {\n  if (req.url === \'/health\') {\n    res.writeHead(200, { \'Content-Type\': \'text/plain\' });\n  }\n});\n```',
+    options: [
+      'Node throws an exception immediately',
+      'An empty 200 response is sent right away',
+      'The client waits until the connection times out — nothing is ever sent',
+      'The server crashes on the next request',
+    ],
+    answer: 2,
+    explain: 'Node never closes a response on its own. Without a call to res.end() (or res.destroy()), the client just waits — usually until it hits its own timeout.',
+  },
+  {
+    q: 'In the minimal server demo, why does the code call `server.close()` inside the `fetch(...).then(...)` callback instead of right after `server.listen(0, ...)`?',
+    options: [
+      '`server.listen` is synchronous, so closing right after it would close before the server ever started',
+      'The server needs to stay open long enough to serve its own self-request before shutting down cleanly',
+      '`server.close()` must always run inside a Promise chain',
+      'It is a stylistic choice with no functional reason',
+    ],
+    answer: 1,
+    explain: 'The demo requests itself to prove the server actually works, then closes once that request/response round trip is done — closing any earlier would race the self-request.',
   },
 ];
 

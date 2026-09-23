@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## http.createServer
 
@@ -122,6 +124,335 @@ server.listen(0, function() {
 กฎสองข้อที่จะช่วยให้คุณรอดพ้นจาก bug ลึกลับ: (1) ตั้ง header `Content-Type` ทุกครั้งเพื่อให้ client รู้ว่าจะ interpret body อย่างไร เช่น `text/plain`, `text/html` หรือ `application/json` (2) เรียก `res.end()` เสมอ หากลืมจะทำให้ connection ค้างและ client รอตลอดไป Node.js จะไม่ปิด connection ให้คุณ
 </Callout>
 
+## Error บน req, res และ server ต้องมี listener
+
+`req`, `res` และตัว `Server` เองล้วนเป็น `EventEmitter` และ event `'error'` นั้นพิเศษ: ถ้าไม่มีใครฟัง Node.js จะ **throw** มัน — ซึ่งทำให้ process ทั้งตัว crash ไม่ใช่แค่ request เดียว การเรียก `res.end()` ครั้งที่สองเป็นวิธีทั่วไปที่ทำให้เกิดสิ่งนี้พอดี: การเรียกครั้งที่สองจะล้มเหลวแบบ asynchronous ด้วย `ERR_STREAM_WRITE_AFTER_END` และเมื่อไม่มี listener error นั้นก็ไม่มีที่ไปนอกจากขึ้นไปที่ process:
+
+export const doubleEndCrashCode = `// @expect-throw
+const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  console.log('handling request - about to call res.end() twice');
+  res.end('first response');
+  res.end('second response'); // BUG: no guard, and no res.on('error', ...) listener
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port).catch(function () {});
+});
+`;
+
+export const doubleEndCrashOut = `handling request - about to call res.end() twice`;
+
+<NodeRunner client:visible code={doubleEndCrashCode} node expected={doubleEndCrashOut} />
+
+การใส่ `'error'` listener ให้ `res` เปลี่ยน crash นั้นให้กลายเป็น event ธรรมดาที่ถูกจัดการแล้ว — process รอดต่อไป และคุณเป็นคนตัดสินใจว่าจะทำอะไรต่อ (log มัน, ปิด connection, แจ้งเตือน):
+
+export const errorListenerFixCode = `const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  res.on('error', function (err) {
+    console.log('res error handled instead of crashing:', err.code);
+  });
+  res.end('first response');
+  res.end('second response'); // still a bug, but no longer fatal
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port)
+    .then(function (r) { return r.text(); })
+    .then(function (text) {
+      console.log('client received:', text);
+      server.close();
+      server.closeAllConnections();
+    });
+});
+`;
+
+export const errorListenerFixOut = `res error handled instead of crashing: ERR_STREAM_WRITE_AFTER_END
+client received: first response`;
+
+<NodeRunner client:visible code={errorListenerFixCode} node expected={errorListenerFixOut} />
+
+error listener เป็นแค่ safety net ไม่ใช่ทางแก้จริง ทางแก้จริงคือไม่เรียก `res.end()` สองครั้งตั้งแต่แรก — **early return** ทันทีหลังการเรียกครั้งแรกรับประกันสิ่งนั้นได้:
+
+```js
+function handleRequest(req, res, hasError) {
+  if (hasError) {
+    res.writeHead(400);
+    res.end('bad request');
+    return; // early return — nothing below this line runs for the error case
+  }
+  res.writeHead(200);
+  res.end('ok');
+}
+
+// Simulate a fake res object just to prove only one end() call happens per branch
+let calls = 0;
+const fakeRes = { writeHead() {}, end() { calls++; } };
+handleRequest(null, fakeRes, true);
+handleRequest(null, fakeRes, false);
+console.log('res.end() was called', calls, 'times for 2 requests (never more than once each)');
+```
+
+<Callout title="กฎเดียวกันนี้ครอบคลุม req และ server ด้วย">
+กฎเดียวกันครอบคลุม `req.on('error', ...)` (client ที่ตัดการเชื่อมต่อกลาง upload) และ `server.on('error', ...)` (ครอบคลุมด้านล่างสำหรับ `EADDRINUSE`) ไม่ว่าตัวไหนใน 3 ตัวนี้ throw โดยไม่มี listener จะทำให้ process ทั้งตัว down — request ที่ผิดพลาดหนึ่งตัวไม่ควรทำแบบนั้นได้เลย
+</Callout>
+
+## ERR_HTTP_HEADERS_SENT
+
+เมื่อ headers ถูกส่งไปแล้ว — ด้วย `res.writeHead()` หรือด้วยการเรียก `res.write()`/`res.end()` ครั้งแรก — มันเปลี่ยนไม่ได้อีก การพยายามเปลี่ยนจะ throw `ERR_HTTP_HEADERS_SENT` แบบ **synchronous** ซึ่งทำให้ catch ได้ง่าย ต่างจาก crash แบบ asynchronous ด้านบน:
+
+export const headersSentCode = `const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  res.end('done');
+  try {
+    res.writeHead(500, { 'X-Late': 'true' }); // headers already sent - throws synchronously
+  } catch (err) {
+    console.log('caught:', err.code);
+  }
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port).then(function (r) { return r.text(); }).then(function (text) {
+    console.log('client received:', text);
+    server.close();
+    server.closeAllConnections();
+  });
+});
+`;
+
+export const headersSentOut = `caught: ERR_HTTP_HEADERS_SENT
+client received: done`;
+
+<NodeRunner client:visible code={headersSentCode} node expected={headersSentOut} />
+
+## Content-Length กับ chunked transfer
+
+เมื่อ handler เรียก `res.end(data)` เพียงครั้งเดียว Node.js รู้ขนาด body ทั้งหมดล่วงหน้าและตั้ง `Content-Length` ให้คุณ เมื่อ handler เรียก `res.write()` มากกว่าหนึ่งครั้งก่อน `res.end()` Node.js ไม่สามารถรู้ขนาดรวมล่วงหน้าได้ จึงเปลี่ยนไปใช้ `Transfer-Encoding: chunked` แทน — ไม่มี header `Content-Length` เลย:
+
+export const contentLengthCode = `const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  if (req.url === '/fixed') {
+    res.end('hello'); // single end() call - Node can compute Content-Length
+  } else {
+    res.write('hel'); // multiple writes - total length isn't known upfront - chunked
+    res.write('lo');
+    res.end();
+  }
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port + '/fixed').then(function (r) {
+    console.log('/fixed Content-Length:', r.headers.get('content-length'), 'Transfer-Encoding:', r.headers.get('transfer-encoding'));
+    return fetch('http://localhost:' + port + '/chunked');
+  }).then(function (r) {
+    console.log('/chunked Content-Length:', r.headers.get('content-length'), 'Transfer-Encoding:', r.headers.get('transfer-encoding'));
+    server.close();
+    server.closeAllConnections();
+  });
+});
+`;
+
+export const contentLengthOut = `/fixed Content-Length: 5 Transfer-Encoding: null
+/chunked Content-Length: null Transfer-Encoding: chunked`;
+
+<NodeRunner client:visible code={contentLengthCode} node expected={contentLengthOut} />
+
+`Content-Length` ต้องเป็นจำนวน **byte** ที่แน่นอน ไม่ใช่จำนวนตัวอักษร — สำหรับข้อความ ASCII ล้วน ๆ ตัวเลขสองอย่างนี้เท่ากัน แต่สำหรับข้อความอื่น (ภาษาไทย, emoji) มันไม่เท่ากัน `Buffer.byteLength(str)` ให้จำนวน byte จริง ส่วน `.length` ของ JavaScript string เองนับ UTF-16 code unit แทน:
+
+```js
+const text = 'สวัสดี'; // Thai greeting - each character is multiple UTF-8 bytes
+console.log('.length (UTF-16 code units):', text.length);
+console.log('Buffer.byteLength (actual UTF-8 bytes):', Buffer.byteLength(text));
+```
+
+ถ้าคุณเคยตั้ง `Content-Length` เองแทนที่จะให้ `res.end(data)` คำนวณให้ (เช่นตอน stream body ผ่านหลาย write แต่ยังต้องประกาศความยาวล่วงหน้า) ให้ใช้ `Buffer.byteLength` เสมอ ไม่ใช่ `.length` — การใช้ `.length` กับข้อความที่ไม่ใช่ ASCII จะประกาศจำนวน byte น้อยกว่าที่ส่งจริง และ client จะตัด body ทิ้งที่ความยาวที่ประกาศไว้
+
+## Keep-alive และ timeout สามตัว
+
+โดย default Node.js จะเก็บ TCP connection เปิดไว้หลัง response เพื่อให้ client ส่ง request ถัดไปได้โดยไม่ต้อง handshake ใหม่ (`Connection: keep-alive`) มี timeout อิสระสามตัว แต่ละตัวมี default ของตัวเอง กำหนดว่า server จะรอนานแค่ไหน:
+
+export const timeoutsCode = `const http = require('node:http');
+const server = http.createServer(function (req, res) { res.end('ok'); });
+console.log('headersTimeout:', server.headersTimeout);
+console.log('requestTimeout:', server.requestTimeout);
+console.log('keepAliveTimeout:', server.keepAliveTimeout);
+`;
+
+export const timeoutsOut = `headersTimeout: 60000
+requestTimeout: 300000
+keepAliveTimeout: 5000`;
+
+<NodeRunner client:visible code={timeoutsCode} node expected={timeoutsOut} />
+
+| Timeout | Default | ขอบเขต |
+|---|---|---|
+| `headersTimeout` | 60,000 ms | Node รอ header ของ request มาครบได้นานแค่ไหน |
+| `requestTimeout` | 300,000 ms | ทั้ง request (header + body) ใช้เวลาได้นานแค่ไหน |
+| `keepAliveTimeout` | 5,000 ms | keep-alive connection ที่ว่างอยู่จะเปิดค้างรอ request ถัดไปได้นานแค่ไหน |
+
+ทั้งสามตัวเป็น property ธรรมดาที่คุณ reassign บน server object ได้ก่อนที่มันจะเริ่ม listen เมื่อคุณต้องการปิด socket ที่เปิดอยู่ทั้งหมดทันที — ระหว่าง test ในโมดูลนี้ หรือระหว่าง shutdown ที่รอมานานพอแล้ว — `server.closeAllConnections()` จะบังคับปิดทุก connection ไม่ว่าจะ keep-alive หรือไม่ แทนที่จะรอ timeout พวกนี้จนหมดเวลา
+
+## EADDRINUSE — port ถูกใช้ไปแล้ว
+
+การพยายาม `listen()` บน port ที่ process อื่นใช้อยู่แล้วจะไม่ throw แบบ synchronous — มันจะ emit event `'error'` บน server พร้อม `code` ที่คุณตรวจสอบได้:
+
+export const eaddrinuseCode = `const http = require('node:http');
+const s1 = http.createServer(function (req, res) { res.end('ok'); });
+s1.listen(0, function () {
+  const port = s1.address().port;
+  const s2 = http.createServer(function (req, res) { res.end('ok'); });
+  s2.on('error', function (err) {
+    console.log('second listen failed:', err.code);
+    s1.close();
+    s1.closeAllConnections();
+  });
+  s2.listen(port);
+});
+`;
+
+export const eaddrinuseOut = `second listen failed: EADDRINUSE`;
+
+<NodeRunner client:visible code={eaddrinuseCode} node expected={eaddrinuseOut} />
+
+นี่คือกฎเดียวกับด้านบนของ section นี้: `server.on('error', ...)` คือสิ่งที่กั้นระหว่าง port ที่ถูกใช้แล้วกับ crash แบบ unhandled-exception ตอน startup
+
+## Graceful shutdown ด้วย SIGTERM
+
+process manager (Docker, Kubernetes, systemd) จะส่ง `SIGTERM` เมื่อต้องการให้ server ของคุณหยุด การปิดทันทีจะทิ้ง request ที่กำลังทำอยู่ ส่วนการปิดแบบ **graceful** จะหยุดรับ connection ใหม่แต่ปล่อยให้ request ที่กำลังทำอยู่เสร็จก่อน:
+
+<Mermaid title="ลำดับของ graceful shutdown" code={`flowchart TD
+  A["Process receives SIGTERM"] --> B["server.close() - stop accepting new connections"]
+  B --> C{"Any in-flight requests?"}
+  C -->|yes| D["Wait for each in-flight response to finish"]
+  D --> C
+  C -->|no| E["close callback fires - process can exit"]
+  B -.->|timeout fallback| F["closeAllConnections() force-ends stragglers"]
+`} />
+
+export const shutdownCode = `const http = require('node:http');
+
+let inFlight = 0;
+const server = http.createServer(function (req, res) {
+  inFlight++;
+  setTimeout(function () {
+    res.end('slow response done');
+    inFlight--;
+    console.log('in-flight requests remaining:', inFlight);
+  }, 50);
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+
+  // Fire a slow request, then immediately ask the server to shut down
+  fetch('http://localhost:' + port).then(function (r) { return r.text(); }).then(function (text) {
+    console.log('client got:', text);
+  });
+
+  process.once('SIGTERM', function () {
+    console.log('SIGTERM received, draining in-flight requests:', inFlight);
+    server.close(function () {
+      console.log('server closed - all in-flight requests finished first');
+    });
+  });
+
+  setTimeout(function () {
+    process.emit('SIGTERM');
+  }, 10);
+});
+`;
+
+export const shutdownOut = `SIGTERM received, draining in-flight requests: 1
+in-flight requests remaining: 0
+client got: slow response done
+server closed - all in-flight requests finished first`;
+
+<NodeRunner client:visible code={shutdownCode} node expected={shutdownOut} />
+
+`server.close()` เพียงอย่างเดียวอาจค้างตลอดไปได้ถ้า client ถือ keep-alive connection ไว้โดยไม่มีอะไรทำอยู่ — โค้ด production จริงจะคู่มันกับ timeout fallback ที่เรียก `server.closeAllConnections()` หลังผ่านช่วงเวลาผ่อนผันที่กำหนดไว้ เพื่อให้ shutdown ที่ใช้เวลานานเกินไปยังจบได้ บทเรียน *Production Server* ท้ายโมดูลนี้จะต่อ fallback นั้นเข้าไปด้วย
+
+## HTTP/2 ในไม่กี่บรรทัด
+
+Node.js ยังมี `node:http2` ซึ่งมี compatibility API ที่หน้าตาแทบเหมือน `node:http` เป๊ะ — `createServer`, request listener, `res.writeHead`/`res.end` มันรันบน plaintext HTTP/2 (h2c) ซึ่งเป็นสิ่งที่ demo ในโปรเซสเดียวกันพูดได้โดยไม่ต้องมี TLS certificate:
+
+export const http2TeaserCode = `const http2 = require('node:http2');
+
+const server = http2.createServer(function (req, res) {
+  res.writeHead(200, { 'content-type': 'text/plain' });
+  res.end('hello over h2c');
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  const client = http2.connect('http://localhost:' + port);
+  const req = client.request({ ':path': '/' });
+  let data = '';
+  req.on('data', function (chunk) { data += chunk; });
+  req.on('end', function () {
+    console.log('received over http/2:', data);
+    client.close();
+    server.close();
+  });
+  req.end();
+});
+`;
+
+export const http2TeaserOut = `received over http/2: hello over h2c`;
+
+<NodeRunner client:visible code={http2TeaserCode} node expected={http2TeaserOut} />
+
+server HTTP/2 ในโลกจริงเกือบทั้งหมดรันบน TLS (`http2.createSecureServer`) เพราะ browser หลักทุกตัวพูด HTTP/2 แบบนั้นเท่านั้น — โหมด plaintext `h2c` ด้านบนมีไว้สำหรับ traffic ระหว่าง service ภายในและ demo แบบนี้เป็นหลัก
+
+## Mental Model
+
+ทุก response คือสัญญาที่มีขั้นตอนบังคับสองขั้นตอน: ส่ง headers ครั้งเดียว (`writeHead` หรือโดยนัยตอน `write`/`end` ครั้งแรก) แล้วส่ง body และปิดมันครั้งเดียว (`end`) ทุกอย่างใน section นี้คือความหลากหลายของ "จะเกิดอะไรขึ้นเมื่อสัญญานั้นถูกทำผิด": ทำผิดโดยเรียกขั้นตอนหนึ่งสองครั้ง (`ERR_HTTP_HEADERS_SENT`, crash จาก double-`end()`) ทำผิดโดยไม่เคยทำให้เสร็จ (client ที่ค้าง, timeout ต่าง ๆ) หรือทำผิดจากสิ่งที่อยู่นอก handler ของคุณไปเลย (`EADDRINUSE` ก่อนที่ request จะมาถึงด้วยซ้ำ) `'error'` listener ไม่ได้ป้องกันสิ่งเหล่านี้เลย — มันแค่ตัดสินว่าการทำผิดสัญญาจะทำให้ request เดียว down หรือทั้ง process down
+
+## Trade-offs
+
+การจัดการทุก error path ที่แสดงในบทนี้ — `res.on('error')`, `try/catch` รอบ `writeHead`, guard สำหรับ `EADDRINUSE`, handler สำหรับ graceful-shutdown — คือโค้ดจริงที่คุณต้องเขียนและดูแลสำหรับทุก server และส่วนใหญ่ไม่เคยทำงานเลยตอนใช้งานปกติ การข้ามมันไม่มีค่าใช้จ่ายอะไรจนกว่าจะถึงครั้งที่ client ตัดการเชื่อมต่อกลาง response หรือ deploy ส่ง `SIGTERM` กลาง request ซึ่งตอนนั้นค่าใช้จ่ายคือ crash แบบ unhandled หรือ request ที่หายไปใน production ไม่มีของฟรีตรงนี้: framework ฝัง default ที่สมเหตุสมผลสำหรับกรณีพวกนี้ไว้แล้ว ซึ่งเป็นส่วนใหญ่ของสิ่งที่คุณกำลังจ่ายเงินซื้อจริง ๆ เมื่อเพิ่ม framework เข้ามา
+
+## Common Misconceptions
+
+- **"error ข้างใน request handler กระทบแค่ request นั้นตัวเดียว"** จะจริงก็ต่อเมื่อมีอะไรฟังมันอยู่ event `'error'` ที่ไม่มีคน handle บน `req`, `res` หรือตัว server เอง จะ throw และทำให้ *ทั้ง process* crash — ทุก request ที่กำลังทำอยู่ล้มไปด้วยกันหมด
+- **"`ERR_HTTP_HEADERS_SENT` กับ crash จาก double-`res.end()` คือ bug เดียวกัน"** มันเกี่ยวข้องกันแต่ต่างกัน: การเขียน headers/body ซ้ำจะ throw แบบ **synchronous** และ catch ได้ง่าย ๆ ส่วนการเรียก `res.end()` สองครั้งจะล้มเหลวแบบ **asynchronous** ในฐานะ stream error ซึ่งต้องใช้ `'error'` listener ไม่ใช่ `try/catch` เพื่อไม่ให้ crash
+- **"Content-Length ก็แค่ `str.length`"** จริงเฉพาะข้อความ ASCII ล้วน ๆ ตัวอักษร multi-byte ใด ๆ (ไทย, emoji, ภาษาที่ไม่ใช่อังกฤษส่วนใหญ่) ทำให้ `.length` (UTF-16 code unit) น้อยกว่าจำนวน byte จริง — ใช้ `Buffer.byteLength` เสมอสำหรับความยาวที่คุณประกาศเอง
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด handler ที่ AI เขียนมักจะจบทุก branch ของ `if`/`else` ด้วย `res.end()` ของตัวเอง ซึ่งดูปลอดภัย — จนกระทั่งมีการแก้ไขทีหลังเพิ่ม code path หลัง block `if`/`else` ที่สมมติว่า response ยังไม่ถูกส่ง แล้ว `res.end()` ก็ถูกเรียกเป็นครั้งที่สอง
+
+<SpotTheBug code={`function handleRequest(req, res, isAdmin) {
+  if (isAdmin) {
+    res.writeHead(200);
+    res.end('admin dashboard');
+  } else {
+    res.writeHead(403);
+    res.end('forbidden');
+  }
+
+  // Added later: log every request after handling it
+  console.log('handled', req.url);
+  if (req.url === '/admin/audit') {
+    res.writeHead(200);
+    res.end('audit log'); // BUG: res.end() was already called above for this same request
+  }
+}
+`}>
+ทั้งสอง branch ของ `if`/`else` เดิมเรียก `res.end()` ถูกต้องแค่ครั้งเดียว — bug อยู่ที่โค้ดที่เพิ่มมาทีหลัง ซึ่งสมมติว่าปลอดภัยที่จะเรียก `res.writeHead`/`res.end` อีกครั้งสำหรับ URL หนึ่ง โดยไม่เช็กว่า response เสร็จไปแล้วหรือยัง สำหรับ `/admin/audit` (ซึ่งก็เป็น `isAdmin` ด้วย) `res.end()` ตอนนี้รันสองครั้งบน response เดียวกัน ซึ่งเป็น crash แบบ `ERR_STREAM_WRITE_AFTER_END` เดียวกับก่อนหน้านี้ในบทนี้เป๊ะ ถ้าไม่มี `res.on('error', ...)` listener โค้ดใดก็ตามที่เพิ่มเข้ามาหลังจุดที่ response อาจเสร็จไปแล้ว ต้องมี early return (หรือเช็ก `res.writableEnded`) ก่อนจะแตะ `res` อีกครั้ง — อย่าสมมติว่า "ที่นี่คือจุดเดียวที่ตอบ response"
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`req`, `res` และ server เป็น EventEmitter ที่ event `'error'` ซึ่งไม่มีคน handle จะทำให้ทั้ง process crash — ใส่ listener ไว้เสมอ และทำให้ทุก response จบลงพอดีครั้งเดียวด้วย early return แทนที่จะหวังว่าโค้ดทีหลังจะไม่รันกับ response ที่ส่งไปแล้ว
+</Callout>
+
 export const httpServerQuiz = [
   {
     q: 'จุดประสงค์ของ res.end() ใน Node.js HTTP server คืออะไร?',
@@ -132,6 +463,7 @@ export const httpServerQuiz = [
       'กำหนด HTTP status code',
     ],
     answer: 1,
+    explain: 'res.end() เขียน chunk สุดท้ายของ body (ถ้ามี) และบอก Node ว่า response เสร็จแล้ว — server ยังทำงานต่อสำหรับ request อื่น',
   },
   {
     q: 'method ใดที่กำหนดทั้ง status code และ response headers ในครั้งเดียว?',
@@ -142,6 +474,7 @@ export const httpServerQuiz = [
       'res.send()',
     ],
     answer: 2,
+    explain: 'res.writeHead(statusCode, headers) กำหนดทั้งสองอย่างในการเรียกครั้งเดียว ก่อนที่จะเขียน body ใด ๆ',
   },
   {
     q: 'จะเกิดอะไรขึ้นถ้าลืมเรียก res.end() ใน request handler?',
@@ -152,6 +485,62 @@ export const httpServerQuiz = [
       'response ถูกส่งพร้อม empty body อัตโนมัติ',
     ],
     answer: 2,
+    explain: 'Node ไม่เคยจบ response ให้เอง — client รอต่อไปจนกว่า timeout ของตัวเอง (หรือ timeout ฝั่ง server ในบทนี้) จะยอมแพ้',
+  },
+  {
+    q: 'handler เรียก `res.end()` สองครั้ง โดยไม่มี listener `res.on(\'error\', ...)` เกิดอะไรขึ้น?\n```js\nconst server = http.createServer(function (req, res) {\n  res.end(\'first\');\n  res.end(\'second\');\n});\n```',
+    options: [
+      'ไม่มีอะไรเกิดขึ้น — การเรียกครั้งที่สองถูกเพิกเฉยแบบเงียบ ๆ',
+      'มันจะ throw ERR_HTTP_HEADERS_SENT แบบ synchronous ซึ่ง Node catch ให้อัตโนมัติ',
+      'การเรียกครั้งที่สองล้มเหลวแบบ asynchronous ด้วย ERR_STREAM_WRITE_AFTER_END ซึ่งทำให้ process crash เพราะไม่มีใครฟัง error',
+      'response body จะกลายเป็น "firstsecond"',
+    ],
+    answer: 2,
+    explain: 'การเขียนหลัง end() แล้วจะ emit event \'error\' แบบ async เมื่อไม่มี listener Node จะ throw มัน ซึ่งทำให้ทั้ง process crash ไม่ใช่แค่ request เดียว',
+  },
+  {
+    q: 'ค่า default ของ `server.keepAliveTimeout` คือเท่าไร?',
+    options: [
+      '60,000 ms เท่ากับ headersTimeout',
+      '300,000 ms เท่ากับ requestTimeout',
+      '5,000 ms',
+      '0 — keep-alive connection ไม่ timeout เลยโดย default',
+    ],
+    answer: 2,
+    explain: 'keepAliveTimeout default อยู่ที่ 5 วินาที — keep-alive socket ที่ว่างจะรอ request ถัดไปนานแค่นั้นก่อนที่ Node จะปิดมัน headersTimeout (60s) และ requestTimeout (300s) เป็น timeout แยกที่ยาวกว่า',
+  },
+  {
+    q: 'server ตัวที่สองพยายาม `listen()` บน port ที่ process อื่นเปิดอยู่แล้ว จะ emit อะไร และที่ไหน?',
+    options: [
+      'throw แบบ synchronous จากการเรียก listen() เอง',
+      "event 'error' บน server object โดยมี err.code === 'EADDRINUSE'",
+      'Promise ที่ reject เพราะ listen() คืน Promise',
+      'ไม่มีอะไรเลย — server ตัวที่สองจะเข้าคิวเงียบ ๆ ตามหลังตัวแรก',
+    ],
+    answer: 1,
+    explain: "listen() เองไม่ throw ความล้มเหลวจะปรากฏแบบ asynchronous เป็น event 'error' บน server พร้อม code 'EADDRINUSE' — ซึ่งเป็น error ประเภทที่ต้องมี listener เพื่อไม่ให้ crash แบบ unhandled",
+  },
+  {
+    q: 'ทำไม `res.end(\'hello\')` (เรียกครั้งเดียว) ถึงส่ง `Content-Length: 5` ในขณะที่ `res.write()` สองครั้งตามด้วย `res.end()` ส่ง `Transfer-Encoding: chunked` แทน?',
+    options: [
+      'chunked encoding ถูกใช้เสมอสำหรับ response ที่ใหญ่กว่าไม่กี่ byte',
+      'ตอนเรียก end() ครั้งเดียว ขนาด body ทั้งหมดรู้ล่วงหน้า ส่วนตอนมีหลาย write ไม่รู้ Node จึงส่งเป็น chunk แทน',
+      'ขึ้นอยู่กับ header Content-Type ไม่เกี่ยวกับจำนวนครั้งที่เรียก write()',
+      'res.write() ถูก deprecated แทนที่ด้วย res.end() นั่นคือเหตุผลที่ขนาดต่างกัน',
+    ],
+    answer: 1,
+    explain: 'Node คำนวณ Content-Length ได้ก็ต่อเมื่อเห็น body ทั้งหมดในครั้งเดียว (การเรียก end(data) ครั้งเดียว) การเรียก write() หลายครั้งหมายความว่าไม่รู้ขนาดรวมล่วงหน้า Node จึงย้อนกลับไปใช้ chunked transfer encoding',
+  },
+  {
+    q: 'ทำไม handler ควรใช้ `Buffer.byteLength(str)` แทน `str.length` ตอนประกาศ Content-Length ของข้อความไทยเอง?',
+    options: [
+      'str.length ถูก deprecated ใน Node.js เวอร์ชันใหม่',
+      'str.length นับ UTF-16 code unit ซึ่งน้อยกว่าจำนวน byte จริงของ UTF-8 สำหรับตัวอักษร multi-byte — การประกาศเป็น Content-Length จะตัด response ทิ้งบางส่วน',
+      'Buffer.byteLength คำนวณเร็วกว่า',
+      'ไม่มีความแตกต่าง ทั้งสองคืนค่าตัวเลขเดียวกันเสมอ',
+    ],
+    answer: 1,
+    explain: 'สำหรับข้อความไทย (หรือภาษาที่ไม่ใช่ ASCII ใด ๆ) หนึ่งตัวอักษรอาจใช้หลาย byte ของ UTF-8 แต่แค่หนึ่ง UTF-16 code unit การใช้ str.length เป็น Content-Length จะรายงานจำนวน byte น้อยกว่าความจริง และ client จะตัด body ทิ้งก่อนถึงจริง',
   },
 ];
 

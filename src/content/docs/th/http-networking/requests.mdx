@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Global fetch ใน Node.js
 
@@ -176,6 +177,167 @@ http.get('http://example.com', function(res) {
 
 สำหรับ code ใหม่ ให้ใช้ global `fetch` — สะอาดกว่า ใช้ Promise และทำงานได้เหมือนกันทั้งใน browser และ Node
 
+## Timeout และ retry พร้อม backoff
+
+`fetch` ไม่ timeout ให้เองเลย — upstream ที่ค้างจะทำให้ `await` ของคุณรอตลอดไป เว้นแต่คุณจะให้ `signal` มันเอง `AbortSignal.timeout(ms)` สร้าง signal ที่ทำงานเองหลังผ่านเวลาที่กำหนด โดยไม่ต้องจัดการ `AbortController`/`setTimeout` เอง รวมกับ retry loop เล็ก ๆ และ delay แบบ exponential backoff เพื่อรับมือ upstream ที่ไม่เสถียร:
+
+export const retryWithTimeoutCode = `const http = require('node:http');
+
+// A flaky upstream: fails the first 2 attempts, then succeeds
+let attempts = 0;
+const upstream = http.createServer(function (req, res) {
+  attempts++;
+  if (attempts < 3) {
+    req.destroy(); // simulate a dropped connection
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true, attempt: attempts }));
+});
+
+function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+async function fetchWithRetry(url, retries) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(200) });
+      if (!response.ok) throw new Error('bad status: ' + response.status);
+      return response;
+    } catch (err) {
+      console.log('attempt ' + (i + 1) + ' failed:', err.message);
+      if (i === retries) throw err;
+      await wait(10 * Math.pow(2, i)); // exponential backoff: 10ms, 20ms, 40ms...
+    }
+  }
+}
+
+upstream.listen(0, async function () {
+  const port = upstream.address().port;
+  try {
+    const response = await fetchWithRetry('http://localhost:' + port, 3);
+    const data = await response.json();
+    console.log('succeeded:', data);
+  } catch (err) {
+    console.log('gave up:', err.message);
+  }
+  upstream.close();
+  upstream.closeAllConnections();
+});
+`;
+
+export const retryWithTimeoutOut = `attempt 1 failed: fetch failed
+attempt 2 failed: fetch failed
+succeeded: { ok: true, attempt: 3 }`;
+
+<NodeRunner client:visible code={retryWithTimeoutCode} node expected={retryWithTimeoutOut} />
+
+`AbortSignal.timeout(200)` ถูกส่งเป็นตัวใหม่ทุกครั้งที่พยายาม — signal ทำงานได้ครั้งเดียวและใช้ซ้ำไม่ได้ retry loop จึงต้องสร้างตัวใหม่ทุกครั้ง ไม่ใช่ timeout เดียวที่ใช้ร่วมกันทุกครั้ง เมื่อรวมกับ `response.ok` มันครอบคลุมทั้งสองรูปแบบความล้มเหลว: request ที่ไม่กลับมาเลย (timeout จะ abort มัน) และ request ที่กลับมาพร้อม error status (`!response.ok` throw ทำให้ catch เดียวกันจัดการได้)
+
+## Bounded concurrency เทียบกับ unbounded Promise.all
+
+`Promise.all(urls.map(fetch))` เริ่มทุก request พร้อมกันหมด — สำหรับ 3 URL ก็ไม่มีปัญหา แต่สำหรับ 300 URL มันอาจทำให้ upstream (หรือ limit การเชื่อมต่อ outbound ของคุณเอง) รับไม่ไหวเพราะมี 300 ตัวพร้อมกันหมด pattern worker-pool เล็ก ๆ จำกัดจำนวนที่รันพร้อมกันได้ โดยไม่ต้องใช้ library เลย:
+
+export const boundedConcurrencyCode = `const http = require('node:http');
+
+let inFlight = 0;
+let maxInFlight = 0;
+const server = http.createServer(function (req, res) {
+  inFlight++;
+  maxInFlight = Math.max(maxInFlight, inFlight);
+  setTimeout(function () {
+    inFlight--;
+    res.end('ok');
+  }, 20);
+});
+
+function fetchAllUnbounded(urls) {
+  return Promise.all(urls.map(function (url) { return fetch(url); }));
+}
+
+async function fetchAllBounded(urls, limit) {
+  const results = [];
+  let next = 0;
+  async function worker() {
+    while (next < urls.length) {
+      const i = next++;
+      results[i] = await fetch(urls[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, worker));
+  return results;
+}
+
+server.listen(0, async function () {
+  const port = server.address().port;
+  const urls = Array.from({ length: 10 }, function () { return 'http://localhost:' + port; });
+
+  await fetchAllUnbounded(urls);
+  console.log('unbounded Promise.all: peak concurrent requests =', maxInFlight);
+
+  maxInFlight = 0;
+  await fetchAllBounded(urls, 3);
+  console.log('bounded (limit 3): peak concurrent requests =', maxInFlight);
+
+  server.close();
+  server.closeAllConnections();
+});
+`;
+
+export const boundedConcurrencyOut = `unbounded Promise.all: peak concurrent requests = 10
+bounded (limit 3): peak concurrent requests = 3`;
+
+<NodeRunner client:visible code={boundedConcurrencyCode} node expected={boundedConcurrencyOut} />
+
+server ที่นับจำนวนพิสูจน์ความต่างนี้ได้: version unbounded มี 10 request พร้อมกันตอน peak ในขณะที่ version bounded — worker loop `worker()` จำนวนคงที่ที่ดึงจาก index `next` เดียวกัน — ไม่เกิน limit ที่ 3 เลย ไม่ว่า URL ที่เข้าคิวอยู่จะมีกี่ตัว
+
+## CORS: เรื่องของ browser เท่านั้น
+
+header CORS (Cross-Origin Resource Sharing) สำคัญเฉพาะตอนที่ script ใน **browser** จาก origin หนึ่งเรียก API ที่อีก origin — การเรียก `fetch`/undici จาก server ไป server ไม่เคยถูก CORS บล็อกเลย เพราะ CORS เป็นกลไกที่ browser บังคับใช้ ไม่ใช่ฝั่ง server browser จะส่ง preflight request `OPTIONS` ก่อน cross-origin request บางประเภท และ server ต้องตอบให้ถูกต้องก่อนที่ request จริงจะถูกส่งด้วยซ้ำ:
+
+export const corsCode = `const http = require('node:http');
+
+const ALLOWED_ORIGIN = 'https://example.com';
+
+const server = http.createServer(function (req, res) {
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+
+  if (req.method === 'OPTIONS') {
+    // Preflight: browser asks permission before the real request
+    res.writeHead(204, {
+      'Access-Control-Allow-Methods': 'GET, POST',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    res.end();
+    return;
+  }
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  const base = 'http://localhost:' + port;
+
+  fetch(base, { method: 'OPTIONS' }).then(function (r) {
+    console.log('preflight status:', r.status, 'Allow-Methods:', r.headers.get('access-control-allow-methods'));
+    return fetch(base);
+  }).then(function (r) { return r.json().then(function (j) { return { status: r.status, origin: r.headers.get('access-control-allow-origin'), body: j }; }); })
+  .then(function (result) {
+    console.log('real request:', result);
+    server.close();
+    server.closeAllConnections();
+  });
+});
+`;
+
+export const corsOut = `preflight status: 204 Allow-Methods: GET, POST
+real request: { status: 200, origin: 'https://example.com', body: { ok: true } }`;
+
+<NodeRunner client:visible code={corsCode} node expected={corsOut} />
+
+ทั้ง preflight response และ response จริงต่างมี `Access-Control-Allow-Origin` — browser เช็คมัน *ทุก* response แบบ cross-origin ไม่ใช่แค่ preflight ถ้าไม่มีมันใน response จริง browser จะบล็อก script ไม่ให้อ่าน body เลย แม้ว่า request จะไปถึง server และรันเสร็จแล้วก็ตาม
+
 ## WebSocket ก็เป็น global เช่นกัน
 
 ตั้งแต่ Node 22 client `WebSocket` แบบเดียวกับใน browser ใช้ได้โดยไม่ต้อง import โค้ดฝั่ง client ชุดเดียวจึงรันได้ทั้งใน browser และบน server:
@@ -194,6 +356,40 @@ ws.addEventListener('message', function(event) {
 Node.js 18 เพิ่ม global `fetch` API ทำให้คุณไม่จำเป็นต้องใช้ `axios`, `node-fetch` หรือ `got` สำหรับการ fetch JSON ทั่วไป สำหรับ production อาจยังต้องการ `axios` สำหรับฟีเจอร์อย่าง request interceptors, automatic retry หรือ CancelToken — แต่สำหรับการเรียนรู้และการ integration ง่าย ๆ built-in `fetch` เพียงพอแล้ว
 </Callout>
 
+## Mental Model
+
+การเรียก `fetch` ขาออกทุกครั้งคือ request ที่คุณควบคุมปลายทางไม่ได้: มันอาจช้า (ต้องมี timeout), มันอาจล้มเหลวไปเลย (ต้องมี retry), มันอาจกลับมาพร้อม error status โดยไม่ reject เลย (ต้องเช็ค `response.ok`) และการทำหลาย ๆ ตัวพร้อมกันอาจทำให้ฝั่งใดฝั่งหนึ่งรับไม่ไหว (ต้องจำกัด concurrency) ไม่มีอันไหนที่ `fetch` ทำให้อัตโนมัติเลย — แต่ละอย่างเป็นชั้นที่คุณเพิ่มรอบการเรียกเปล่า ๆ โดยตั้งใจ ให้ตรงกับสิ่งที่อาจผิดพลาดจริงสำหรับ request นั้น
+
+## Trade-offs
+
+การ retry พร้อม backoff เปลี่ยนความล้มเหลวชั่วคราวให้กลายเป็นความสำเร็จ แต่มันก็เพิ่ม load ให้ upstream ที่กำลังมีปัญหาอยู่แล้วในตอนที่มันรับไม่ไหวที่สุดพอดี และมันเปลี่ยนความล้มเหลวที่เร็วให้กลายเป็นช้าจากมุมมองของผู้เรียก (สามครั้งพร้อม backoff ใช้เวลานานกว่าครั้งเดียวที่ล้มเหลวเฉย ๆ มาก) การจำกัด concurrency ปกป้องทั้งสองฝั่งจาก overload แต่ limit ที่ต่ำเกินไปจะทิ้ง throughput ไปเปล่า ๆ ทั้งที่ upstream รับไหวมากกว่านั้น ไม่มีตัวเลขที่ถูกต้องสากล มีแต่ตัวที่ปรับให้เข้ากับ upstream และ workload เฉพาะนั้น
+
+## Common Misconceptions
+
+- **"fetch จะ timeout เองถ้า server ช้า"** ไม่จริง — ถ้าไม่มี `signal` ชัดเจน connection ที่ค้างจะทำให้ `await` ของคุณรอไม่มีกำหนด `AbortSignal.timeout(ms)` คือทางแก้บรรทัดเดียว
+- **"CORS ปกป้อง API ของฉันจากการถูกเรียกโดย server อื่น"** CORS ถูกบังคับใช้โดย browser ที่อ่าน response header ไม่ใช่ server ปฏิเสธ connection — script ที่รันใน Node.js, mobile app หรือ `curl` ไม่เคยผ่านการบังคับใช้ CORS เลย มันจำกัดแค่ JavaScript ที่รันใน browser เท่านั้น
+- **"`Promise.all(urls.map(fetch))` คือวิธีที่เร็วในการ fetch หลาย URL"** มันเร็วจนกว่าจำนวน URL จะมากพอที่จะทำให้ upstream รับไม่ไหว (หรือ outbound connection ของคุณเองหมด) — ที่ scale นั้น bounded concurrency ไม่ใช่แค่มารยาท แต่มักเป็นสิ่งที่ทำให้ batch เสร็จได้เลย แทนที่จะ timeout หรือโดน rate-limit
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI เขียนเพื่อ fetch "ทั้งหมด" มักจะใช้ `Promise.all(urls.map(fetch))` โดยสัญชาตญาณ — มันเป็นวิธีที่สั้นที่สุดในการเขียน "fetch พวกนี้" และมันดันผิดพอดีทันทีที่ list ไม่เล็กและไม่คงที่
+
+<SpotTheBug code={`async function fetchAllUserAvatars(userIds) {
+  const urls = userIds.map(function (id) { return '/avatars/' + id + '.png'; });
+  const responses = await Promise.all(urls.map(function (url) { return fetch(url); }));
+  return responses.map(function (r) { return r.url; });
+}
+
+// Called with a list of 500 user IDs from a batch job
+fetchAllUserAvatars(fiveHundredUserIds);
+`}>
+`Promise.all(urls.map(fetch))` ยิง request ทั้ง 500 ตัวพร้อมกันในจังหวะเดียวกันเป๊ะ — ไม่มี server หรือ connection pool ขาออกไหนถูกออกแบบมาให้รับ load แบบนั้นเป็นเรื่องปกติ ผลลัพธ์ที่น่าจะเกิดคือ upstream rate-limit หรือ error ออกมา, process หมด socket ที่ใช้ได้ หรือแค่ latency แย่ลงอย่างเห็นได้ชัดสำหรับทุกหนึ่งใน 500 request เทียบกับการรันจำนวนจำกัดทีละชุด โค้ดนี้ยังไม่เช็ค `response.ok` เลยด้วย ดังนั้น batch ของ response 4xx/5xx จะดูเหมือน batch ของความสำเร็จ จนกว่าจะมีอะไรพยายามใช้ body (ที่เป็น error) เป็นข้อมูลรูปภาพทีหลัง ทางแก้คือ pattern จากบทนี้: worker pool เล็ก ๆ ที่มี concurrency limit คงที่ และเช็ค `response.ok` ทุก request
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+fetch ไม่เคย timeout เอง ไม่เคย throw ตอน status ไม่ดี และไม่เคยจำกัดว่าคุณยิง request พร้อมกันได้กี่ตัว — `AbortSignal.timeout`, `response.ok` และ bounded concurrency คือสามชั้นแยกกันที่คุณต้องเพิ่มเองรอบทุกการเรียกขาออกที่สำคัญ
+</Callout>
+
 export const requestsQuiz = [
   {
     q: 'ตั้งแต่ Node.js version ใดที่ `fetch` มีให้ใช้ globally โดยไม่ต้อง import?',
@@ -204,6 +400,7 @@ export const requestsQuiz = [
       'Node.js 20',
     ],
     answer: 2,
+    explain: 'Node.js 18 เพิ่ม global fetch implementation ที่ตรงตาม spec (สร้างบน undici) — ไม่ต้อง import หรือติดตั้ง package ใด ๆ',
   },
   {
     q: '`response.ok` คืนค่าอะไรเมื่อ HTTP status เป็น 404?',
@@ -214,6 +411,7 @@ export const requestsQuiz = [
       'undefined',
     ],
     answer: 1,
+    explain: 'response.ok เป็น boolean ที่เป็น true เฉพาะช่วง 200-299 เท่านั้น 404 คือ response ปกติที่ไม่ throw โดยมี ok === false',
   },
   {
     q: 'เมื่อใดที่ `fetch` จะ throw rejection (catch block ทำงาน)?',
@@ -224,6 +422,40 @@ export const requestsQuiz = [
       'เมื่อ response body ไม่ใช่ JSON ที่ valid',
     ],
     answer: 2,
+    explain: 'fetch จะ reject เฉพาะความล้มเหลวที่อยู่ต่ำกว่าชั้น HTTP ทั้งหมด — มัน resolve ตามปกติ (ด้วย ok === false) สำหรับ response ใด ๆ ที่กลับมาจริง รวมถึงทุก status 4xx และ 5xx',
+  },
+  {
+    q: 'ทำไม retry loop ต้องเรียก `AbortSignal.timeout(200)` ใหม่ทุกครั้งที่พยายาม แทนที่จะสร้าง signal เดียวก่อน loop แล้วใช้ซ้ำ?',
+    options: [
+      'AbortSignal.timeout ถูก deprecated แล้วไม่ควรใช้เลย',
+      'signal ทำงานได้ครั้งเดียวแล้วค้างอยู่ในสถานะ aborted — การใช้ตัวเดียวกันซ้ำในหลายครั้งจะทำให้ทุก retry หลังครั้งแรกเริ่มต้นแบบ aborted ไปแล้ว',
+      'การใช้ signal ซ้ำทำให้เกิด memory leak',
+      'ไม่มีความต่าง signal ตัวเดียวใช้ได้กับทุกครั้งที่พยายาม',
+    ],
+    answer: 1,
+    explain: 'เมื่อ timeout signal ทำงานแล้ว มันจะค้างอยู่ในสถานะ aborted ตลอดไป การส่ง signal ตัวเดียวกันให้ fetch ครั้งถัดไปจะทำให้มัน abort ทันที ดังนั้นแต่ละครั้งที่พยายามต้องมี AbortSignal.timeout(...) ใหม่ของตัวเอง',
+  },
+  {
+    q: 'สิ่งนี้พิมพ์อะไร เมื่อมี server ที่นับจำนวนและ 10 URL?\n```js\nconst results = await Promise.all(urls.map(function (url) { return fetch(url); }));\nconsole.log(\'peak concurrent requests =\', maxInFlight);\n```',
+    options: [
+      'peak concurrent requests = 1 เพราะ fetch รัน request ตามลำดับเสมอ',
+      'peak concurrent requests = 10 เพราะ Promise.all เริ่ม fetch ทุกตัวพร้อมกัน',
+      'peak concurrent requests = 3 ซึ่งเป็น concurrency limit default ของ fetch',
+      'มันจะ throw เพราะ Promise.all ใช้กับ fetch เกินไม่กี่ตัวไม่ได้',
+    ],
+    answer: 1,
+    explain: 'Promise.all(urls.map(fetch)) เริ่มทุก request ทันที — กับ 10 URL ทั้ง 10 ตัวจะอยู่ระหว่างดำเนินการพร้อมกันตอน peak โดยไม่มี limit ในตัวเลย',
+  },
+  {
+    q: 'mobile app (ไม่ใช่ browser) เรียก JSON API โดยตรงด้วย fetch CORS จะบล็อก request นี้ไหมถ้า server ไม่มี header Access-Control-Allow-Origin?',
+    options: [
+      'ใช่ — CORS บล็อก client ใดก็ตามที่ไม่มี origin header ที่ถูกต้อง',
+      'ไม่ — CORS ถูกบังคับใช้โดย browser ที่อ่าน response header client ที่ไม่ใช่ browser เช่น mobile app หรือ curl ไม่เคยผ่านการบังคับใช้ CORS เลย',
+      'เฉพาะถ้า app เขียนด้วย JavaScript',
+      'ขึ้นอยู่กับว่า server ใช้ HTTP หรือ HTTPS',
+    ],
+    answer: 1,
+    explain: 'CORS เป็นกลไก security ของ browser — มันจำกัดว่า JavaScript ของหน้าเว็บอ่าน cross-origin response ได้แค่ไหน mobile app แบบ native, คำสั่ง curl หรือการเรียก fetch จาก server ไป server ไม่เคยอยู่ภายใต้มันเลย',
   },
 ];
 

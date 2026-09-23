@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is routing?
 
@@ -123,6 +124,64 @@ console.log(match.pathname.groups.id);                          // '42'
 console.log(userRoute.test('http://localhost:3000/posts/1'));   // false
 ```
 
+## URLPattern in a real router, with 404 vs. 405
+
+A route can exist for a path while not supporting the method a client used — that is a different situation from the path not existing at all, and it deserves a different status code: **404** means "no such path," **405 Method Not Allowed** means "this path exists, but not for that verb" (and should include an `Allow` header listing what *is* supported):
+
+export const urlPatternRoutingCode = `const http = require('node:http');
+
+const routes = [
+  { pattern: new URLPattern({ pathname: '/users/:id' }), methods: { GET: getUser } },
+];
+
+function getUser(req, res, groups) {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ id: groups.id }));
+}
+
+const server = http.createServer(function (req, res) {
+  const url = 'http://localhost' + req.url;
+  for (const route of routes) {
+    const match = route.pattern.exec(url);
+    if (!match) continue;
+    const handler = route.methods[req.method];
+    if (!handler) {
+      res.writeHead(405, { 'Content-Type': 'text/plain', Allow: Object.keys(route.methods).join(', ') });
+      res.end('405 Method Not Allowed');
+      return;
+    }
+    handler(req, res, match.pathname.groups);
+    return;
+  }
+  res.writeHead(404, { 'Content-Type': 'text/plain' });
+  res.end('404 Not Found');
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  const base = 'http://localhost:' + port;
+  Promise.all([
+    fetch(base + '/users/42').then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); }),
+    fetch(base + '/users/42', { method: 'DELETE' }).then(function (r) { return { status: r.status, allow: r.headers.get('allow') }; }),
+    fetch(base + '/unknown').then(function (r) { return { status: r.status }; }),
+  ]).then(function (results) {
+    console.log('GET /users/42:', results[0]);
+    console.log('DELETE /users/42:', results[1]);
+    console.log('GET /unknown:', results[2]);
+    server.close();
+    server.closeAllConnections();
+  });
+});
+`;
+
+export const urlPatternRoutingOut = `GET /users/42: { status: 200, body: { id: '42' } }
+DELETE /users/42: { status: 405, allow: 'GET' }
+GET /unknown: { status: 404 }`;
+
+<NodeRunner client:visible code={urlPatternRoutingCode} node expected={urlPatternRoutingOut} />
+
+`/users/42` matches the pattern for both `GET` and `DELETE` — the difference is only in the second lookup, `route.methods[req.method]`. That is what makes 405 possible here: the code already knows the path matched by the time it discovers the method did not.
+
 ## A tiny router object
 
 Once you have more than a few routes, extract them into a router map. This is exactly the pattern that Express uses internally:
@@ -183,6 +242,48 @@ server.listen(0, function() {
 Express, Fastify, Hono, and every other Node.js web framework build on exactly this pattern. Their `app.get('/path', handler)` calls are just a clean API on top of the same `req.method` + `req.url` check. Understanding the raw model means you are never confused by what any framework does.
 </Callout>
 
+## Mental Model
+
+A router is a lookup table with two keys, checked in a specific order: first the **path** (does anything match this URL shape at all?), then the **method** (does the thing that matched support this verb?). Checking both at once with a single combined key — `'GET /users'` as one string — collapses that two-step decision into one, which is exactly why the tiny router object above cannot tell "no such path" apart from "wrong verb for this path": both fall into the same `else` branch.
+
+## Trade-offs
+
+A single combined-key lookup (`method + ' ' + path`) is the least code and reads great for a handful of fixed routes — until you need parameters (`/users/:id`) or a 405 response, at which point you need to match path and method as two separate steps, which is more code than the map. `URLPattern` gives you real parameter capture and the two-step structure for free, but it is a newer global (Node 24+) — a route table like the one in this lesson is trivially portable to any Node version or to a framework's router, while `URLPattern` code is not yet something you can assume every runtime supports.
+
+## Common Misconceptions
+
+- **"A 404 is the correct response whenever a route lookup fails."** Only when the *path* itself has no match. If the path matches but the method is unsupported, the correct code is 405, with an `Allow` header — 404 tells a client "stop trying this URL," while 405 tells it "try a different verb here."
+- **"URLPattern parameters are validated automatically."** They are captured as strings, nothing more — `/users/:id` matches `/users/abc` just as happily as `/users/42`. Validating that a captured group looks like an actual ID is still the handler's job.
+- **"A router built by hand is inherently fragile compared to a framework's."** The underlying decision (match path, then match method) is identical in both — a framework mainly adds convenience (middleware, parameter coercion, wildcard/catch-all routes) on top of the same two-step lookup.
+
+## Reading AI-generated code
+
+AI-generated routers frequently key routes by `method + path` as a single string, which reads clean for the happy path and silently produces the wrong status code the moment a path is hit with an unsupported method.
+
+<SpotTheBug code={`const routes = {
+  'GET /users': listUsers,
+  'POST /users': createUser,
+};
+
+const server = http.createServer(function (req, res) {
+  const key = req.method + ' ' + new URL(req.url, 'http://x').pathname;
+  const handler = routes[key];
+  if (handler) {
+    handler(req, res);
+  } else {
+    res.writeHead(404);
+    res.end('Not found');
+  }
+});
+// A DELETE request to /users returns 404, as if the route didn't exist at all
+`}>
+`/users` is a real resource — `GET` and `POST` are both defined for it — but `DELETE /users` is not in the map, so it falls into the same `else` branch as a request to a path that was never defined at all, like `/completely-unknown`. Both get a 404, which tells the client the path itself is wrong; the client has no way to know the path was actually fine and only the verb was the problem. The fix is to look up by path first, then check whether the matched route supports the request's method — returning 405 with an `Allow` header when it does not, exactly like the `URLPattern` example earlier in this lesson.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Routing is two lookups, not one: match the path first, then the method — collapsing them into a single combined key is what makes "no such route" and "wrong verb for this route" indistinguishable, when they should return 404 and 405 respectively.
+</Callout>
+
 export const routingQuiz = [
   {
     q: 'Which two properties of the request object are used for routing decisions?',
@@ -193,6 +294,7 @@ export const routingQuiz = [
       'req.endpoint and req.action',
     ],
     answer: 1,
+    explain: 'req.method (the HTTP verb) and req.url (the path plus any query string) are the two pieces of the incoming request every router decision is based on.',
   },
   {
     q: 'What does `new URL(req.url, "http://localhost")` give you?',
@@ -203,6 +305,7 @@ export const routingQuiz = [
       'An HTTP client configured for localhost',
     ],
     answer: 2,
+    explain: 'The URL constructor parses req.url (which is only a path, not a full URL) against the given base, giving you .pathname and .searchParams instead of a raw string to slice by hand.',
   },
   {
     q: 'What HTTP status code should a router return when no route matches?',
@@ -213,6 +316,29 @@ export const routingQuiz = [
       '404 Not Found',
     ],
     answer: 3,
+    explain: '404 Not Found is the correct response when the requested path has no matching route at all.',
+  },
+  {
+    q: 'A route exists for `/users/:id` supporting only GET. A client sends `DELETE /users/42`. What should the server respond with?\n```js\nconst match = route.pattern.exec(url);\nconst handler = route.methods[req.method];\n// route.methods = { GET: getUser }\n```',
+    options: [
+      '200 OK, since the path matched',
+      '404 Not Found, since no handler exists for this exact request',
+      '405 Method Not Allowed, with an Allow header listing GET',
+      '500 Internal Server Error',
+    ],
+    answer: 2,
+    explain: 'The path matched (route.pattern.exec succeeded) but the method did not — that is exactly the case 405 exists for, distinct from a path that never matched at all.',
+  },
+  {
+    q: 'Why does keying a route table by `req.method + \' \' + pathname` as a single combined string make it impossible to return 405?',
+    options: [
+      'Because template literals cannot contain a space character',
+      'Because a missing combined key looks identical whether the path is unknown or the path is known but the method is wrong — both just miss the lookup',
+      'Because res.writeHead does not accept status code 405',
+      'It does not — 405 works fine with a combined key',
+    ],
+    answer: 1,
+    explain: 'A single combined key collapses two separate questions (does the path exist? does it support this method?) into one lookup, so a miss cannot tell you which question failed — you need to check the path and the method as two distinct steps to tell 404 and 405 apart.',
   },
 ];
 

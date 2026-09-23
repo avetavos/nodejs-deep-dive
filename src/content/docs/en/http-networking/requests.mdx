@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Global fetch in Node.js
 
@@ -176,6 +177,167 @@ http.get('http://example.com', function(res) {
 
 For new code, prefer the global `fetch` — it is cleaner, Promise-based, and isomorphic with browser code.
 
+## Timeouts and retry with backoff
+
+`fetch` never times out on its own — a hung upstream leaves your `await` waiting forever unless you give it a `signal`. `AbortSignal.timeout(ms)` creates a signal that fires by itself after the given time, no separate `AbortController`/`setTimeout` bookkeeping required. Combine it with a small retry loop and an exponential backoff delay to ride out a flaky upstream:
+
+export const retryWithTimeoutCode = `const http = require('node:http');
+
+// A flaky upstream: fails the first 2 attempts, then succeeds
+let attempts = 0;
+const upstream = http.createServer(function (req, res) {
+  attempts++;
+  if (attempts < 3) {
+    req.destroy(); // simulate a dropped connection
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true, attempt: attempts }));
+});
+
+function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+async function fetchWithRetry(url, retries) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(200) });
+      if (!response.ok) throw new Error('bad status: ' + response.status);
+      return response;
+    } catch (err) {
+      console.log('attempt ' + (i + 1) + ' failed:', err.message);
+      if (i === retries) throw err;
+      await wait(10 * Math.pow(2, i)); // exponential backoff: 10ms, 20ms, 40ms...
+    }
+  }
+}
+
+upstream.listen(0, async function () {
+  const port = upstream.address().port;
+  try {
+    const response = await fetchWithRetry('http://localhost:' + port, 3);
+    const data = await response.json();
+    console.log('succeeded:', data);
+  } catch (err) {
+    console.log('gave up:', err.message);
+  }
+  upstream.close();
+  upstream.closeAllConnections();
+});
+`;
+
+export const retryWithTimeoutOut = `attempt 1 failed: fetch failed
+attempt 2 failed: fetch failed
+succeeded: { ok: true, attempt: 3 }`;
+
+<NodeRunner client:visible code={retryWithTimeoutCode} node expected={retryWithTimeoutOut} />
+
+`AbortSignal.timeout(200)` is passed fresh on every attempt — a signal fires once and cannot be reused, so a retry loop needs a new one per attempt, not a single timeout shared across all of them. Combined with `response.ok`, this covers both failure shapes: a request that never comes back at all (the timeout aborts it) and one that comes back with an error status (`!response.ok` throws so the same `catch` handles it).
+
+## Bounded concurrency vs. unbounded Promise.all
+
+`Promise.all(urls.map(fetch))` starts every request at once — for 3 URLs that is fine, for 300 it can overwhelm the upstream (or your own outbound connection limits) with all 300 in flight simultaneously. A small worker-pool pattern bounds how many run concurrently, no library required:
+
+export const boundedConcurrencyCode = `const http = require('node:http');
+
+let inFlight = 0;
+let maxInFlight = 0;
+const server = http.createServer(function (req, res) {
+  inFlight++;
+  maxInFlight = Math.max(maxInFlight, inFlight);
+  setTimeout(function () {
+    inFlight--;
+    res.end('ok');
+  }, 20);
+});
+
+function fetchAllUnbounded(urls) {
+  return Promise.all(urls.map(function (url) { return fetch(url); }));
+}
+
+async function fetchAllBounded(urls, limit) {
+  const results = [];
+  let next = 0;
+  async function worker() {
+    while (next < urls.length) {
+      const i = next++;
+      results[i] = await fetch(urls[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, worker));
+  return results;
+}
+
+server.listen(0, async function () {
+  const port = server.address().port;
+  const urls = Array.from({ length: 10 }, function () { return 'http://localhost:' + port; });
+
+  await fetchAllUnbounded(urls);
+  console.log('unbounded Promise.all: peak concurrent requests =', maxInFlight);
+
+  maxInFlight = 0;
+  await fetchAllBounded(urls, 3);
+  console.log('bounded (limit 3): peak concurrent requests =', maxInFlight);
+
+  server.close();
+  server.closeAllConnections();
+});
+`;
+
+export const boundedConcurrencyOut = `unbounded Promise.all: peak concurrent requests = 10
+bounded (limit 3): peak concurrent requests = 3`;
+
+<NodeRunner client:visible code={boundedConcurrencyCode} node expected={boundedConcurrencyOut} />
+
+The counting server proves the difference: the unbounded version has all 10 requests in flight at their peak, while the bounded version — a fixed number of `worker()` loops all pulling from the same shared `next` index — never exceeds its limit of 3, no matter how many URLs are queued behind it.
+
+## CORS: a browser-only concern
+
+CORS (Cross-Origin Resource Sharing) headers only matter when a **browser** script from one origin calls an API on another — `fetch`/undici calls from server to server are never blocked by CORS at all, since CORS is a browser enforcement mechanism, not a server one. A browser sends a preflight `OPTIONS` request before certain cross-origin requests, and the server must answer it correctly before the real request is even attempted:
+
+export const corsCode = `const http = require('node:http');
+
+const ALLOWED_ORIGIN = 'https://example.com';
+
+const server = http.createServer(function (req, res) {
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+
+  if (req.method === 'OPTIONS') {
+    // Preflight: browser asks permission before the real request
+    res.writeHead(204, {
+      'Access-Control-Allow-Methods': 'GET, POST',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    res.end();
+    return;
+  }
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  const base = 'http://localhost:' + port;
+
+  fetch(base, { method: 'OPTIONS' }).then(function (r) {
+    console.log('preflight status:', r.status, 'Allow-Methods:', r.headers.get('access-control-allow-methods'));
+    return fetch(base);
+  }).then(function (r) { return r.json().then(function (j) { return { status: r.status, origin: r.headers.get('access-control-allow-origin'), body: j }; }); })
+  .then(function (result) {
+    console.log('real request:', result);
+    server.close();
+    server.closeAllConnections();
+  });
+});
+`;
+
+export const corsOut = `preflight status: 204 Allow-Methods: GET, POST
+real request: { status: 200, origin: 'https://example.com', body: { ok: true } }`;
+
+<NodeRunner client:visible code={corsCode} node expected={corsOut} />
+
+Both the preflight response and the real response carry `Access-Control-Allow-Origin` — a browser checks it on *every* cross-origin response, not just the preflight. Miss it on the real response and the browser blocks the script from reading the body, even though the request itself already reached the server and ran.
+
 ## WebSocket is global too
 
 Since Node 22 the browser `WebSocket` client is available without an import, so the same client code runs in the browser and on the server:
@@ -194,6 +356,40 @@ ws.addEventListener('message', function(event) {
 Node.js 18 added the global `fetch` API so you no longer need `axios`, `node-fetch`, or `got` for straightforward JSON fetching. For production use you may still want `axios` for features like request interceptors, automatic retry, or CancelToken — but for learning and simple integrations, the built-in `fetch` is all you need.
 </Callout>
 
+## Mental Model
+
+Every outbound `fetch` call is a request you do not control the far end of: it can be slow (needs a timeout), it can fail outright (needs a retry), it can come back with an error status without rejecting at all (needs `response.ok`), and doing many of them at once can overwhelm either side (needs a concurrency bound). None of these are things `fetch` does for you automatically — each one is a deliberate layer you add around the bare call, matched to what could actually go wrong for that specific request.
+
+## Trade-offs
+
+Retrying with backoff turns a transient failure into a success, but it also multiplies load on a struggling upstream exactly when it is least able to handle more — and it turns a fast failure into a slow one from the caller's perspective (three attempts with backoff takes far longer than one attempt that just fails). Bounding concurrency protects both sides from overload, but a limit that is too low leaves throughput on the table when the upstream could actually handle more; there is no universally correct number, only one tuned to the specific upstream and workload.
+
+## Common Misconceptions
+
+- **"fetch will time out on its own if the server is slow."** It will not — without an explicit `signal`, a hung connection can leave your `await` waiting indefinitely. `AbortSignal.timeout(ms)` is the one-line fix.
+- **"CORS protects my API from being called by other servers."** CORS is enforced by browsers reading response headers, not by the server refusing connections — a script running in Node.js, a mobile app, or `curl` never goes through CORS enforcement at all. It only constrains browser-based JavaScript.
+- **"`Promise.all(urls.map(fetch))` is the fast way to fetch many URLs."** It is fast until the number of URLs is large enough to overwhelm the upstream (or exhaust your own outbound connections) — at that scale, bounded concurrency is not just polite, it is often what makes the batch complete at all instead of timing out or getting rate-limited.
+
+## Reading AI-generated code
+
+AI-generated code that fetches "all of them" reaches for `Promise.all(urls.map(fetch))` by pure reflex — it is the shortest way to write "fetch these," and it happens to be exactly wrong once the list is not small and fixed.
+
+<SpotTheBug code={`async function fetchAllUserAvatars(userIds) {
+  const urls = userIds.map(function (id) { return '/avatars/' + id + '.png'; });
+  const responses = await Promise.all(urls.map(function (url) { return fetch(url); }));
+  return responses.map(function (r) { return r.url; });
+}
+
+// Called with a list of 500 user IDs from a batch job
+fetchAllUserAvatars(fiveHundredUserIds);
+`}>
+`Promise.all(urls.map(fetch))` fires all 500 requests at the exact same moment — no server or outbound connection pool is designed to absorb that as a normal load, and the likely outcomes are the upstream rate-limiting or erroring out, the process running out of available sockets, or just noticeably worse latency for every one of those 500 requests compared to running a bounded number at a time. This code also never checks `response.ok`, so a batch of 4xx/5xx responses looks identical to a batch of successes until something later tries to use the (error) body as image data. The fix is the pattern from this lesson: a small worker pool with a fixed concurrency limit, and a `response.ok` check per request.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+fetch never times out, never throws on a bad status, and never limits how many requests you fire at once — `AbortSignal.timeout`, `response.ok`, and bounded concurrency are three separate, deliberate layers you add on top of every outbound call that matters.
+</Callout>
+
 export const requestsQuiz = [
   {
     q: 'Since which Node.js version is `fetch` available globally without any import?',
@@ -204,6 +400,7 @@ export const requestsQuiz = [
       'Node.js 20',
     ],
     answer: 2,
+    explain: 'Node.js 18 added a global, spec-compliant fetch implementation (built on undici) — no import or npm package required.',
   },
   {
     q: 'What does `response.ok` return when the HTTP status is 404?',
@@ -214,6 +411,7 @@ export const requestsQuiz = [
       'undefined',
     ],
     answer: 1,
+    explain: 'response.ok is a boolean that is true only for the 200-299 range. A 404 is a normal, non-throwing response with ok === false.',
   },
   {
     q: 'When does `fetch` throw a rejection (catch block triggers)?',
@@ -224,6 +422,40 @@ export const requestsQuiz = [
       'Whenever the response body is not valid JSON',
     ],
     answer: 2,
+    explain: 'fetch only rejects for failures below the HTTP layer entirely — it resolves normally (with ok === false) for any response that actually came back, including every 4xx and 5xx status.',
+  },
+  {
+    q: 'Why does a retry loop need to call `AbortSignal.timeout(200)` fresh on every attempt, instead of creating one signal before the loop and reusing it?',
+    options: [
+      'AbortSignal.timeout is deprecated and should not be used at all',
+      'A signal fires once and stays aborted — reusing the same one across attempts means every retry after the first would start already aborted',
+      'Reusing a signal causes a memory leak',
+      'There is no difference; a single signal works fine for all attempts',
+    ],
+    answer: 1,
+    explain: 'Once a timeout signal fires, it stays in the aborted state permanently. Passing the same signal to a later fetch call would abort it immediately, so each attempt needs its own fresh AbortSignal.timeout(...).',
+  },
+  {
+    q: 'What does this print, given a counting server and 10 URLs?\n```js\nconst results = await Promise.all(urls.map(function (url) { return fetch(url); }));\nconsole.log(\'peak concurrent requests =\', maxInFlight);\n```',
+    options: [
+      'peak concurrent requests = 1, since fetch always runs requests sequentially',
+      'peak concurrent requests = 10, since Promise.all starts every fetch at the same time',
+      'peak concurrent requests = 3, the default fetch concurrency limit',
+      'It throws, since Promise.all cannot be used with more than a few fetch calls',
+    ],
+    answer: 1,
+    explain: 'Promise.all(urls.map(fetch)) starts every request immediately — with 10 URLs, all 10 are in flight simultaneously at their peak, with no built-in limit.',
+  },
+  {
+    q: 'A mobile app (not a browser) calls a JSON API directly with fetch. Does CORS block this request if the server has no Access-Control-Allow-Origin header?',
+    options: [
+      'Yes — CORS blocks any client missing the right origin header',
+      'No — CORS is enforced by browsers reading response headers; non-browser clients like a mobile app or curl never go through CORS enforcement at all',
+      'Only if the app is written in JavaScript',
+      'It depends on whether the server uses HTTP or HTTPS',
+    ],
+    answer: 1,
+    explain: 'CORS is a browser security mechanism — it constrains what a page\'s own JavaScript is allowed to read from a cross-origin response. A native mobile app, a curl command, or a server-to-server fetch call is never subject to it.',
   },
 ];
 

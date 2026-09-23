@@ -1,0 +1,264 @@
+---
+title: 'Production Server'
+description: 'server หนึ่งตัวที่รวม body limit, timeout, error listener, การจัดการ JSON error, graceful shutdown และ structured logging เข้าด้วยกัน'
+sidebar:
+  order: 6
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## รวมทุกอย่างเข้าด้วยกัน
+
+ทุกบทก่อนหน้าในโมดูลนี้ครอบคลุมทีละ guard: error listener ที่นี่, body limit ที่นั่น, graceful shutdown handler ที่อื่น server ใน production จริงต้องการ **ทุกอย่างพร้อมกัน** ในไฟล์เดียวกัน ทำงานร่วมกันแทนที่จะขวางกันเอง บทนี้คือ server หนึ่งตัวที่ทำแบบนั้นเป๊ะ — ทุก guard จากโมดูลนี้ ต่อเข้าด้วยกันใน request handler เดียว พร้อม request ที่ทดสอบแต่ละ guard
+
+## เซิร์ฟเวอร์
+
+export const productionServerCode = `const http = require('node:http');
+
+const MAX_BODY = 1024; // bytes
+let nextId = 1;
+const items = [];
+
+function log(entry) {
+  // One structured line per request instead of scattered console.log calls
+  console.log(JSON.stringify(entry));
+}
+
+function readBody(req, res) {
+  return new Promise(function (resolve, reject) {
+    let received = 0;
+    const chunks = [];
+    req.on('data', function (chunk) {
+      received += chunk.length;
+      if (received > MAX_BODY) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'payload too large' }));
+        log({ method: req.method, path: req.url, status: 413 });
+        req.destroy();
+        reject(Object.assign(new Error('too large'), { handled: true }));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', function () { resolve(Buffer.concat(chunks).toString('utf8')); });
+    req.on('error', function (err) { if (!err.handled) reject(err); });
+  });
+}
+
+const server = http.createServer(async function (req, res) {
+  // Never trust X-Forwarded-For unless a reverse proxy in front actually sets it
+  const clientIp = req.socket.remoteAddress;
+
+  res.on('error', function (err) {
+    log({ level: 'error', path: req.url, error: err.code });
+  });
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  function finish(status, body) {
+    if (res.writableEnded) return; // guard: never call res.end() twice
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+    log({ method: req.method, path: req.url, status: status, clientIp: clientIp });
+  }
+
+  try {
+    if (req.method === 'GET' && req.url === '/health') {
+      finish(200, { ok: true });
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/items') {
+      let raw;
+      try {
+        raw = await readBody(req, res);
+      } catch (err) {
+        if (!err.handled) finish(500, { error: 'internal error' });
+        return; // 413 already sent and logged inside readBody
+      }
+
+      let body;
+      try {
+        body = JSON.parse(raw);
+      } catch (err) {
+        finish(400, { error: 'malformed JSON body' });
+        return;
+      }
+
+      const item = { id: nextId++, name: body.name };
+      items.push(item);
+      finish(201, item);
+      return;
+    }
+
+    finish(404, { error: 'not found' });
+  } catch (err) {
+    finish(500, { error: 'internal error' });
+  }
+});
+
+function shutdown() {
+  log({ level: 'info', msg: 'SIGTERM received, closing server' });
+  server.close(function () {
+    log({ level: 'info', msg: 'server closed cleanly' });
+  });
+}
+process.once('SIGTERM', shutdown);
+
+server.listen(0, async function () {
+  const port = server.address().port;
+  const base = 'http://localhost:' + port;
+
+  await fetch(base + '/health');
+  await fetch(base + '/items', { method: 'POST', body: 'x'.repeat(2000) });
+  await fetch(base + '/items', { method: 'POST', body: '{ bad json' });
+  await fetch(base + '/items', { method: 'POST', body: JSON.stringify({ name: 'widget' }) });
+
+  process.emit('SIGTERM');
+  server.closeAllConnections();
+});
+`;
+
+export const productionServerOut = `{"method":"GET","path":"/health","status":200,"clientIp":"::1"}
+{"method":"POST","path":"/items","status":413}
+{"method":"POST","path":"/items","status":400,"clientIp":"::1"}
+{"method":"POST","path":"/items","status":201,"clientIp":"::1"}
+{"level":"info","msg":"SIGTERM received, closing server"}
+{"level":"info","msg":"server closed cleanly"}`;
+
+<NodeRunner client:visible code={productionServerCode} node expected={productionServerOut} />
+
+request สี่ตัว guard สี่แบบต่างกัน server เดียว: health check ธรรมดา, body ที่เกิน `MAX_BODY` (413 ผ่าน pattern `req.destroy()` จากบท body limit), JSON body ที่ผิดรูปแบบ (400 ผ่าน `try/catch` รอบ `JSON.parse`) และ request ที่ถูกต้องที่สร้าง item จริง (201) จากนั้น `SIGTERM` จะ trigger `server.close()` ซึ่ง log เมื่อเสร็จแล้ว — เพราะไม่มีอะไรค้างอยู่ระหว่างทำงาน มันจึงปิดทันที แต่ handler เดียวกันนี้จะรอ response ที่กำลังทำอยู่ให้เสร็จก่อนถ้ามีจริง เหมือนกับบท graceful-shutdown เป๊ะ
+
+## ไล่ดู guard แต่ละตัว
+
+| Guard | มาจากบทไหนในโมดูลนี้ | หยุดอะไร |
+|---|---|---|
+| `MAX_BODY` + `req.destroy()` | บท JSON API | การ upload ที่ไม่จำกัดขนาดที่ทำให้ memory โตไม่หยุด |
+| `try/catch` รอบ `JSON.parse` | บท JSON API | `SyntaxError` ที่กลายเป็น unhandled rejection |
+| `res.on('error', ...)` | บท HTTP Server | stream error (เช่น double `res.end()`) ที่ทำให้ทั้ง process crash |
+| `if (res.writableEnded) return;` ใน `finish()` | บท HTTP Server | การเรียก `res.end()` ครั้งที่สองบน response เดียวกัน |
+| `res.setHeader('X-Content-Type-Options', 'nosniff')` | บทนี้ | browser MIME-sniff response ให้กลายเป็น content type อื่นที่อาจอันตราย |
+| อ่าน `req.socket.remoteAddress` ไม่เชื่อ `X-Forwarded-For` แบบไม่คิด | บทนี้ | header client-IP ปลอมเมื่อไม่มี reverse proxy ที่ตั้งค่ามันจริง ๆ |
+| `process.once('SIGTERM', shutdown)` + `server.close()` | บท HTTP Server | การทิ้ง request ที่กำลังทำอยู่เมื่อ process manager ขอให้ server หยุด |
+| เรียก `log(...)` หนึ่งครั้งต่อ branch เป็น JSON ที่มีโครงสร้าง | บทนี้ | กำแพง `console.log` ที่ไม่มีโครงสร้างซึ่งไม่มีอะไร parse ต่อได้เลย |
+
+## Security headers และการเชื่อ proxy header
+
+`X-Content-Type-Options: nosniff` บอก browser ให้เชื่อ `Content-Type` ที่คุณประกาศไว้แทนการเดาจาก body — ถ้าไม่มีมัน browser ที่ระบุ response JSON หรือ text ผิดว่าเป็น HTML อาจเปิดช่องโหว่ XSS ที่ `Content-Type` ที่ถูกต้องอย่างเดียวจะป้องกันได้ สำหรับ server ที่รันบน TLS เท่านั้น `Strict-Transport-Security` (HSTS) ก็คุ้มค่าที่จะเพิ่มด้วย เพื่อบอก browser ว่าอย่า downgrade กลับไปใช้ HTTP ธรรมดาสำหรับ domain นี้อีก — แต่ตั้งค่ามันก็ต่อเมื่อคุณมั่นใจว่าทุก path จริง ๆ ถูก serve ผ่าน HTTPS เพราะมันเป็นสัญญาที่ browser จะยึดคุณไว้
+
+`X-Forwarded-For` (และ `X-Forwarded-Proto`, `X-Forwarded-Host`) เป็น header ที่ **reverse proxy** ตั้งเพื่อบอก app ของคุณว่า address และ protocol ของ client ต้นทางจริง ๆ คืออะไร เพราะ IP ของ proxy เองคือสิ่งที่ server ของคุณเห็นบน socket จริง ๆ จุดที่ต้องระวัง: client ใดก็ตามสามารถตั้ง header พวกนี้เองใน request ตรง ๆ ได้ การเชื่อมันแบบไม่คิด (สำหรับ rate limiting, access control หรือ logging) หมายความว่า client อ้างเป็น IP อะไรก็ได้ตามใจ ควรเชื่อมันก็ต่อเมื่อคุณรู้ว่า proxy ที่คุณควบคุมเป็นสิ่งเดียวที่เข้าถึง process ของคุณตรง ๆ ได้ และแม้ตอนนั้นก็ควรเชื่อแค่ hop ล่าสุด ไม่ใช่ค่าเต็มของ header ที่ client อาจ prepend มาก่อนหน้าได้
+
+## Mental Model
+
+server ใน production ไม่ใช่ feature ใหญ่หนึ่งตัว — มันคือสัญญา request/response แบบเดียวกับบท *HTTP Server* ที่ห่อด้วยชุด guard อิสระที่แต่ละตัวตอบคำถามข้อเดียว: input ใหญ่เกินไปไหม? มันเป็น JSON ที่ valid ไหม? มีอะไร throw ไหม? กำลังจะ shutdown อยู่หรือเปล่า? ไม่มี guard ไหนขึ้นกับตัวอื่นเลย ซึ่งนั่นแหละคือสิ่งที่ทำให้มันประกอบกันเป็น handler เดียวได้ โดยไม่มีตัวไหนซับซ้อนกว่าตัวอื่น
+
+## Trade-offs
+
+ทุก guard ในบทนี้คือโค้ดจำนวนน้อยที่ไม่ทำอะไรเลยในกรณีปกติ และสำคัญเฉพาะวันที่มีอะไรผิดพลาด — ซึ่งทำให้มันข้ามไปได้ง่ายเมื่อมีเวลาจำกัด และลืมไปว่ามันขาดหายจนกว่าจะมี incident มาทำให้เห็นชัด helper `finish()` และการเรียก `log()` แบบมีโครงสร้างในบทนี้ก็เข้ารหัสชุดการตัดสินใจเฉพาะ (JSON log, response helper ตัวเดียว) ที่ codebase จริงอาจเลือกต่างออกไป — ประเด็นไม่ใช่รูปแบบนี้เป๊ะ ๆ แต่ server ใน production ต้องมีคำตอบที่สม่ำเสมอและรวมศูนย์บางแบบสำหรับ "จะจบ response ยังไง" และ "จะ log request ยังไง" แทนที่แต่ละ route จะคิดค้นทั้งสองอย่างใหม่เอง
+
+## Common Misconceptions
+
+- **"Production-readiness คือ phase แยกที่เพิ่มตอนท้าย"** ทุก guard ในบทนี้เล็กและอิสระ — เวลาที่ถูกที่สุดในการเพิ่ม body limit หรือ error listener คือตอนเขียน route ไม่ใช่ตอน retrofit หลังจากมีอะไรพังใน production ไปแล้ว
+- **"Structured logging แปลว่าต้องใช้ library อย่าง pino"** โครงสร้าง (JSON object หนึ่งตัวต่อ event, field ที่สม่ำเสมอ) สำคัญกว่า library ที่ใช้ — demo ด้านบนได้ความสามารถ query แบบเดียวกับที่ logging library จะให้ จาก `console.log(JSON.stringify(...))` เพียงแต่ไม่มี feature เสริม (level, transport, sampling) ที่ library จริงเพิ่มให้
+- **"X-Forwarded-For บอก IP จริงของ client เสมอ"** จริงก็ต่อเมื่อคุณควบคุม proxy ที่ตั้งมันและไม่มีอะไรอื่นเข้าถึง server ได้ตรง ๆ ไม่งั้นมันก็น่าเชื่อถือพอ ๆ กับ header อื่นที่ client ตั้งเองได้
+
+## อ่านโค้ดที่ AI เขียน
+
+server "production-ready" ที่ AI เขียนมักเพิ่มสิ่งดี ๆ จริง — body limit ตรงนี้, try/catch ตรงนั้น — โดยไม่เชื่อมมันเข้าด้วยกัน: branch body-too-large ที่เขียน response แล้วลืม guard ไม่ให้ `finish()` รันซ้ำอีกทีหลังจากนั้น เป็นวิธีที่แนบเนียนที่จะทำให้ crash แบบ double-`res.end()` ที่โมดูลนี้พยายามป้องกันมาตลอดกลับมาอีกครั้ง
+
+<SpotTheBug code={`function finish(req, res, status, body) {
+  const json = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Content-Length': json.length, // BUG: character length, not byte length
+  });
+  res.end(json);
+}
+
+// Called with a name containing multi-byte characters
+finish(req, res, 201, { id: 42, name: 'José 🎉' });
+`}>
+`json.length` นับ UTF-16 code unit ไม่ใช่ byte — สำหรับ body ที่มีตัวอักษรมี accent หรือ emoji (หรือข้อความไทยแบบตัวอย่าง byte-length ก่อนหน้านี้ในโมดูล) จำนวน byte จริงของ UTF-8 (สิ่งที่ `Content-Length` ต้องประกาศ) มากกว่าที่ `.length` รายงาน client จะอ่านตาม `Content-Length` เป๊ะแล้วถือว่า response เสร็จตรงนั้น ทำให้มันตัด body ทิ้งกลางตัวอักษร multi-byte แบบเงียบ ๆ และขึ้นอยู่กับ HTTP client ขอบเขต byte ที่พังนี้ยังอาจทำให้ response ถัดไปบน keep-alive connection ที่ใช้ซ้ำ desync ได้ด้วย ทางแก้จากบท *HTTP Server*: ใช้ `Buffer.byteLength(json)` แทน `json.length` — หรือดีกว่านั้นคือปล่อยให้ `res.end(json)` คำนวณ `Content-Length` เองโดยไม่ตั้งมันด้วยมือเลย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Production-readiness ไม่ใช่ชั้นแยกที่ผูกเพิ่มตอนท้าย — มันคือ guard แต่ละตัวของโมดูลนี้ (limit, error listener, JSON try/catch, graceful shutdown, byte length ที่ถูกต้อง) ที่ประกอบกันอยู่ใน handler เดียวกัน โดยแต่ละตัวยังทำแค่หน้าที่เดียวของตัวเอง
+</Callout>
+
+export const productionServerQuiz = [
+  {
+    q: 'ใน server ที่รวมกันแล้ว ทำไม handler ของ POST /items ถึงเช็ค `err.handled` ก่อนเรียก `finish(500, ...)`?',
+    options: [
+      'เพื่อแยก internal error จริงออกจาก response 413 ที่ readBody ส่งและ log ไปแล้ว',
+      '`err.handled` ไม่มีผลต่อพฤติกรรมของโค้ดเลย',
+      'เพื่อ retry request อัตโนมัติ',
+      'เพื่อข้าม logging ทั้งหมดสำหรับ request นั้น',
+    ],
+    answer: 0,
+    explain: 'readBody เขียนและ log response 413 ของตัวเองไปแล้วก่อนที่จะ reject ด้วย { handled: true } — catch ด้านนอกต้องไม่เรียก finish() ซ้ำสำหรับ request เดียวกันนั้น ซึ่งนั่นคือสิ่งที่ err.handled ป้องกันพอดี',
+  },
+  {
+    q: '`if (res.writableEnded) return;` ข้างใน `finish()` ป้องกันอะไร?',
+    options: [
+      'request ที่ช้าจน timeout',
+      'finish() ถูกเรียกครั้งที่สองสำหรับ response เดียวกัน ซึ่งไม่งั้นจะเสี่ยง crash แบบ ERR_STREAM_WRITE_AFTER_END จากบท HTTP Server',
+      'request ที่มี Content-Type header ผิด',
+      'server ใช้ memory หมด',
+    ],
+    answer: 1,
+    explain: 'นี่คือ guard early-return / ส่งไปแล้วจากบท HTTP Server ที่นำมาใช้แบบรวมศูนย์ใน helper ตัวเดียว แทนที่จะแยกทำในทุก route',
+  },
+  {
+    q: 'จาก 4 request ที่ demo ยิงออกไป (GET /health, POST เกินขนาด, JSON ผิดรูปแบบ และ POST ที่ถูกต้อง) status code ที่ log ตัวที่ 2 คืออะไร?',
+    options: [
+      '200',
+      '400',
+      '413',
+      '201',
+    ],
+    answer: 2,
+    explain: 'request รันตามลำดับ: /health (200), body เกินขนาด (413), JSON ผิดรูปแบบ (400), แล้วก็ item ที่ถูกต้อง (201) — status ที่ log ตัวที่สองคือ 413',
+  },
+  {
+    q: 'ทำไม `server.close()` ถึงเสร็จทันทีใน demo นี้แทนที่จะรอ?\n```js\nprocess.emit(\'SIGTERM\');\nserver.closeAllConnections();\n```',
+    options: [
+      'เพราะ closeAllConnections() ถูกเรียกก่อน close() จะเสร็จ บังคับให้มันจบ',
+      'เพราะตอนที่ SIGTERM ทำงาน fetch ทั้งสี่ตัวเสร็จไปหมดแล้ว — ไม่มีอะไรค้างให้รออีก',
+      'server.close() ไม่เคยรอ request ที่กำลังทำอยู่จริง ๆ เลย',
+      'เพราะ server ไม่เคย listen จริง',
+    ],
+    answer: 1,
+    explain: 'demo await fetch ทั้งสี่ตัวก่อนจะ emit SIGTERM ดังนั้นไม่มี request ค้างอยู่ตอน shutdown — server.close() เลยไม่มีอะไรต้อง drain ต่างจาก demo graceful-shutdown เฉพาะในบท HTTP Server ที่ shutdown กลาง request โดยตั้งใจ',
+  },
+  {
+    q: 'ทำไม `X-Forwarded-For` ถึงไม่ปลอดภัยที่จะเชื่อสำหรับ access control เว้นแต่คุณควบคุม proxy ที่ตั้งมัน?',
+    options: [
+      'มันว่างเปล่าเสมอใน Node.js เวอร์ชันใหม่',
+      'client ตรง (ที่ไม่มี proxy คั่นเลย) สามารถตั้งค่าอะไรก็ได้ให้ header นี้เอง เพราะมันก็แค่ HTTP header ธรรมดา',
+      'Node.js strip header นี้ออกอัตโนมัติเพื่อความปลอดภัย',
+      'มันทำงานได้แค่บน HTTPS เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'X-Forwarded-For เป็น request header ธรรมดา — ไม่มีอะไรหยุด client จากการตั้งมันเป็นค่าอะไรก็ได้ตอนคุยกับ server ของคุณตรง ๆ มันมีความหมายก็ต่อเมื่อมี proxy ที่เชื่อถือได้เป็นตัวเดียวที่รับประกันว่าตั้ง (หรือเขียนทับ) มัน',
+  },
+  {
+    q: 'handler ตั้ง `Content-Length: json.length` เองสำหรับ response body ที่มีข้อความไทย จะเกิดอะไรผิดพลาด?\n```js\nconst json = JSON.stringify({ name: \'สมชาย ใจดี\' });\nres.writeHead(200, { \'Content-Length\': json.length });\n```',
+    options: [
+      'ไม่มีอะไรผิด — .length ตรงกับจำนวน byte เสมอ',
+      'json.length (UTF-16 code unit) น้อยกว่าจำนวน byte จริงของ UTF-8 ทำให้ client ตัด response ทิ้งก่อนที่จะมาถึงครบ',
+      'JSON.stringify throw เมื่อเจอข้อความที่ไม่ใช่ ASCII',
+      'response ถูกส่งซ้ำสองครั้ง',
+    ],
+    answer: 1,
+    explain: 'ตัวอักษร multi-byte ทำให้ .length นับจำนวน byte จริงน้อยกว่าความจริง client จะหยุดอ่านที่ Content-Length ที่ประกาศไว้ (ซึ่งน้อยเกินไป) ตัด body ทิ้งกลางตัวอักษร — ใช้ Buffer.byteLength(json) แทน หรือปล่อยให้ res.end() คำนวณเอง',
+  },
+];
+
+<Quiz client:visible id="http-networking/production-server" questions={productionServerQuiz} />
+
+<ProgressTracker client:visible id="http-networking/production-server" />

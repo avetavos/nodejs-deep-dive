@@ -1,0 +1,264 @@
+---
+title: 'Production Server'
+description: 'One server that combines body limits, timeouts, error listeners, JSON error handling, graceful shutdown, and structured logging.'
+sidebar:
+  order: 6
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Putting it all together
+
+Every other lesson in this module covered one guard at a time: an error listener here, a body limit there, a graceful shutdown handler somewhere else. A real production server needs **all of them at once**, in the same file, cooperating instead of getting in each other's way. This lesson is one server that does exactly that — every guard from this module, wired into a single request handler, with a request that exercises each one.
+
+## The server
+
+export const productionServerCode = `const http = require('node:http');
+
+const MAX_BODY = 1024; // bytes
+let nextId = 1;
+const items = [];
+
+function log(entry) {
+  // One structured line per request instead of scattered console.log calls
+  console.log(JSON.stringify(entry));
+}
+
+function readBody(req, res) {
+  return new Promise(function (resolve, reject) {
+    let received = 0;
+    const chunks = [];
+    req.on('data', function (chunk) {
+      received += chunk.length;
+      if (received > MAX_BODY) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'payload too large' }));
+        log({ method: req.method, path: req.url, status: 413 });
+        req.destroy();
+        reject(Object.assign(new Error('too large'), { handled: true }));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', function () { resolve(Buffer.concat(chunks).toString('utf8')); });
+    req.on('error', function (err) { if (!err.handled) reject(err); });
+  });
+}
+
+const server = http.createServer(async function (req, res) {
+  // Never trust X-Forwarded-For unless a reverse proxy in front actually sets it
+  const clientIp = req.socket.remoteAddress;
+
+  res.on('error', function (err) {
+    log({ level: 'error', path: req.url, error: err.code });
+  });
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  function finish(status, body) {
+    if (res.writableEnded) return; // guard: never call res.end() twice
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+    log({ method: req.method, path: req.url, status: status, clientIp: clientIp });
+  }
+
+  try {
+    if (req.method === 'GET' && req.url === '/health') {
+      finish(200, { ok: true });
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/items') {
+      let raw;
+      try {
+        raw = await readBody(req, res);
+      } catch (err) {
+        if (!err.handled) finish(500, { error: 'internal error' });
+        return; // 413 already sent and logged inside readBody
+      }
+
+      let body;
+      try {
+        body = JSON.parse(raw);
+      } catch (err) {
+        finish(400, { error: 'malformed JSON body' });
+        return;
+      }
+
+      const item = { id: nextId++, name: body.name };
+      items.push(item);
+      finish(201, item);
+      return;
+    }
+
+    finish(404, { error: 'not found' });
+  } catch (err) {
+    finish(500, { error: 'internal error' });
+  }
+});
+
+function shutdown() {
+  log({ level: 'info', msg: 'SIGTERM received, closing server' });
+  server.close(function () {
+    log({ level: 'info', msg: 'server closed cleanly' });
+  });
+}
+process.once('SIGTERM', shutdown);
+
+server.listen(0, async function () {
+  const port = server.address().port;
+  const base = 'http://localhost:' + port;
+
+  await fetch(base + '/health');
+  await fetch(base + '/items', { method: 'POST', body: 'x'.repeat(2000) });
+  await fetch(base + '/items', { method: 'POST', body: '{ bad json' });
+  await fetch(base + '/items', { method: 'POST', body: JSON.stringify({ name: 'widget' }) });
+
+  process.emit('SIGTERM');
+  server.closeAllConnections();
+});
+`;
+
+export const productionServerOut = `{"method":"GET","path":"/health","status":200,"clientIp":"::1"}
+{"method":"POST","path":"/items","status":413}
+{"method":"POST","path":"/items","status":400,"clientIp":"::1"}
+{"method":"POST","path":"/items","status":201,"clientIp":"::1"}
+{"level":"info","msg":"SIGTERM received, closing server"}
+{"level":"info","msg":"server closed cleanly"}`;
+
+<NodeRunner client:visible code={productionServerCode} node expected={productionServerOut} />
+
+Four requests, four different guards, one server: a plain health check, a body over `MAX_BODY` (413, via the body-limit lesson's `req.destroy()` pattern), a malformed JSON body (400, via a `try/catch` around `JSON.parse`), and a valid request that actually creates an item (201). Then `SIGTERM` triggers `server.close()`, which logs once it has finished — since nothing was still in flight, it closes immediately, but the same handler would wait for an in-flight response first if one existed, exactly like the graceful-shutdown lesson.
+
+## Walking through the guards
+
+| Guard | From this module | What it stops |
+|---|---|---|
+| `MAX_BODY` + `req.destroy()` | JSON API lesson | An unbounded upload growing memory forever |
+| `try/catch` around `JSON.parse` | JSON API lesson | A `SyntaxError` turning into an unhandled rejection |
+| `res.on('error', ...)` | HTTP Server lesson | A stream error (like a double `res.end()`) crashing the whole process |
+| `if (res.writableEnded) return;` in `finish()` | HTTP Server lesson | Ever calling `res.end()` a second time on the same response |
+| `res.setHeader('X-Content-Type-Options', 'nosniff')` | This lesson | Browsers MIME-sniffing a response into a different, possibly dangerous content type |
+| Reading `req.socket.remoteAddress`, not blindly trusting `X-Forwarded-For` | This lesson | Spoofed client-IP headers when there is no reverse proxy actually setting them |
+| `process.once('SIGTERM', shutdown)` + `server.close()` | HTTP Server lesson | Dropping in-flight requests when a process manager asks the server to stop |
+| One `log(...)` call per branch, structured JSON | This lesson | A wall of unstructured `console.log` calls that nothing downstream can parse |
+
+## Security headers and trusting proxy headers
+
+`X-Content-Type-Options: nosniff` tells browsers to trust your declared `Content-Type` instead of guessing from the body — without it, a browser that misidentifies a JSON or text response as HTML can expose an XSS vector that a correct `Content-Type` alone would have prevented. For a server that only ever runs behind TLS, `Strict-Transport-Security` (HSTS) is worth adding too, telling browsers to never downgrade to plain HTTP for your domain again — but only set it once you are certain every path is actually served over HTTPS, since it is a promise the browser holds you to.
+
+`X-Forwarded-For` (and `X-Forwarded-Proto`, `X-Forwarded-Host`) are headers a **reverse proxy** sets to tell your app what the original client's address and protocol were, since the proxy's own IP is what your server actually sees on the socket. The catch: any client can set these headers themselves in a direct request. Trusting them blindly (for rate limiting, access control, or logging) means a client can claim to be any IP address it wants. Only trust them when you know a proxy you control is the only thing that can reach your process directly — and even then, prefer trusting just the immediate hop, not the full header value a client could have prepended to.
+
+## Mental Model
+
+A production server is not one big feature — it is the same request/response contract from the *HTTP Server* lesson, wrapped in a series of independent guards that each answer one question: is the input too big? Is it valid JSON? Did something throw? Are we shutting down? None of the guards depend on each other, which is exactly what lets them compose into one handler without any single one growing more complex than the others.
+
+## Trade-offs
+
+Every guard in this lesson is a small amount of code that does nothing in the common case and only matters on the day something goes wrong — which makes it easy to skip under time pressure and easy to forget it is missing until an incident makes it obvious. The `finish()` helper and structured `log()` calls here also encode a specific set of decisions (JSON logs, a single response helper) that a real codebase might make differently — the point is not this exact shape, but that a production server needs *some* consistent, centralized answer to "how do I finish a response" and "how do I log a request," rather than each route reinventing both.
+
+## Common Misconceptions
+
+- **"Production-readiness is a separate phase you add at the end."** Every guard here is small and independent — the cheapest time to add a body limit or an error listener is when you write the route, not in a retrofit once something has already failed in production.
+- **"Structured logging just means using a library like pino."** The structure (one JSON object per event, consistent fields) matters more than the library — the demo above gets the same query-ability from `console.log(JSON.stringify(...))` that a logging library would give you, just without the extra features (levels, transports, sampling) a real one adds.
+- **"X-Forwarded-For tells you the real client IP."** Only if you control the proxy setting it and nothing else can reach your server directly. Otherwise it is exactly as trustworthy as any other header a client can set by hand.
+
+## Reading AI-generated code
+
+AI-generated "production-ready" servers often add real touches — a body limit here, a try/catch there — without connecting them: a body-too-large branch that writes a response but forgets to guard against `finish()` running again afterward is a subtle, easy way to reintroduce the double-`res.end()` crash this whole module has been building defenses against.
+
+<SpotTheBug code={`function finish(req, res, status, body) {
+  const json = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Content-Length': json.length, // BUG: character length, not byte length
+  });
+  res.end(json);
+}
+
+// Called with a name containing multi-byte characters
+finish(req, res, 201, { id: 42, name: 'José 🎉' });
+`}>
+`json.length` counts UTF-16 code units, not bytes — for a body containing accented letters or emoji (or Thai text, as in the earlier byte-length example in this module), the real UTF-8 byte count (what `Content-Length` must declare) is larger than `.length` reports. The client reads exactly `Content-Length` bytes and considers the response complete at that point, so it silently truncates the body partway through a multi-byte character, and depending on the HTTP client, that broken byte boundary can also desync the next response on a reused keep-alive connection. The fix, from the *HTTP Server* lesson: `Buffer.byteLength(json)` instead of `json.length` — or better, let `res.end(json)` alone compute `Content-Length` by not setting it by hand at all.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Production-readiness is not a separate layer bolted on at the end — it is this module's individual guards (limits, error listeners, JSON try/catch, graceful shutdown, correct byte lengths) all composed into the same handler, each one still doing exactly one job.
+</Callout>
+
+export const productionServerQuiz = [
+  {
+    q: 'In the combined server, why does the POST /items handler check `err.handled` before calling `finish(500, ...)`?',
+    options: [
+      'To distinguish a real internal error from the 413 response that readBody already sent and logged',
+      '`err.handled` has no effect on the code\'s behavior',
+      'To retry the request automatically',
+      'To skip logging entirely for that request',
+    ],
+    answer: 0,
+    explain: 'readBody already writes and logs the 413 response itself before rejecting with { handled: true } — the outer catch must not also call finish() for that same request, which is exactly what err.handled prevents.',
+  },
+  {
+    q: 'What does `if (res.writableEnded) return;` inside `finish()` protect against?',
+    options: [
+      'Slow requests timing out',
+      'finish() being called a second time for the same response, which would otherwise risk the ERR_STREAM_WRITE_AFTER_END crash from the HTTP Server lesson',
+      'Requests with an invalid Content-Type header',
+      'The server running out of memory',
+    ],
+    answer: 1,
+    explain: 'This is the early-return / already-sent guard from the HTTP Server lesson, applied centrally in one helper instead of separately in every route.',
+  },
+  {
+    q: 'Given the four requests the demo fires (GET /health, an oversized POST, malformed JSON, and a valid POST), what is the 2nd logged status code?',
+    options: [
+      '200',
+      '400',
+      '413',
+      '201',
+    ],
+    answer: 2,
+    explain: 'The requests run in order: /health (200), an oversized body (413), malformed JSON (400), then a valid item (201) — the second logged status is 413.',
+  },
+  {
+    q: 'Why does `server.close()` finish immediately in this demo instead of waiting?\n```js\nprocess.emit(\'SIGTERM\');\nserver.closeAllConnections();\n```',
+    options: [
+      'Because closeAllConnections() is called before close() finishes, forcing it',
+      'Because by the time SIGTERM fires, all four fetches have already completed — there is nothing in flight left to wait for',
+      'server.close() never actually waits for in-flight requests',
+      'Because the server was never actually listening',
+    ],
+    answer: 1,
+    explain: 'The demo awaits each of the four fetch calls before emitting SIGTERM, so no request is in flight at shutdown time — server.close() has nothing to drain, unlike the dedicated graceful-shutdown demo in the HTTP Server lesson, which shuts down mid-request on purpose.',
+  },
+  {
+    q: 'Why is `X-Forwarded-For` unsafe to trust for access control unless you control the proxy setting it?',
+    options: [
+      'It is always empty in modern Node.js',
+      'A direct client (with no proxy in between at all) can set any value for this header itself, since it is just a regular HTTP header',
+      'Node.js strips this header automatically for security',
+      'It only works over HTTPS',
+    ],
+    answer: 1,
+    explain: 'X-Forwarded-For is an ordinary request header — nothing stops a client from setting it to any value when talking to your server directly. It is only meaningful when a trusted proxy is the one guaranteed to be setting (or overwriting) it.',
+  },
+  {
+    q: 'A handler manually sets `Content-Length: json.length` for a response body containing Thai text. What goes wrong?\n```js\nconst json = JSON.stringify({ name: \'สมชาย ใจดี\' });\nres.writeHead(200, { \'Content-Length\': json.length });\n```',
+    options: [
+      'Nothing — .length always matches the byte count',
+      'json.length (UTF-16 code units) is smaller than the real UTF-8 byte count, so the client truncates the response before it fully arrives',
+      'JSON.stringify throws on non-ASCII text',
+      'The response is sent twice',
+    ],
+    answer: 1,
+    explain: 'Multi-byte characters make .length undercount the real byte length. The client stops reading at the declared (too-small) Content-Length, cutting the body off mid-character — use Buffer.byteLength(json), or let res.end() compute it.',
+  },
+];
+
+<Quiz client:visible id="http-networking/production-server" questions={productionServerQuiz} />
+
+<ProgressTracker client:visible id="http-networking/production-server" />

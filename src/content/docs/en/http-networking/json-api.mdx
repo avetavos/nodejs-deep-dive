@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Reading the request body
 
@@ -160,6 +161,166 @@ curl http://localhost:3000/items/99
 Two rules that define a professional JSON API: (1) **Always validate input** — check that required fields exist and have the correct types before touching any data store. Return `400 Bad Request` with a clear error message when validation fails. (2) **Use precise status codes** — `201` for a successful POST that creates a resource, `404` when a specific resource is missing, never just `200` for everything. These two habits make your API predictable and easy to debug.
 </Callout>
 
+## A body size limit, and req.destroy()
+
+The `readBody` helper above collects chunks with no limit at all — a client can stream gigabytes into a handler that just keeps concatenating, growing memory until the process falls over. A real body reader tracks the running size and bails out once it crosses a limit, calling `req.destroy()` to stop reading the rest of an oversized body and responding **413 Payload Too Large**:
+
+export const bodyLimitCode = `const http = require('node:http');
+
+const MAX_BODY = 20; // bytes, tiny on purpose for the demo
+
+function readBody(req, res) {
+  return new Promise(function (resolve, reject) {
+    let received = 0;
+    const chunks = [];
+    req.on('data', function (chunk) {
+      received += chunk.length;
+      if (received > MAX_BODY) {
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('413 Payload Too Large');
+        req.destroy(); // stop reading the rest of an oversized body
+        reject(Object.assign(new Error('payload too large'), { code: 'BODY_TOO_LARGE' }));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', function () { resolve(Buffer.concat(chunks).toString('utf8')); });
+    req.on('error', function (err) {
+      if (err.code !== 'ECONNRESET') reject(err);
+    });
+  });
+}
+
+const server = http.createServer(async function (req, res) {
+  try {
+    const body = await readBody(req, res);
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('accepted: ' + body);
+  } catch (err) {
+    if (err.code !== 'BODY_TOO_LARGE') {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('500 Internal Server Error');
+    }
+  }
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port, { method: 'POST', body: 'this body is way over twenty bytes long' })
+    .then(function (r) { return r.text().then(function (t) { return { status: r.status, text: t }; }); })
+    .then(function (result) {
+      console.log(result.status, result.text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function (err) {
+      console.log('client fetch error:', err.message);
+      server.close();
+      server.closeAllConnections();
+    });
+});
+`;
+
+export const bodyLimitOut = `413 413 Payload Too Large`;
+
+<NodeRunner client:visible code={bodyLimitCode} node expected={bodyLimitOut} />
+
+The response is written **before** `req.destroy()` — reversing that order would tear down the socket before the 413 body ever reaches the client. Without any limit at all, this handler is the classic denial-of-service vector: one slow, oversized upload can pin memory indefinitely while nothing ever finishes reading it.
+
+## Malformed JSON becomes 400, never a crash
+
+`JSON.parse()` throws a `SyntaxError` on anything that is not valid JSON. The `readBody`/`jsonApiCode` demo above already wraps that in a `try`, but it is worth seeing on its own, since forgetting this `try/catch` is one of the most common gaps in AI-generated body parsing:
+
+export const malformedJsonCode = `const http = require('node:http');
+
+function readBody(req) {
+  return new Promise(function (resolve, reject) {
+    let raw = '';
+    req.on('data', function (chunk) { raw += chunk; });
+    req.on('end', function () { resolve(raw); });
+    req.on('error', reject);
+  });
+}
+
+const server = http.createServer(async function (req, res) {
+  const raw = await readBody(req);
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'malformed JSON body' }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ received: body }));
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port, { method: 'POST', body: '{ this is not json' })
+    .then(function (r) { return r.json().then(function (j) { return { status: r.status, json: j }; }); })
+    .then(function (result) {
+      console.log(result.status, result.json);
+      server.close();
+      server.closeAllConnections();
+    });
+});
+`;
+
+export const malformedJsonOut = `400 { error: 'malformed JSON body' }`;
+
+<NodeRunner client:visible code={malformedJsonCode} node expected={malformedJsonOut} />
+
+Without the `try/catch`, the thrown `SyntaxError` inside an `async` request listener rejects the Promise that listener returns — Node.js does not automatically turn that into a response, so the request just hangs and the rejection becomes an unhandled rejection.
+
+## Byte length vs. string length for non-ASCII bodies
+
+`JSON.stringify` output is a JavaScript string, and `.length` counts **UTF-16 code units** — for pure ASCII JSON that happens to match the byte count, but the moment a value contains Thai text (or emoji, or most non-Latin scripts), it does not:
+
+```js
+const text = 'สวัสดี'; // Thai greeting - each character is multiple UTF-8 bytes
+console.log('.length (UTF-16 code units):', text.length);
+console.log('Buffer.byteLength (actual UTF-8 bytes):', Buffer.byteLength(text));
+```
+
+`res.end(data)` computes `Content-Length` correctly for you using the real byte count, so this rarely bites in code that lets `res.end()` do the work. It bites the moment someone hand-computes a length for a header, a `Content-Length` set ahead of streamed `write()` calls, or a body-size budget — always reach for `Buffer.byteLength(str)` there, never `str.length`.
+
+## Mental Model
+
+A JSON API handler is a pipeline with three places things go wrong before you ever touch your data: the network (too much data, `req.destroy()` fixes it), the parser (`JSON.parse` throwing, a `try/catch` fixes it), and your own validation (a field missing or the wrong type, a check fixes it). Each stage needs its own guard and its own status code — a body limit failure is 413, a parse failure is 400, a validation failure is also 400 (with a more specific message) — collapsing any of them into a generic 500 tells the client nothing about what to fix.
+
+## Trade-offs
+
+A hardcoded byte limit like the 20-byte demo above is simple but arbitrary — too low and legitimate requests get rejected, too high and the protection barely helps. Production APIs usually derive the limit from the endpoint's actual needs (a login form needs bytes, not megabytes) or delegate it to a reverse proxy in front of Node, which can reject oversized bodies before they even reach your process — at the cost of one more layer of configuration to keep in sync with your application code.
+
+## Common Misconceptions
+
+- **"Rejecting a body over the limit with `res.end()` is enough — no need to touch `req`."** The client may still be mid-upload; without `req.destroy()`, Node keeps reading (and buffering) bytes that will never be used, undermining the whole point of the limit.
+- **"JSON.parse errors are rare enough to skip the try/catch."** Any client — a buggy integration, a hand-typed curl command, a retried request with a truncated body — can send invalid JSON. It is exactly as common as any other form of bad input, and it is uncaught by default.
+- **"`.length` is close enough to the real byte count for a Content-Length header."** It is exactly right for ASCII and silently wrong for everything else — the failure mode (a truncated response body) only shows up once real-world text with non-ASCII characters flows through the code path.
+
+## Reading AI-generated code
+
+AI-generated body readers reliably implement the `data`/`end` collection pattern correctly, and just as reliably skip the one thing that pattern needs to be safe against a hostile or buggy client: a size limit.
+
+<SpotTheBug code={`function readBody(req) {
+  return new Promise(function (resolve, reject) {
+    let raw = '';
+    req.on('data', function (chunk) { raw += chunk; });
+    req.on('end', function () { resolve(raw); });
+    req.on('error', reject);
+  });
+}
+// Called directly on every incoming request, with no size check anywhere
+`}>
+This `readBody` will happily concatenate an unbounded number of chunks — a client that streams a multi-gigabyte body (by accident or on purpose) grows the `raw` string the entire time, with no upper bound, holding up memory and the event loop until the process runs out of memory or the connection is killed externally. The fix is the pattern shown earlier in this lesson: track the running byte count as chunks arrive, and once it crosses a limit, respond `413 Payload Too Large` and call `req.destroy()` to stop reading immediately instead of trusting the client to eventually send an `end` event.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A request body is untrusted input from the network in every sense — cap its size with `req.destroy()` on overflow, wrap `JSON.parse` in a `try/catch`, and use `Buffer.byteLength`, never `.length`, anywhere you declare a byte count yourself.
+</Callout>
+
 export const jsonApiQuiz = [
   {
     q: 'Why must you collect request body data using `data` and `end` events rather than reading it synchronously?',
@@ -170,6 +331,7 @@ export const jsonApiQuiz = [
       'Because Node.js buffers all request data by default',
     ],
     answer: 1,
+    explain: 'The request body streams in over the socket in chunks; there is no synchronous "read the whole body" API, so you accumulate chunks via data/end events.',
   },
   {
     q: 'What HTTP status code should a POST endpoint return when it successfully creates a new resource?',
@@ -180,6 +342,7 @@ export const jsonApiQuiz = [
       '202 Accepted',
     ],
     answer: 1,
+    explain: '201 Created specifically signals that a new resource now exists, which is more precise than a generic 200 OK.',
   },
   {
     q: 'A client sends an invalid JSON body. What is the correct response status code?',
@@ -190,6 +353,40 @@ export const jsonApiQuiz = [
       '422 Unprocessable Entity',
     ],
     answer: 2,
+    explain: 'Malformed JSON is a client error (the request itself is bad), which is what the 4xx range — specifically 400 — is for. 500 is reserved for failures on the server\'s own side.',
+  },
+  {
+    q: 'A `readBody` helper collects chunks into a string with no size check, called directly on every incoming request. What is the risk?\n```js\nfunction readBody(req) {\n  return new Promise(function (resolve, reject) {\n    let raw = \'\';\n    req.on(\'data\', function (chunk) { raw += chunk; });\n    req.on(\'end\', function () { resolve(raw); });\n  });\n}\n```',
+    options: [
+      'None — Node.js automatically caps request body size at 1 MB',
+      'A client can stream an unbounded amount of data, growing memory with no limit until the process runs out',
+      'It only works for GET requests',
+      'JSON.parse will reject bodies over a certain size automatically',
+    ],
+    answer: 1,
+    explain: 'Without a running size check and a call to req.destroy() past the limit, nothing stops a client from sending an arbitrarily large body, which the handler keeps buffering in memory the whole time.',
+  },
+  {
+    q: 'Why should `req.destroy()` be called after writing the 413 response, not before?',
+    options: [
+      'Calling it before does not compile',
+      'Destroying the socket first can tear down the connection before the 413 response body ever reaches the client',
+      'req.destroy() automatically sends a 413 response, so calling res.end() first would conflict',
+      'There is no difference in ordering',
+    ],
+    answer: 1,
+    explain: 'req and res share the same underlying socket. Destroying it before the response is written risks the client never seeing the 413 at all — write the response first, then stop reading further body bytes.',
+  },
+  {
+    q: 'For the Thai string `\'สวัสดี\'`, why does `Buffer.byteLength(text)` return a larger number than `text.length`?',
+    options: [
+      'Buffer.byteLength includes a trailing null terminator',
+      'text.length counts UTF-16 code units, while Buffer.byteLength counts actual UTF-8 bytes, and Thai characters take multiple bytes each',
+      'text.length is broken for non-Latin scripts',
+      'They should always return the same number; this would be a bug',
+    ],
+    answer: 1,
+    explain: 'JavaScript strings are UTF-16 internally, so .length counts 16-bit code units. Buffer.byteLength(str) instead computes the real UTF-8 byte count, which is larger for any multi-byte character.',
   },
 ];
 

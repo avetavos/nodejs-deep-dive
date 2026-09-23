@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Node.js ในฐานะแพลตฟอร์ม Networking
 
@@ -24,6 +26,24 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 | Routing | Manual routing ด้วย `req.method` และ `req.url` |
 | Outbound Requests | Global `fetch`, JSON, การจัดการข้อผิดพลาด |
 | JSON API | Parse body, route, ตอบกลับด้วย JSON |
+| Production Server | การจัดการ error, limit, timeout, graceful shutdown |
+
+## วงจรชีวิตของ request
+
+ทุก request จะมีรูปแบบเดียวกันหมด ไม่ว่าจะอยู่บทไหนด้านล่างนี้: Node parse byte ที่เข้ามาให้กลายเป็น object `req`, callback ของคุณรัน, คุณเขียน `res`, แล้ว connection ก็จะปิดหรือรอ request ถัดไป:
+
+<Mermaid title="HTTP request หนึ่งตัว ตั้งแต่ต้นจนจบ" code={`flowchart TD
+  A["Client sends an HTTP request"] --> B["Node parses headers into an IncomingMessage (req)"]
+  B --> C["The request listener callback runs"]
+  C --> D["Handler reads the body, if any (data/end events)"]
+  D --> E["Handler calls res.writeHead(status, headers)"]
+  E --> F["Handler calls res.end(body)"]
+  F --> G{"Connection: keep-alive?"}
+  G -->|yes| H["Socket stays open, waits for the next request"]
+  G -->|no| I["Socket closes"]
+`} />
+
+บทถัด ๆ ไปในโมดูลนี้จะเติมเต็มมุมคมของ diagram นี้: จะเกิดอะไรขึ้นถ้าขั้นตอน D ไม่จบสักที (body limit), จะเกิดอะไรขึ้นถ้าขั้นตอน E หรือ F ถูกข้ามหรือถูกเรียกซ้ำ (error listener, `ERR_HTTP_HEADERS_SENT`) และ "รอ request ถัดไป" ถูกจำกัดด้วย timeout จริง ๆ อย่างไร
 
 ## เซิร์ฟเวอร์ขั้นต่ำ — ทำได้เดี๋ยวนี้
 
@@ -65,6 +85,45 @@ server.listen(0, function() {
 คุณไม่จำเป็นต้องติดตั้ง `node:http` เพราะเป็นส่วนหนึ่งของ Node.js standard library นำเข้าด้วย `require('node:http')` (CommonJS) หรือ `import http from 'node:http'` (ESM) โดย prefix `node:` คือ convention สมัยใหม่ที่บอกชัดเจนว่าคุณกำลัง import built-in ไม่ใช่ npm package
 </Callout>
 
+## Mental Model
+
+คิดว่า `node:http` คือ implementation จริงของ wire protocol ส่วน framework ทุกตัว — Express, Fastify, Hono, Koa — คือ ergonomics ที่วางทับบน object `req`/`res` ตัวเดียวกันจาก diagram ด้านบน `app.get('/path', handler)` ของ framework ก็แค่ router ที่สุดท้ายเรียก `res.writeHead()` และ `res.end()` แทนคุณอยู่ดี ส่วน middleware chain ก็แค่ลำดับของ function ที่ใช้ `req`/`res` ตัวเดียวกัน ไม่มีอะไรที่ framework ทำเป็นเวทมนตร์ — ทุกอย่างเข้าถึงได้ด้วย module ที่คุณติดตั้งอยู่แล้ว
+
+## Trade-offs
+
+การเขียนโค้ดคุยกับ `node:http` ตรง ๆ ให้คุณควบคุมได้เต็มที่และไม่มี dependency เพิ่ม แต่มันก็หมายความว่า *คุณ* ต้องรับผิดชอบทุก edge case ที่โมดูลนี้ครอบคลุม เช่น body size limit, input ที่ผิดรูปแบบ, timeout, graceful shutdown ส่วน framework ซื้อ productivity มาให้ — routing, middleware, ตัวช่วย validate — ด้วยการตัดสินใจที่สมเหตุสมผลแทนคุณในเรื่องพวกนั้น ไม่มีฝั่งไหนที่ "ถูกต้องเสมอ": tool ภายในเล็ก ๆ ที่มีแค่ 3 route อาจไม่ต้องใช้ framework เลยก็ได้ ในขณะที่ API ที่เปิดให้สาธารณะใช้ ได้ประโยชน์จาก default ที่ผ่านการทดสอบมาแล้วของ framework ไม่ว่าทางไหนก็ตาม การเข้าใจ model ดิบทำให้พฤติกรรมของ framework ไม่มีวันเป็น black box
+
+## Common Misconceptions
+
+- **"ต้องใช้ Express ถึงจะสร้าง HTTP server ได้จริง"** `node:http` เองก็เป็น HTTP server ที่ใช้งานจริงใน production ได้อยู่แล้ว — Express แค่เพิ่ม convention เรื่อง routing และ middleware ไม่ใช่ HTTP เอง
+- **"`http.createServer` จัดการ error case ให้เราแล้ว"** ไม่จริง การลืม `'error'` listener, body size limit หรือ shutdown handler ล้วนเป็นช่องโหว่เงียบ ๆ ที่คุณต้องเติมเอง — ซึ่งจะครอบคลุมในบทถัด ๆ ไปของโมดูลนี้
+- **"demo ที่รันได้ครั้งเดียวก็คือ production ready แล้ว"** demo พิสูจน์แค่ happy path ส่วนที่เหลือของโมดูลนี้คือเรื่องของ path ที่ไม่ happy: input ที่ผิด, client ที่ช้า, server ที่ต้อง restart
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด `node:http` server ที่ AI เขียนมักจะทำ happy path ได้ถูกต้อง — route ที่ตอบกลับถูก — แต่ก็มักจะข้ามรายละเอียดของ response lifecycle ที่จะโผล่มาให้เห็นเฉพาะตอนมี traffic จริง เช่นการจบทุก response จริง ๆ
+
+<SpotTheBug code={`const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    // TODO: send the body once we decide on a format
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not found');
+  }
+});
+
+server.listen(3000);
+`}>
+branch `/health` เรียก `res.writeHead()` แต่ไม่เคยเรียก `res.end()` เลย Node ไม่ปิด response ให้คุณอัตโนมัติ — client จะรอค้างจนกว่าจะ timeout ของตัวเองในที่สุด ทางแก้คือบรรทัดเดียวที่ทุก branch ต้องมี: ให้แน่ใจว่าทุก code path ที่เริ่ม response แล้ว ต้องเรียก `res.end()` ด้วย (หรือ `res.destroy()` ถ้าตั้งใจจะ abort มันจริง ๆ)
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`node:http` คือ HTTP implementation ตัวจริงที่ framework ทุกตัวยืนอยู่บน — เรียนรู้ request/response lifecycle ของมันที่นี่ แล้ว abstraction ของ framework ไหนก็จะไม่ใช่ black box อีกต่อไป
+</Callout>
+
 export const indexQuiz = [
   {
     q: 'ต้องใช้ module ใดในการสร้าง HTTP server ใน Node.js โดยไม่ต้องใช้ npm package?',
@@ -75,6 +134,7 @@ export const indexQuiz = [
       'node:fetch',
     ],
     answer: 1,
+    explain: '`node:http` คือ built-in module ของ Node สำหรับสร้าง HTTP server และ client — ไม่ต้องติดตั้ง package เพิ่ม',
   },
   {
     q: 'prefix `node:` ใน `require("node:http")` หมายความว่าอะไร?',
@@ -85,6 +145,7 @@ export const indexQuiz = [
       'ES module ที่ต้องใช้ flag เพื่อเปิดใช้',
     ],
     answer: 2,
+    explain: 'prefix `node:` บอกชัดเจนว่านี่คือ core module ของ Node.js แยกจาก package ชื่อเดียวกันที่อาจมีอยู่บน npm',
   },
   {
     q: 'framework ใดบ้างที่ใช้ `node:http` เป็น engine ภายใน?',
@@ -95,6 +156,29 @@ export const indexQuiz = [
       'ไม่มี — ทุก framework ใช้ C++ binding โดยตรง',
     ],
     answer: 2,
+    explain: 'framework HTTP ของ Node.js ที่ได้รับความนิยมทุกตัว (และตัวที่ใช้ node:http2 สำหรับ HTTP/2) เป็นชั้นที่วางทับ core module ตัวเดียวกัน ไม่ใช่ตัวแทนของมัน',
+  },
+  {
+    q: 'จะเกิดอะไรขึ้นเมื่อ route ที่ match แล้วไม่เคยเรียก `res.end()`?\n```js\nconst server = http.createServer(function (req, res) {\n  if (req.url === \'/health\') {\n    res.writeHead(200, { \'Content-Type\': \'text/plain\' });\n  }\n});\n```',
+    options: [
+      'Node throw exception ทันที',
+      'ส่ง response 200 ที่ว่างเปล่าออกไปทันที',
+      'client จะรอจนกว่า connection จะ timeout — ไม่มีอะไรถูกส่งเลย',
+      'server จะ crash ในรอบถัดไป',
+    ],
+    answer: 2,
+    explain: 'Node ไม่ปิด response ให้เองเด็ดขาด ถ้าไม่เรียก res.end() (หรือ res.destroy()) client ก็แค่รอค้าง — ปกติจนกว่าจะโดน timeout ของตัวเอง',
+  },
+  {
+    q: 'ใน demo เซิร์ฟเวอร์ขั้นต่ำ ทำไมโค้ดถึงเรียก `server.close()` ข้างใน callback ของ `fetch(...).then(...)` แทนที่จะเรียกทันทีหลัง `server.listen(0, ...)`?',
+    options: [
+      '`server.listen` เป็น synchronous ดังนั้นถ้าปิดทันทีหลังมันจะปิดก่อนที่ server จะเริ่มทำงานด้วยซ้ำ',
+      'server ต้องเปิดค้างไว้นานพอที่จะให้บริการ self-request ของตัวเองก่อนจะปิดอย่างสะอาด',
+      '`server.close()` ต้องรันข้างใน Promise chain เสมอ',
+      'เป็นแค่สไตล์การเขียน ไม่มีเหตุผลเชิงฟังก์ชัน',
+    ],
+    answer: 1,
+    explain: 'demo นี้ request ตัวเองเพื่อพิสูจน์ว่า server ทำงานได้จริง แล้วค่อยปิดหลังจาก request/response รอบนั้นเสร็จ — ถ้าปิดเร็วกว่านั้นจะไป race กับ self-request',
   },
 ];
 

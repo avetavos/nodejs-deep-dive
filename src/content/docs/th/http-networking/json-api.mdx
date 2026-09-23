@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## การอ่าน request body
 
@@ -160,6 +161,166 @@ curl http://localhost:3000/items/99
 สองกฎที่กำหนด JSON API แบบมืออาชีพ: (1) **ตรวจสอบ input เสมอ** — ตรวจว่า field ที่จำเป็นมีอยู่และมี type ที่ถูกต้องก่อนแตะ data store ใด ๆ คืน `400 Bad Request` พร้อมข้อความ error ที่ชัดเจนเมื่อ validation ล้มเหลว (2) **ใช้ status codes ที่แม่นยำ** — `201` สำหรับ POST ที่สร้าง resource สำเร็จ, `404` เมื่อไม่พบ resource เฉพาะ ไม่ใช่แค่ใช้ `200` ทุกอย่าง นิสัยทั้งสองนี้ทำให้ API ของคุณ predictable และ debug ง่าย
 </Callout>
 
+## Body size limit และ req.destroy()
+
+helper `readBody` ด้านบนเก็บ chunk โดยไม่มี limit เลย — client สามารถ stream ข้อมูลหลาย gigabyte เข้า handler ที่แค่ concatenate ไปเรื่อย ๆ ทำให้ memory โตขึ้นจนกระบวนการล่ม body reader จริง ๆ ต้องติดตามขนาดที่รับมาสะสม แล้วหยุดทันทีเมื่อเกิน limit โดยเรียก `req.destroy()` เพื่อหยุดอ่าน body ที่เกินขนาดที่เหลือ และตอบ **413 Payload Too Large**:
+
+export const bodyLimitCode = `const http = require('node:http');
+
+const MAX_BODY = 20; // bytes, tiny on purpose for the demo
+
+function readBody(req, res) {
+  return new Promise(function (resolve, reject) {
+    let received = 0;
+    const chunks = [];
+    req.on('data', function (chunk) {
+      received += chunk.length;
+      if (received > MAX_BODY) {
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('413 Payload Too Large');
+        req.destroy(); // stop reading the rest of an oversized body
+        reject(Object.assign(new Error('payload too large'), { code: 'BODY_TOO_LARGE' }));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', function () { resolve(Buffer.concat(chunks).toString('utf8')); });
+    req.on('error', function (err) {
+      if (err.code !== 'ECONNRESET') reject(err);
+    });
+  });
+}
+
+const server = http.createServer(async function (req, res) {
+  try {
+    const body = await readBody(req, res);
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('accepted: ' + body);
+  } catch (err) {
+    if (err.code !== 'BODY_TOO_LARGE') {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('500 Internal Server Error');
+    }
+  }
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port, { method: 'POST', body: 'this body is way over twenty bytes long' })
+    .then(function (r) { return r.text().then(function (t) { return { status: r.status, text: t }; }); })
+    .then(function (result) {
+      console.log(result.status, result.text);
+      server.close();
+      server.closeAllConnections();
+    })
+    .catch(function (err) {
+      console.log('client fetch error:', err.message);
+      server.close();
+      server.closeAllConnections();
+    });
+});
+`;
+
+export const bodyLimitOut = `413 413 Payload Too Large`;
+
+<NodeRunner client:visible code={bodyLimitCode} node expected={bodyLimitOut} />
+
+response ถูกเขียนไป **ก่อน** `req.destroy()` — ถ้าสลับลำดับกันจะทำให้ socket ถูกทำลายก่อนที่ body ของ 413 จะไปถึง client เลย ถ้าไม่มี limit เลย handler นี้จะเป็นช่องทาง denial-of-service แบบคลาสสิก: การ upload ที่ช้าและเกินขนาดเพียงครั้งเดียวสามารถ pin memory ไว้ไม่มีกำหนดในขณะที่ไม่มีอะไรอ่านมันจบสักที
+
+## JSON ที่ผิดรูปแบบกลายเป็น 400 ไม่ใช่ crash
+
+`JSON.parse()` throw `SyntaxError` กับอะไรก็ตามที่ไม่ใช่ JSON ที่ถูกต้อง demo `readBody`/`jsonApiCode` ด้านบนห่อมันด้วย `try` อยู่แล้ว แต่คุ้มค่าที่จะดูมันแยกเดี่ยว ๆ เพราะการลืม `try/catch` นี้เป็นช่องโหว่ที่พบบ่อยที่สุดอันหนึ่งในโค้ด parse body ที่ AI เขียน:
+
+export const malformedJsonCode = `const http = require('node:http');
+
+function readBody(req) {
+  return new Promise(function (resolve, reject) {
+    let raw = '';
+    req.on('data', function (chunk) { raw += chunk; });
+    req.on('end', function () { resolve(raw); });
+    req.on('error', reject);
+  });
+}
+
+const server = http.createServer(async function (req, res) {
+  const raw = await readBody(req);
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'malformed JSON body' }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ received: body }));
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port, { method: 'POST', body: '{ this is not json' })
+    .then(function (r) { return r.json().then(function (j) { return { status: r.status, json: j }; }); })
+    .then(function (result) {
+      console.log(result.status, result.json);
+      server.close();
+      server.closeAllConnections();
+    });
+});
+`;
+
+export const malformedJsonOut = `400 { error: 'malformed JSON body' }`;
+
+<NodeRunner client:visible code={malformedJsonCode} node expected={malformedJsonOut} />
+
+ถ้าไม่มี `try/catch` การ throw ของ `SyntaxError` ข้างใน request listener ที่เป็น `async` จะ reject Promise ที่ listener นั้นคืนค่า — Node.js ไม่แปลงมันเป็น response ให้อัตโนมัติ request เลยค้างอยู่แค่นั้น และ rejection ก็กลายเป็น unhandled rejection
+
+## Byte length เทียบกับ string length สำหรับ body ที่ไม่ใช่ ASCII
+
+output ของ `JSON.stringify` เป็น JavaScript string และ `.length` นับ **UTF-16 code unit** — สำหรับ JSON ที่เป็น ASCII ล้วนตัวเลขนี้เท่ากับจำนวน byte พอดี แต่ทันทีที่ value มีข้อความไทย (หรือ emoji หรือภาษาที่ไม่ใช่ Latin ส่วนใหญ่) มันจะไม่เท่ากันอีกต่อไป:
+
+```js
+const text = 'สวัสดี'; // Thai greeting - each character is multiple UTF-8 bytes
+console.log('.length (UTF-16 code units):', text.length);
+console.log('Buffer.byteLength (actual UTF-8 bytes):', Buffer.byteLength(text));
+```
+
+`res.end(data)` คำนวณ `Content-Length` ให้คุณถูกต้องด้วยจำนวน byte จริง ดังนั้นเรื่องนี้แทบไม่กัดในโค้ดที่ปล่อยให้ `res.end()` ทำงานเอง มันจะกัดทันทีที่มีใครคำนวณความยาวสำหรับ header เอง, ตั้ง `Content-Length` ล่วงหน้าก่อนการ `write()` แบบ stream หรือทำ budget ขนาด body เอง — ให้ใช้ `Buffer.byteLength(str)` เสมอในกรณีเหล่านั้น ไม่ใช่ `str.length`
+
+## Mental Model
+
+handler ของ JSON API เป็น pipeline ที่มีสามจุดที่พังได้ก่อนจะแตะข้อมูลของคุณเลย: network (ข้อมูลมากเกินไป, `req.destroy()` แก้ได้), parser (`JSON.parse` throw, `try/catch` แก้ได้) และ validation ของคุณเอง (field หายหรือ type ผิด, การเช็คแก้ได้) แต่ละขั้นตอนต้องการ guard และ status code ของตัวเอง — body limit ที่ล้มเหลวคือ 413, parse ที่ล้มเหลวคือ 400, validation ที่ล้มเหลวก็ 400 เช่นกัน (พร้อมข้อความที่เจาะจงกว่า) การยุบทุกอย่างให้เหลือแค่ 500 ทั่วไปไม่บอก client เลยว่าต้องแก้อะไร
+
+## Trade-offs
+
+limit ขนาด byte ที่ hardcode ไว้อย่าง demo 20 byte ด้านบนนั้นง่ายแต่ตามอำเภอใจ — ต่ำเกินไป request ที่ถูกต้องก็โดนปฏิเสธ สูงเกินไปการป้องกันก็แทบไม่ช่วยอะไร API ใน production มักจะคำนวณ limit จากความต้องการจริงของ endpoint (login form ต้องการแค่ byte ไม่ใช่ megabyte) หรือมอบให้ reverse proxy ที่อยู่หน้า Node จัดการ ซึ่งปฏิเสธ body ที่เกินขนาดได้ก่อนจะถึง process ของคุณด้วยซ้ำ — แลกมาด้วย configuration อีกชั้นที่ต้อง sync กับโค้ด application ของคุณ
+
+## Common Misconceptions
+
+- **"แค่ปฏิเสธ body ที่เกิน limit ด้วย `res.end()` ก็พอ ไม่ต้องแตะ `req`"** client อาจยังอยู่กลาง upload — ถ้าไม่มี `req.destroy()` Node จะยังอ่าน (และ buffer) byte ที่ไม่มีวันถูกใช้ต่อไป ทำลายจุดประสงค์ของ limit ทั้งหมด
+- **"JSON.parse error หายากพอที่จะข้าม try/catch ได้"** client ไหนก็ตาม — integration ที่มี bug, คำสั่ง curl ที่พิมพ์มือ, request ที่ retry แล้ว body ขาด — ส่ง JSON ที่ invalid ได้ทั้งนั้น มันพบบ่อยพอ ๆ กับ input ผิดรูปแบบอื่น ๆ และไม่ถูก catch โดย default
+- **"`.length` ใกล้เคียงพอกับจำนวน byte จริงสำหรับ header Content-Length"** มันถูกต้องเป๊ะสำหรับ ASCII และผิดแบบเงียบ ๆ สำหรับทุกอย่างที่เหลือ — อาการ (response body ถูกตัดทิ้ง) จะโผล่มาให้เห็นก็ต่อเมื่อข้อความจริงที่มีตัวอักษรไม่ใช่ ASCII ไหลผ่าน code path นั้น
+
+## อ่านโค้ดที่ AI เขียน
+
+body reader ที่ AI เขียนมักจะ implement pattern การเก็บ `data`/`end` ได้ถูกต้อง และก็มักจะข้ามสิ่งเดียวที่ pattern นั้นต้องการเพื่อให้ปลอดภัยจาก client ที่เป็นอันตรายหรือมี bug: size limit
+
+<SpotTheBug code={`function readBody(req) {
+  return new Promise(function (resolve, reject) {
+    let raw = '';
+    req.on('data', function (chunk) { raw += chunk; });
+    req.on('end', function () { resolve(raw); });
+    req.on('error', reject);
+  });
+}
+// Called directly on every incoming request, with no size check anywhere
+`}>
+`readBody` นี้จะ concatenate chunk ได้ไม่จำกัดจำนวน — client ที่ stream body หลาย gigabyte (โดยบังเอิญหรือตั้งใจ) จะทำให้ string `raw` โตขึ้นตลอดเวลา ไม่มีขอบเขตบน ค้าง memory และ event loop จนกว่า process จะ memory หมดหรือ connection ถูกฆ่าจากภายนอก ทางแก้คือ pattern ที่แสดงไว้ก่อนหน้านี้ในบทนี้: ติดตามจำนวน byte สะสมขณะที่ chunk เข้ามา แล้วเมื่อเกิน limit ให้ตอบ `413 Payload Too Large` และเรียก `req.destroy()` เพื่อหยุดอ่านทันที แทนที่จะเชื่อว่า client จะส่ง event `end` มาในที่สุด
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+request body คือ input ที่ไม่น่าเชื่อถือจาก network ในทุกความหมาย — จำกัดขนาดด้วย `req.destroy()` เมื่อ overflow, ห่อ `JSON.parse` ด้วย `try/catch` และใช้ `Buffer.byteLength` เสมอ ไม่ใช่ `.length` ทุกที่ที่คุณประกาศจำนวน byte เอง
+</Callout>
+
 export const jsonApiQuiz = [
   {
     q: 'ทำไมต้องเก็บ request body ด้วย event `data` และ `end` แทนการอ่านแบบ synchronous?',
@@ -170,6 +331,7 @@ export const jsonApiQuiz = [
       'เพราะ Node.js buffer ข้อมูล request ทั้งหมดไว้ก่อนเสมอ',
     ],
     answer: 1,
+    explain: 'request body stream เข้ามาผ่าน socket เป็น chunk ไม่มี API "อ่าน body ทั้งหมด" แบบ synchronous คุณจึงต้องสะสม chunk ผ่าน event data/end',
   },
   {
     q: 'HTTP status code ใดที่ POST endpoint ควรคืนเมื่อสร้าง resource ใหม่สำเร็จ?',
@@ -180,6 +342,7 @@ export const jsonApiQuiz = [
       '202 Accepted',
     ],
     answer: 1,
+    explain: '201 Created บอกชัดเจนว่ามี resource ใหม่เกิดขึ้นแล้ว ซึ่งแม่นยำกว่า 200 OK ทั่วไป',
   },
   {
     q: 'client ส่ง JSON body ที่ invalid มา status code ตอบกลับที่ถูกต้องคืออะไร?',
@@ -190,6 +353,40 @@ export const jsonApiQuiz = [
       '422 Unprocessable Entity',
     ],
     answer: 2,
+    explain: 'JSON ที่ผิดรูปแบบเป็น client error (request เองผิด) ซึ่งเป็นสิ่งที่ช่วง 4xx — โดยเฉพาะ 400 — มีไว้สำหรับ ส่วน 500 สงวนไว้สำหรับความล้มเหลวฝั่ง server เอง',
+  },
+  {
+    q: 'helper `readBody` เก็บ chunk เข้า string โดยไม่มี size check เลย ถูกเรียกตรง ๆ กับทุก request ที่เข้ามา ความเสี่ยงคืออะไร?\n```js\nfunction readBody(req) {\n  return new Promise(function (resolve, reject) {\n    let raw = \'\';\n    req.on(\'data\', function (chunk) { raw += chunk; });\n    req.on(\'end\', function () { resolve(raw); });\n  });\n}\n```',
+    options: [
+      'ไม่มีความเสี่ยง — Node.js จำกัดขนาด request body ไว้ที่ 1 MB โดยอัตโนมัติ',
+      'client สามารถ stream ข้อมูลไม่จำกัดจำนวน ทำให้ memory โตไปเรื่อย ๆ จนกว่า process จะหมด',
+      'มันใช้ได้แค่กับ GET request',
+      'JSON.parse จะปฏิเสธ body ที่เกินขนาดหนึ่งโดยอัตโนมัติ',
+    ],
+    answer: 1,
+    explain: 'ถ้าไม่มีการติดตามขนาดสะสมและเรียก req.destroy() เมื่อเกิน limit ก็ไม่มีอะไรหยุด client จากการส่ง body ที่ใหญ่ไม่จำกัด ซึ่ง handler จะ buffer ไว้ใน memory ตลอดเวลา',
+  },
+  {
+    q: 'ทำไมต้องเรียก `req.destroy()` หลังจากเขียน response 413 ไปแล้ว ไม่ใช่ก่อน?',
+    options: [
+      'เรียกก่อนจะ compile ไม่ผ่าน',
+      'การทำลาย socket ก่อนอาจทำให้ connection ถูกตัดก่อนที่ response body ของ 413 จะไปถึง client เลย',
+      'req.destroy() ส่ง response 413 ให้อัตโนมัติ ดังนั้นเรียก res.end() ก่อนจะขัดแย้งกัน',
+      'ลำดับไม่มีผลอะไร',
+    ],
+    answer: 1,
+    explain: 'req กับ res ใช้ socket เดียวกัน การทำลายมันก่อนที่ response จะถูกเขียนเสี่ยงที่ client จะไม่เห็น 413 เลย — เขียน response ก่อน แล้วค่อยหยุดอ่าน body byte ที่เหลือ',
+  },
+  {
+    q: 'สำหรับ string ไทย `\'สวัสดี\'` ทำไม `Buffer.byteLength(text)` ถึงคืนตัวเลขที่มากกว่า `text.length`?',
+    options: [
+      'Buffer.byteLength รวม null terminator ต่อท้ายด้วย',
+      'text.length นับ UTF-16 code unit ในขณะที่ Buffer.byteLength นับ byte จริงของ UTF-8 และตัวอักษรไทยแต่ละตัวใช้หลาย byte',
+      'text.length เสียสำหรับภาษาที่ไม่ใช่ Latin',
+      'ควรคืนตัวเลขเดียวกันเสมอ ถ้าไม่ใช่แสดงว่ามี bug',
+    ],
+    answer: 1,
+    explain: 'JavaScript string เป็น UTF-16 ภายใน ดังนั้น .length นับ code unit 16-bit ส่วน Buffer.byteLength(str) คำนวณจำนวน byte จริงของ UTF-8 ซึ่งมากกว่าสำหรับตัวอักษร multi-byte ใด ๆ',
   },
 ];
 

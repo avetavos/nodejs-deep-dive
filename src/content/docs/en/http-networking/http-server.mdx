@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## http.createServer
 
@@ -122,6 +124,335 @@ server.listen(0, function() {
 Two rules that will save you from mysterious bugs: (1) Always set the `Content-Type` header so the client knows how to interpret the body — `text/plain`, `text/html`, or `application/json`. (2) Always call `res.end()`. Forgetting it leaves the connection hanging and the client waiting. Node.js will not close the connection for you.
 </Callout>
 
+## Errors on req, res, and the server need a listener
+
+`req`, `res`, and the `Server` itself are all `EventEmitter`s, and an `'error'` event is special: if nothing is listening for it, Node.js **throws** it — which crashes the whole process, not just the one request. Calling `res.end()` a second time is a common way to trigger exactly this: the second call fails asynchronously with `ERR_STREAM_WRITE_AFTER_END`, and with no listener, that error has nowhere to go but up:
+
+export const doubleEndCrashCode = `// @expect-throw
+const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  console.log('handling request - about to call res.end() twice');
+  res.end('first response');
+  res.end('second response'); // BUG: no guard, and no res.on('error', ...) listener
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port).catch(function () {});
+});
+`;
+
+export const doubleEndCrashOut = `handling request - about to call res.end() twice`;
+
+<NodeRunner client:visible code={doubleEndCrashCode} node expected={doubleEndCrashOut} />
+
+Attaching an `'error'` listener to `res` turns that crash into an ordinary, handled event — the process survives, and you get to decide what happens next (log it, close the connection, alert on it):
+
+export const errorListenerFixCode = `const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  res.on('error', function (err) {
+    console.log('res error handled instead of crashing:', err.code);
+  });
+  res.end('first response');
+  res.end('second response'); // still a bug, but no longer fatal
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port)
+    .then(function (r) { return r.text(); })
+    .then(function (text) {
+      console.log('client received:', text);
+      server.close();
+      server.closeAllConnections();
+    });
+});
+`;
+
+export const errorListenerFixOut = `res error handled instead of crashing: ERR_STREAM_WRITE_AFTER_END
+client received: first response`;
+
+<NodeRunner client:visible code={errorListenerFixCode} node expected={errorListenerFixOut} />
+
+An error listener is a safety net, not a fix. The actual fix is to never call `res.end()` twice in the first place — an **early return** right after the first call guarantees that:
+
+```js
+function handleRequest(req, res, hasError) {
+  if (hasError) {
+    res.writeHead(400);
+    res.end('bad request');
+    return; // early return — nothing below this line runs for the error case
+  }
+  res.writeHead(200);
+  res.end('ok');
+}
+
+// Simulate a fake res object just to prove only one end() call happens per branch
+let calls = 0;
+const fakeRes = { writeHead() {}, end() { calls++; } };
+handleRequest(null, fakeRes, true);
+handleRequest(null, fakeRes, false);
+console.log('res.end() was called', calls, 'times for 2 requests (never more than once each)');
+```
+
+<Callout title="This applies to req and the server too">
+The same rule covers `req.on('error', ...)` (a client that disconnects mid-upload) and `server.on('error', ...)` (covered below for `EADDRINUSE`). Any of the three throwing with no listener takes down the entire process — one bad request should never be able to do that.
+</Callout>
+
+## ERR_HTTP_HEADERS_SENT
+
+Once headers are sent — by `res.writeHead()`, or by the first `res.write()`/`res.end()` — they cannot change. Trying anyway throws `ERR_HTTP_HEADERS_SENT` **synchronously**, which makes it easy to catch, unlike the asynchronous crash above:
+
+export const headersSentCode = `const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  res.end('done');
+  try {
+    res.writeHead(500, { 'X-Late': 'true' }); // headers already sent - throws synchronously
+  } catch (err) {
+    console.log('caught:', err.code);
+  }
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port).then(function (r) { return r.text(); }).then(function (text) {
+    console.log('client received:', text);
+    server.close();
+    server.closeAllConnections();
+  });
+});
+`;
+
+export const headersSentOut = `caught: ERR_HTTP_HEADERS_SENT
+client received: done`;
+
+<NodeRunner client:visible code={headersSentCode} node expected={headersSentOut} />
+
+## Content-Length vs. chunked transfer
+
+When a handler calls `res.end(data)` exactly once, Node.js knows the full body size up front and sets `Content-Length` for you. When a handler calls `res.write()` more than once before `res.end()`, Node.js cannot know the total size in advance, so it switches to `Transfer-Encoding: chunked` instead — no `Content-Length` header at all:
+
+export const contentLengthCode = `const http = require('node:http');
+
+const server = http.createServer(function (req, res) {
+  if (req.url === '/fixed') {
+    res.end('hello'); // single end() call - Node can compute Content-Length
+  } else {
+    res.write('hel'); // multiple writes - total length isn't known upfront - chunked
+    res.write('lo');
+    res.end();
+  }
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port + '/fixed').then(function (r) {
+    console.log('/fixed Content-Length:', r.headers.get('content-length'), 'Transfer-Encoding:', r.headers.get('transfer-encoding'));
+    return fetch('http://localhost:' + port + '/chunked');
+  }).then(function (r) {
+    console.log('/chunked Content-Length:', r.headers.get('content-length'), 'Transfer-Encoding:', r.headers.get('transfer-encoding'));
+    server.close();
+    server.closeAllConnections();
+  });
+});
+`;
+
+export const contentLengthOut = `/fixed Content-Length: 5 Transfer-Encoding: null
+/chunked Content-Length: null Transfer-Encoding: chunked`;
+
+<NodeRunner client:visible code={contentLengthCode} node expected={contentLengthOut} />
+
+`Content-Length` must be the exact number of **bytes**, not characters — for text that is pure ASCII those are the same number, but for anything else (Thai text, emoji) they are not. `Buffer.byteLength(str)` gives you the real byte count; the JavaScript string's own `.length` counts UTF-16 code units instead:
+
+```js
+const text = 'สวัสดี'; // Thai greeting - each character is multiple UTF-8 bytes
+console.log('.length (UTF-16 code units):', text.length);
+console.log('Buffer.byteLength (actual UTF-8 bytes):', Buffer.byteLength(text));
+```
+
+If you ever set `Content-Length` by hand instead of letting `res.end(data)` compute it (for example, when streaming a body across multiple writes but still declaring the length upfront), use `Buffer.byteLength`, never `.length` — using `.length` on non-ASCII text declares fewer bytes than you actually send, and clients truncate the body at the declared length.
+
+## Keep-alive and the three timeouts
+
+By default, Node.js keeps a TCP connection open after a response so the client can send another request without a new handshake (`Connection: keep-alive`). Three independent timeouts, each with its own default, bound how long the server will wait:
+
+export const timeoutsCode = `const http = require('node:http');
+const server = http.createServer(function (req, res) { res.end('ok'); });
+console.log('headersTimeout:', server.headersTimeout);
+console.log('requestTimeout:', server.requestTimeout);
+console.log('keepAliveTimeout:', server.keepAliveTimeout);
+`;
+
+export const timeoutsOut = `headersTimeout: 60000
+requestTimeout: 300000
+keepAliveTimeout: 5000`;
+
+<NodeRunner client:visible code={timeoutsCode} node expected={timeoutsOut} />
+
+| Timeout | Default | Bounds |
+|---|---|---|
+| `headersTimeout` | 60,000 ms | How long Node waits for the request headers to fully arrive |
+| `requestTimeout` | 300,000 ms | How long the entire request (headers + body) is allowed to take |
+| `keepAliveTimeout` | 5,000 ms | How long an idle keep-alive connection stays open waiting for the next request |
+
+All three are plain properties you can reassign on the server object before it starts listening. When you need every open socket gone right now — during the tests in this module, or during a shutdown that has waited long enough — `server.closeAllConnections()` forcibly ends every connection, keep-alive or not, instead of waiting out these timeouts.
+
+## EADDRINUSE — the port is already taken
+
+Trying to `listen()` on a port that is already in use does not throw synchronously — it emits an `'error'` event on the server, with a `code` you can check:
+
+export const eaddrinuseCode = `const http = require('node:http');
+const s1 = http.createServer(function (req, res) { res.end('ok'); });
+s1.listen(0, function () {
+  const port = s1.address().port;
+  const s2 = http.createServer(function (req, res) { res.end('ok'); });
+  s2.on('error', function (err) {
+    console.log('second listen failed:', err.code);
+    s1.close();
+    s1.closeAllConnections();
+  });
+  s2.listen(port);
+});
+`;
+
+export const eaddrinuseOut = `second listen failed: EADDRINUSE`;
+
+<NodeRunner client:visible code={eaddrinuseCode} node expected={eaddrinuseOut} />
+
+This is the same rule as the top of this section: `server.on('error', ...)` is what stands between a busy port and an unhandled-exception crash on startup.
+
+## Graceful shutdown on SIGTERM
+
+A process manager (Docker, Kubernetes, systemd) sends `SIGTERM` when it wants your server to stop. Shutting down immediately drops any request currently in flight; a **graceful** shutdown stops accepting new connections but lets the in-flight ones finish first:
+
+<Mermaid title="Graceful shutdown sequence" code={`flowchart TD
+  A["Process receives SIGTERM"] --> B["server.close() - stop accepting new connections"]
+  B --> C{"Any in-flight requests?"}
+  C -->|yes| D["Wait for each in-flight response to finish"]
+  D --> C
+  C -->|no| E["close callback fires - process can exit"]
+  B -.->|timeout fallback| F["closeAllConnections() force-ends stragglers"]
+`} />
+
+export const shutdownCode = `const http = require('node:http');
+
+let inFlight = 0;
+const server = http.createServer(function (req, res) {
+  inFlight++;
+  setTimeout(function () {
+    res.end('slow response done');
+    inFlight--;
+    console.log('in-flight requests remaining:', inFlight);
+  }, 50);
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+
+  // Fire a slow request, then immediately ask the server to shut down
+  fetch('http://localhost:' + port).then(function (r) { return r.text(); }).then(function (text) {
+    console.log('client got:', text);
+  });
+
+  process.once('SIGTERM', function () {
+    console.log('SIGTERM received, draining in-flight requests:', inFlight);
+    server.close(function () {
+      console.log('server closed - all in-flight requests finished first');
+    });
+  });
+
+  setTimeout(function () {
+    process.emit('SIGTERM');
+  }, 10);
+});
+`;
+
+export const shutdownOut = `SIGTERM received, draining in-flight requests: 1
+in-flight requests remaining: 0
+client got: slow response done
+server closed - all in-flight requests finished first`;
+
+<NodeRunner client:visible code={shutdownCode} node expected={shutdownOut} />
+
+`server.close()` alone can hang forever if a client holds a keep-alive connection open with nothing in flight — production code pairs it with a timeout fallback that calls `server.closeAllConnections()` after a fixed grace period, so a shutdown that is taking too long still completes. The *Production Server* lesson at the end of this module wires that fallback in.
+
+## HTTP/2 in a few lines
+
+Node.js also ships `node:http2`, which offers a compatibility API shaped almost exactly like `node:http` — `createServer`, a request listener, `res.writeHead`/`res.end`. This runs over plaintext HTTP/2 (h2c), which is what a same-process demo can speak without TLS certificates:
+
+export const http2TeaserCode = `const http2 = require('node:http2');
+
+const server = http2.createServer(function (req, res) {
+  res.writeHead(200, { 'content-type': 'text/plain' });
+  res.end('hello over h2c');
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  const client = http2.connect('http://localhost:' + port);
+  const req = client.request({ ':path': '/' });
+  let data = '';
+  req.on('data', function (chunk) { data += chunk; });
+  req.on('end', function () {
+    console.log('received over http/2:', data);
+    client.close();
+    server.close();
+  });
+  req.end();
+});
+`;
+
+export const http2TeaserOut = `received over http/2: hello over h2c`;
+
+<NodeRunner client:visible code={http2TeaserCode} node expected={http2TeaserOut} />
+
+Real-world HTTP/2 servers almost always run over TLS (`http2.createSecureServer`) since every major browser only speaks HTTP/2 that way — the plaintext `h2c` mode above exists mainly for internal service-to-service traffic and for demos exactly like this one.
+
+## Mental Model
+
+Every response is a contract with exactly two required steps: send the headers once (`writeHead`, or implicitly on the first `write`/`end`), then send the body and close it once (`end`). Everything in this section is a variation on "what happens when that contract is broken": broken by calling a step twice (`ERR_HTTP_HEADERS_SENT`, the double-`end()` crash), broken by never finishing it (a hanging client, the timeouts), or broken by something outside your handler entirely (`EADDRINUSE` before a single request even arrives). An `'error'` listener does not prevent any of these — it just decides whether breaking the contract takes down one request or the whole process.
+
+## Trade-offs
+
+Handling every error path shown here — `res.on('error')`, `try/catch` around `writeHead`, an `EADDRINUSE` guard, a graceful-shutdown handler — is real code you have to write and maintain for every server, and most of it never fires in normal operation. Skipping it costs nothing until the one time a client disconnects mid-response or a deploy sends `SIGTERM` mid-request, at which point the cost is an unhandled crash or a dropped request in production. There is no free lunch here: frameworks bake in reasonable defaults for exactly these cases, which is a large part of what you are actually paying for when you add one.
+
+## Common Misconceptions
+
+- **"An error inside a request handler only affects that one request."** Only if something is listening for it. An unhandled `'error'` event on `req`, `res`, or the server itself throws and crashes the *entire process* — every other in-flight request goes down with it.
+- **"`ERR_HTTP_HEADERS_SENT` and the double-`res.end()` crash are the same bug."** They are related but distinct: writing headers/body twice throws **synchronously** and is trivially catchable; calling `res.end()` twice fails **asynchronously** as a stream error, which needs an `'error'` listener, not a `try/catch`, to avoid crashing.
+- **"Content-Length is just `str.length`."** Only for pure ASCII text. Any multi-byte character (Thai, emoji, most non-English scripts) makes `.length` (UTF-16 code units) smaller than the real byte count — use `Buffer.byteLength` for anything you declare a length for by hand.
+
+## Reading AI-generated code
+
+AI-generated handlers often end every branch of an `if`/`else` with its own `res.end()` call, which looks safe — until a later edit adds a code path after the `if`/`else` block that assumes the response has not been sent yet, and now `res.end()` gets called a second time.
+
+<SpotTheBug code={`function handleRequest(req, res, isAdmin) {
+  if (isAdmin) {
+    res.writeHead(200);
+    res.end('admin dashboard');
+  } else {
+    res.writeHead(403);
+    res.end('forbidden');
+  }
+
+  // Added later: log every request after handling it
+  console.log('handled', req.url);
+  if (req.url === '/admin/audit') {
+    res.writeHead(200);
+    res.end('audit log'); // BUG: res.end() was already called above for this same request
+  }
+}
+`}>
+Both branches of the original `if`/`else` correctly call `res.end()` exactly once — the bug is the code added later, which assumes it is safe to call `res.writeHead`/`res.end` again for a specific URL, without checking whether the response already finished. For `/admin/audit` (which is also `isAdmin`), `res.end()` now runs twice on the same response, which is exactly the `ERR_STREAM_WRITE_AFTER_END` crash from earlier in this lesson if nothing has a `res.on('error', ...)` listener. Any code added after a response might already be complete needs an early return (or a `res.writableEnded` check) before touching `res` again — never assume "this is the only place that responds."
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`req`, `res`, and the server are EventEmitters whose unhandled `'error'` events crash the whole process — attach listeners, and make every response finish exactly once with an early return instead of hoping later code never runs against an already-sent response.
+</Callout>
+
 export const httpServerQuiz = [
   {
     q: 'What is the purpose of res.end() in a Node.js HTTP server?',
@@ -132,6 +463,7 @@ export const httpServerQuiz = [
       'It sets the HTTP status code',
     ],
     answer: 1,
+    explain: 'res.end() writes the final chunk of the body (if any) and tells Node the response is finished — the server keeps running for other requests.',
   },
   {
     q: 'Which method sets both the status code and response headers at once?',
@@ -142,6 +474,7 @@ export const httpServerQuiz = [
       'res.send()',
     ],
     answer: 2,
+    explain: 'res.writeHead(statusCode, headers) sets both in a single call, before any body data is written.',
   },
   {
     q: 'What happens if you forget to call res.end() in a request handler?',
@@ -152,6 +485,62 @@ export const httpServerQuiz = [
       'The response is sent with an empty body automatically',
     ],
     answer: 2,
+    explain: 'Node never finishes a response on its own — the client keeps waiting until its own timeout (or one of this lesson\'s server-side timeouts) gives up.',
+  },
+  {
+    q: 'A handler calls `res.end()` twice, with no `res.on(\'error\', ...)` listener attached. What happens?\n```js\nconst server = http.createServer(function (req, res) {\n  res.end(\'first\');\n  res.end(\'second\');\n});\n```',
+    options: [
+      'Nothing — the second call is silently ignored',
+      'It throws ERR_HTTP_HEADERS_SENT synchronously, caught automatically by Node',
+      'The second call fails asynchronously with ERR_STREAM_WRITE_AFTER_END, which crashes the process since nothing is listening for the error',
+      'The response body becomes "firstsecond"',
+    ],
+    answer: 2,
+    explain: 'Writing after end() emits an async \'error\' event. With no listener, Node throws it, which crashes the entire process — not just that one request.',
+  },
+  {
+    q: 'What is the default value of `server.keepAliveTimeout`?',
+    options: [
+      '60,000 ms, the same as headersTimeout',
+      '300,000 ms, the same as requestTimeout',
+      '5,000 ms',
+      '0 — keep-alive connections never time out by default',
+    ],
+    answer: 2,
+    explain: 'keepAliveTimeout defaults to 5 seconds — how long an idle keep-alive socket waits for another request before Node closes it. headersTimeout (60s) and requestTimeout (300s) are separate, longer-lived timeouts.',
+  },
+  {
+    q: 'A second server tries to `listen()` on a port another process already has open. What is emitted, and where?',
+    options: [
+      'A synchronous throw from the listen() call itself',
+      "An 'error' event on the server object, with err.code === 'EADDRINUSE'",
+      'A rejected Promise, since listen() returns one',
+      'Nothing — the second server silently queues behind the first',
+    ],
+    answer: 1,
+    explain: "listen() itself does not throw. The failure surfaces asynchronously as an 'error' event on the server, carrying code 'EADDRINUSE' — exactly the kind of error that needs a listener to avoid an unhandled crash.",
+  },
+  {
+    q: 'Why does `res.end(\'hello\')` (single call) send `Content-Length: 5`, while two `res.write()` calls followed by `res.end()` send `Transfer-Encoding: chunked` instead?',
+    options: [
+      'Chunked encoding is always used for responses larger than a few bytes',
+      'With one end() call the full body size is known upfront; with multiple writes it is not, so Node streams it as chunks instead',
+      'It depends on the Content-Type header, not on how many times write() is called',
+      'res.write() is deprecated in favor of res.end(), which is why the size differs',
+    ],
+    answer: 1,
+    explain: 'Node can only compute Content-Length when it sees the entire body at once (a single end(data) call). Multiple write() calls mean the total size is not known in advance, so Node falls back to chunked transfer encoding.',
+  },
+  {
+    q: 'Why should a handler use `Buffer.byteLength(str)` instead of `str.length` when hand-declaring Content-Length for Thai text?',
+    options: [
+      'str.length is deprecated in modern Node.js',
+      'str.length counts UTF-16 code units, which is smaller than the actual UTF-8 byte count for multi-byte characters — declaring it as Content-Length truncates the response',
+      'Buffer.byteLength is faster to compute',
+      'There is no difference; both always return the same number',
+    ],
+    answer: 1,
+    explain: 'For Thai text (or any non-ASCII script), one character can take multiple UTF-8 bytes but only one UTF-16 code unit. Using str.length as Content-Length understates the real byte count, and clients cut the body off early.',
   },
 ];
 

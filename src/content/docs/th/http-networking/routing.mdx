@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Routing คืออะไร?
 
@@ -123,6 +124,64 @@ console.log(match.pathname.groups.id);                          // '42'
 console.log(userRoute.test('http://localhost:3000/posts/1'));   // false
 ```
 
+## URLPattern ใน router จริง พร้อม 404 กับ 405
+
+route หนึ่งอาจมีอยู่จริงสำหรับ path หนึ่ง แต่ไม่รองรับ method ที่ client ใช้ — นี่เป็นสถานการณ์ที่ต่างจาก path ที่ไม่มีอยู่เลย และควรได้ status code ที่ต่างกัน: **404** แปลว่า "ไม่มี path นี้" ส่วน **405 Method Not Allowed** แปลว่า "path นี้มีอยู่ แต่ไม่รองรับ verb นี้" (และควรมี header `Allow` บอกว่ารองรับ method อะไรบ้าง):
+
+export const urlPatternRoutingCode = `const http = require('node:http');
+
+const routes = [
+  { pattern: new URLPattern({ pathname: '/users/:id' }), methods: { GET: getUser } },
+];
+
+function getUser(req, res, groups) {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ id: groups.id }));
+}
+
+const server = http.createServer(function (req, res) {
+  const url = 'http://localhost' + req.url;
+  for (const route of routes) {
+    const match = route.pattern.exec(url);
+    if (!match) continue;
+    const handler = route.methods[req.method];
+    if (!handler) {
+      res.writeHead(405, { 'Content-Type': 'text/plain', Allow: Object.keys(route.methods).join(', ') });
+      res.end('405 Method Not Allowed');
+      return;
+    }
+    handler(req, res, match.pathname.groups);
+    return;
+  }
+  res.writeHead(404, { 'Content-Type': 'text/plain' });
+  res.end('404 Not Found');
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  const base = 'http://localhost:' + port;
+  Promise.all([
+    fetch(base + '/users/42').then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); }),
+    fetch(base + '/users/42', { method: 'DELETE' }).then(function (r) { return { status: r.status, allow: r.headers.get('allow') }; }),
+    fetch(base + '/unknown').then(function (r) { return { status: r.status }; }),
+  ]).then(function (results) {
+    console.log('GET /users/42:', results[0]);
+    console.log('DELETE /users/42:', results[1]);
+    console.log('GET /unknown:', results[2]);
+    server.close();
+    server.closeAllConnections();
+  });
+});
+`;
+
+export const urlPatternRoutingOut = `GET /users/42: { status: 200, body: { id: '42' } }
+DELETE /users/42: { status: 405, allow: 'GET' }
+GET /unknown: { status: 404 }`;
+
+<NodeRunner client:visible code={urlPatternRoutingCode} node expected={urlPatternRoutingOut} />
+
+`/users/42` match กับ pattern ทั้งสำหรับ `GET` และ `DELETE` — ความต่างอยู่แค่ในการ lookup ที่สอง คือ `route.methods[req.method]` นั่นแหละคือสิ่งที่ทำให้ 405 เป็นไปได้ตรงนี้: โค้ดรู้อยู่แล้วว่า path match ตั้งแต่ก่อนที่จะพบว่า method ไม่ match
+
 ## Tiny router object
 
 เมื่อมี route มากกว่าสองสามอัน ควร extract ออกมาเป็น router map pattern นี้คือสิ่งที่ Express ใช้ภายใน:
@@ -183,6 +242,48 @@ server.listen(0, function() {
 Express, Fastify, Hono และ web framework ของ Node.js ทุกตัวสร้างบน pattern นี้พอดี การ `app.get('/path', handler)` ของพวกเขาเป็นแค่ API ที่สวยงามกว่าบนพื้นฐานของการ check `req.method` + `req.url` แบบเดียวกัน การเข้าใจ model ดิบนี้หมายความว่าคุณจะไม่สับสนกับสิ่งที่ framework ใดทำ
 </Callout>
 
+## Mental Model
+
+router คือตาราง lookup ที่มีสอง key ซึ่งเช็คตามลำดับที่แน่นอน: เช็ค **path** ก่อน (มีอะไร match รูปแบบ URL นี้บ้างไหม?) แล้วค่อยเช็ค **method** (สิ่งที่ match นั้นรองรับ verb นี้ไหม?) การเช็คทั้งสองพร้อมกันด้วย key รวมตัวเดียว — `'GET /users'` เป็น string เดียว — ยุบการตัดสินใจสองขั้นตอนนั้นให้เหลือขั้นตอนเดียว ซึ่งนั่นแหละคือเหตุผลที่ tiny router object ด้านบนแยก "ไม่มี path นี้" กับ "verb ผิดสำหรับ path นี้" ไม่ออก: ทั้งคู่ตกลงไปที่ branch `else` เดียวกัน
+
+## Trade-offs
+
+การ lookup ด้วย key รวม (`method + ' ' + path`) ใช้โค้ดน้อยที่สุดและอ่านง่ายมากสำหรับ route คงที่ไม่กี่อัน — จนกว่าคุณจะต้องการ parameter (`/users/:id`) หรือ response 405 ตอนนั้นคุณต้อง match path กับ method เป็นสองขั้นตอนแยกกัน ซึ่งเป็นโค้ดมากกว่า map เดิม `URLPattern` ให้การจับ parameter จริงและโครงสร้างสองขั้นตอนแบบฟรี ๆ แต่มันเป็น global ที่ใหม่กว่า (Node 24+) — route table แบบในบทนี้ย้ายไป Node เวอร์ชันไหนหรือ router ของ framework ไหนก็ได้ง่าย ๆ ในขณะที่โค้ด `URLPattern` ยังไม่ใช่สิ่งที่คุณสมมติได้ว่าทุก runtime รองรับ
+
+## Common Misconceptions
+
+- **"404 คือ response ที่ถูกต้องเสมอเมื่อ route lookup ล้มเหลว"** จริงเฉพาะเมื่อ *path* เองไม่ match เลย ถ้า path match แต่ method ไม่รองรับ status code ที่ถูกต้องคือ 405 พร้อม header `Allow` — 404 บอก client ว่า "เลิกลอง URL นี้" ส่วน 405 บอกว่า "ลอง verb อื่นที่นี่"
+- **"parameter ของ URLPattern ถูก validate ให้อัตโนมัติ"** มันถูกจับมาเป็น string เฉย ๆ ไม่มีอะไรมากกว่านั้น — `/users/:id` match กับ `/users/abc` ได้พอ ๆ กับ `/users/42` การ validate ว่า group ที่จับมาหน้าตาเหมือน ID จริงยังเป็นหน้าที่ของ handler อยู่ดี
+- **"router ที่เขียนเองมี fragile กว่า router ของ framework โดยธรรมชาติ"** การตัดสินใจพื้นฐาน (match path แล้วค่อย match method) เหมือนกันทั้งคู่ — framework ส่วนใหญ่แค่เพิ่มความสะดวก (middleware, การแปลง parameter, wildcard/catch-all route) บน lookup สองขั้นตอนแบบเดียวกัน
+
+## อ่านโค้ดที่ AI เขียน
+
+router ที่ AI เขียนมักจะ key route ด้วย `method + path` เป็น string เดียว ซึ่งอ่านง่ายสำหรับ happy path และให้ status code ผิดแบบเงียบ ๆ ทันทีที่ path ถูกเรียกด้วย method ที่ไม่รองรับ
+
+<SpotTheBug code={`const routes = {
+  'GET /users': listUsers,
+  'POST /users': createUser,
+};
+
+const server = http.createServer(function (req, res) {
+  const key = req.method + ' ' + new URL(req.url, 'http://x').pathname;
+  const handler = routes[key];
+  if (handler) {
+    handler(req, res);
+  } else {
+    res.writeHead(404);
+    res.end('Not found');
+  }
+});
+// A DELETE request to /users returns 404, as if the route didn't exist at all
+`}>
+`/users` เป็น resource จริง — `GET` และ `POST` ถูกกำหนดไว้ทั้งคู่ — แต่ `DELETE /users` ไม่มีอยู่ใน map เลยตกไปที่ branch `else` เดียวกับ request ไปยัง path ที่ไม่เคยถูกกำหนดไว้เลย เช่น `/completely-unknown` ทั้งคู่ได้ 404 ซึ่งบอก client ว่า path เองผิด client ไม่มีทางรู้เลยว่า path จริง ๆ ถูกต้อง มีแค่ verb เท่านั้นที่เป็นปัญหา ทางแก้คือ lookup ด้วย path ก่อน แล้วเช็คว่า route ที่ match รองรับ method ของ request หรือไม่ — คืน 405 พร้อม header `Allow` เมื่อไม่รองรับ เหมือนตัวอย่าง `URLPattern` ก่อนหน้านี้ในบทนี้เป๊ะ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Routing คือสอง lookup ไม่ใช่หนึ่ง: match path ก่อน แล้วค่อย match method — การยุบให้เหลือ key รวมตัวเดียวคือสิ่งที่ทำให้ "ไม่มี route นี้" กับ "verb ผิดสำหรับ route นี้" แยกไม่ออก ทั้งที่ควรคืน 404 กับ 405 ตามลำดับ
+</Callout>
+
 export const routingQuiz = [
   {
     q: 'สอง property ของ request object ที่ใช้ตัดสินใจ routing คืออะไร?',
@@ -193,6 +294,7 @@ export const routingQuiz = [
       'req.endpoint และ req.action',
     ],
     answer: 1,
+    explain: 'req.method (HTTP verb) และ req.url (path บวก query string ถ้ามี) คือสองส่วนของ request ขาเข้าที่การตัดสินใจของ router ทุกอันตั้งอยู่บนมัน',
   },
   {
     q: '`new URL(req.url, "http://localhost")` ให้อะไรคุณ?',
@@ -203,6 +305,7 @@ export const routingQuiz = [
       'HTTP client ที่ configured สำหรับ localhost',
     ],
     answer: 2,
+    explain: 'URL constructor parse req.url (ซึ่งเป็นแค่ path ไม่ใช่ URL เต็ม) กับ base ที่ให้มา ทำให้คุณได้ .pathname และ .searchParams แทนที่จะต้อง slice string เอง',
   },
   {
     q: 'router ควรคืน HTTP status code ใดเมื่อไม่มี route ตรงกัน?',
@@ -213,6 +316,29 @@ export const routingQuiz = [
       '404 Not Found',
     ],
     answer: 3,
+    explain: '404 Not Found คือ response ที่ถูกต้องเมื่อ path ที่ request มาไม่มี route ใด match เลย',
+  },
+  {
+    q: 'มี route สำหรับ `/users/:id` ที่รองรับแค่ GET client ส่ง `DELETE /users/42` มา server ควรตอบด้วยอะไร?\n```js\nconst match = route.pattern.exec(url);\nconst handler = route.methods[req.method];\n// route.methods = { GET: getUser }\n```',
+    options: [
+      '200 OK เพราะ path match แล้ว',
+      '404 Not Found เพราะไม่มี handler สำหรับ request นี้เป๊ะ ๆ',
+      '405 Method Not Allowed พร้อม header Allow ที่บอก GET',
+      '500 Internal Server Error',
+    ],
+    answer: 2,
+    explain: 'path match แล้ว (route.pattern.exec สำเร็จ) แต่ method ไม่ match — นี่คือกรณีที่ 405 มีไว้เพื่อสิ่งนี้พอดี แตกต่างจาก path ที่ไม่เคย match เลย',
+  },
+  {
+    q: 'ทำไมการ key route table ด้วย `req.method + \' \' + pathname` เป็น string รวมตัวเดียว ถึงทำให้คืน 405 ไม่ได้เลย?',
+    options: [
+      'เพราะ template literal ใส่ space ไม่ได้',
+      'เพราะ key รวมที่หายไปจะหน้าตาเหมือนกันไม่ว่า path จะไม่รู้จักหรือ path รู้จักแต่ method ผิด — ทั้งคู่แค่ lookup ไม่เจอเหมือนกัน',
+      'เพราะ res.writeHead ไม่รองรับ status code 405',
+      'ไม่จริง — 405 ใช้ได้ปกติกับ key รวม',
+    ],
+    answer: 1,
+    explain: 'key รวมตัวเดียวยุบคำถามสองข้อ (path มีอยู่ไหม? รองรับ method นี้ไหม?) ให้เหลือ lookup เดียว ดังนั้นเมื่อ lookup ไม่เจอจึงบอกไม่ได้ว่าคำถามข้อไหนล้มเหลว — ต้องเช็ค path กับ method เป็นสองขั้นตอนแยกกันถึงจะแยก 404 กับ 405 ออกจากกันได้',
   },
 ];
 
