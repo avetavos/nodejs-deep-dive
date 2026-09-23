@@ -1,0 +1,198 @@
+---
+title: 'The review checklist'
+description: 'One page, six groups, every item a linked question — plus a copy-pasteable short version and a one-line grep for the fastest-to-spot patterns.'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+The *index* lesson gave the reading order; the *AI bug catalog* gave 24 concrete patterns. This page turns both into one checklist you can actually run against a diff, grouped into the same six areas the rest of this course uses: event loop & async, streams & resources, HTTP boundaries, modules & packages, errors & process, and testing & tooling. Every item links to the lesson that explains the "why" in full.
+
+### Event loop & async
+
+- Is every `Promise`-returning call either `await`ed or given an explicit `.catch()`? See [Async/Await](/nodejs/en/event-loop-async/async-await/).
+- Does anything pass an `async` callback to `Array.prototype.forEach`, `.map()` used for side effects, or a similar method that never awaits its callback? See [Async/Await](/nodejs/en/event-loop-async/async-await/).
+- Does a `Promise.all(...)` run over a list whose length is not bounded by the code itself (user input, a full table scan)? See [Promises](/nodejs/en/event-loop-async/promises/).
+- Is `setTimeout(fn, 0)` used anywhere `setImmediate` or `process.nextTick` more accurately describes when the work should actually run? See [libuv and the Threadpool](/nodejs/en/event-loop-async/libuv-and-threadpool/).
+- Does any synchronous work — a busy loop, `readFileSync`, a large `JSON.parse` — run inside a path that also needs to serve other requests concurrently? See [Call Stack](/nodejs/en/event-loop-async/call-stack/).
+
+### Streams & resources
+
+- Does every `EventEmitter`-based object (a server, a socket, a custom class) have an `'error'` listener registered? See [EventEmitter](/nodejs/en/core-apis/events/).
+- Are listeners registered once and removed when their resource is torn down, rather than added fresh on every request? See [EventEmitter](/nodejs/en/core-apis/events/).
+- Does every `.pipe()` call have an explicit error-handling plan, or would `stream.pipeline()` be the safer choice? See [Pipe & Pipeline](/nodejs/en/streams/pipe-pipeline/).
+- Are incoming chunks decoded independently with `.toString()`, instead of through a `StringDecoder` or full accumulation first? See [Buffer](/nodejs/en/core-apis/buffer/).
+- Is `Buffer.concat([...])` called once per incoming chunk inside a loop, instead of once at the end over a collected array? See [Buffer](/nodejs/en/core-apis/buffer/).
+
+### HTTP boundaries
+
+- Is every `res.end()` call guarded (`if (res.writableEnded) return;` or equivalent) so it can never fire twice for one response? See [HTTP Server](/nodejs/en/http-networking/http-server/).
+- Are all headers set before the first `res.write()`/`res.end()`, never after? See [HTTP Server](/nodejs/en/http-networking/http-server/).
+- Is the request body size-limited before it is fully buffered? See [JSON API](/nodejs/en/http-networking/json-api/).
+- Is every `JSON.parse` on untrusted input wrapped in a `try`/`catch` that returns a clean `400`? See [JSON API](/nodejs/en/http-networking/json-api/).
+- Does every `fetch` call check `response.ok` before trusting the body, and pass an explicit timeout (`AbortSignal.timeout(...)`)? See [Requests](/nodejs/en/http-networking/requests/).
+
+### Modules & packages
+
+- Does the file mix `require()`/`import`, or reference `__dirname`/`__filename` inside a `.mjs`/ESM file? See [Modules](/nodejs/en/js-essentials/modules/).
+- Is there a committed lockfile, and does the Dockerfile run `npm ci` rather than `npm install`? See [Dependencies](/nodejs/en/modules-npm/dependencies/).
+- In `package.json`'s `exports` map, does a specific condition like `types` come *before* generic ones like `default`? See [package.json](/nodejs/en/modules-npm/package-json/).
+
+### Errors & process
+
+- Does the code call `process.exit()` anywhere it could instead return normally or set `process.exitCode`? See [process.env](/nodejs/en/core-apis/process-env/).
+- Is `console.log` carrying information a log pipeline needs to parse, instead of one structured JSON object per line? See [Debugging](/nodejs/en/testing-tooling/debugging/).
+- Does any `child_process.exec`, `eval`, or `new Function` call run on a string assembled from untrusted input? See [Security Model](/nodejs/en/runtime-internals/security-model/).
+- Is a value from `process.env` compared or used arithmetically without first converting it from a string? See [process.env](/nodejs/en/core-apis/process-env/).
+
+### Testing & tooling
+
+- Does every `test()` block contain at least one assertion that is actually reached? See [Built-in Test Runner](/nodejs/en/testing-tooling/node-test/).
+- Is every `mock.method`/`mock.fn` applied at the same call site the code under test actually uses, not a reference captured earlier? See [Built-in Test Runner](/nodejs/en/testing-tooling/node-test/).
+- Do any tests depend on real timers finishing instead of `mock.timers` with an explicit `tick()`? See [Built-in Test Runner](/nodejs/en/testing-tooling/node-test/).
+
+## The one-command grep pass
+
+None of the checklist above requires reading every line first — most of it can be narrowed down with one `grep` over a diff or a whole source tree, using the exact strings this course's catalog keys on:
+
+```bash
+grep -rnE "forEach\(async|readFileSync|\.pipe\(|process\.exit\(|catch *\{\}|shell: *true|exec\(|eval\(|JSON\.parse\(|res\.end\(" src/
+```
+
+<NodeRunner client:visible code={grepDemoCode} node expected={grepDemoOut} />
+
+export const grepDemoCode = `const buggyFile = "items.forEach(async function (x) { await save(x); });\\n" +
+  "const data = fs.readFileSync(path);\\n" +
+  "source.pipe(dest);\\n" +
+  "process.exit(1);\\n";
+
+const patterns = [/forEach\\(async/, /readFileSync/, /\\.pipe\\(/, /process\\.exit\\(/];
+
+for (const p of patterns) {
+  console.log(p.source + ':', p.test(buggyFile));
+}
+`;
+
+export const grepDemoOut = `forEach\\(async: true
+readFileSync: true
+\\.pipe\\(: true
+process\\.exit\\(: true`;
+
+Every one of the four patterns in this small sample matches — the same regular expressions the one-liner above uses, just run as JavaScript instead of shell `grep` for a runnable demo. A real grep hit is not proof of a bug (a `.pipe()` call might already have careful error handling elsewhere), only a place to slow down and check against the matching checklist item.
+
+## The short version
+
+Paste this into a PR description or a review comment as a starting checklist — six lines, no links, meant to be checked off by hand:
+
+```text
+[ ] Every promise awaited or .catch()-ed; no forEach(async ...); Promise.all has a bound
+[ ] Every EventEmitter/stream has an 'error' listener; listeners removed, not accumulated
+[ ] Every res.end() guarded against firing twice; body size limited; JSON.parse try/catch'd; fetch checks .ok + timeout
+[ ] No require/import mixing, no __dirname in ESM; lockfile committed; exports specific-before-generic
+[ ] No process.exit() mid-flight; structured logs, not console.log; no exec()/eval() on untrusted strings
+[ ] Every test() has a reached assertion; mocks applied at the real call site; no real-timer tests
+```
+
+## Mental Model
+
+A checklist is a compressed, reusable form of the reading habits from the *index* lesson — each item exists because a real pattern in the *AI bug catalog* has bitten someone before. It speeds up a review; it does not replace reading the code the checklist cannot yet anticipate.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| The full six-group checklist | Traces every item back to a lesson with the full explanation | Long enough that skimming it under time pressure defeats the point |
+| The six-line short version | Fast enough to actually paste into every PR | Compresses away the "why," so a reviewer who disagrees with an item has to go look it up anyway |
+| The one-line grep | Finds the fastest, most literal hits in seconds, even across a huge diff | Only catches patterns with a stable, greppable string — most of the catalog's "none — only a human" patterns have no such string |
+
+## Common Misconceptions
+
+- **"Passing the grep means the diff is clean."** The grep pass finds only the patterns that have a stable string to search for — roughly a third of the *AI bug catalog*'s 24 patterns. The rest need an actual read.
+- **"A checklist this long is slower than just reading the code carefully."** For a reviewer who has internalized the *index* lesson's four habits, the checklist is a fast cross-check afterward, not a replacement for reading — used well, it takes seconds per item because the reviewer already knows what to look for.
+- **"If an item isn't on this checklist, it isn't worth checking."** This checklist mirrors one catalog of 24 known patterns; a codebase's specific domain (payments, auth, PII) always has boundary and suppression risks a generic checklist cannot enumerate in advance.
+
+## Reading AI-generated code
+
+Run the grep pass first, then work through the six groups in order for anything grep did not already flag — the same triage a reviewer uses on the *AI bug catalog* itself, just condensed into checkboxes instead of full explanations.
+
+<SpotTheBug code={`// Reviewer's note: "grep found nothing, so this file is clean."
+async function chargeCustomer(order) {
+  const total = order.items.reduce(function (sum, item) { return sum + item.price; }, 0);
+  return billingClient.charge(order.customerId, total); // no timeout, no .ok-equivalent check, no retry limit
+}
+
+chargeCustomer(currentOrder); // BUG: floating promise -- not forEach-shaped, so the grep list never catches it
+`}>
+None of the ten grep strings this lesson lists appear anywhere in this file — no `forEach(async`, no `exec(`, no `catch {}`. But `chargeCustomer(currentOrder);` at the bottom is a completely ordinary floating promise: if `billingClient.charge` ever rejects (a declined card, a network error), nothing catches it, and the process crashes on an unhandled rejection. The checklist's event-loop-and-async group item — "is every Promise-returning call either awaited or given an explicit `.catch()`?" — still catches this on a real read, which is exactly why the grep pass is a first pass, never the whole review.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+The grep pass and the six-group checklist are a fast first cut through a diff, built from real patterns in this course's catalog — but roughly a third of that catalog has no greppable string at all, so the checklist narrows the reading, it never replaces it.
+</Callout>
+
+export const checklistQuiz = [
+  {
+    q: 'The one-line grep in this lesson would find `readFileSync` and `process.exit(` in a diff. Which of the AI bug catalog\'s 24 patterns would it never find on its own, no matter how carefully the regex is tuned?',
+    options: [
+      'A double res.end() call',
+      'A floating promise created by a plain function call with no forEach, .then, or other greppable shape around it',
+      'JSON.parse with no surrounding try/catch',
+      'exec() called with a string built from user input',
+    ],
+    answer: 1,
+    explain: 'A floating promise is just an ordinary function call with no await -- there is no distinctive string to grep for the way there is for res.end( or exec(. Finding it requires actually reading whether the call\'s result is awaited or handled.',
+  },
+  {
+    q: 'Why does this lesson provide both a full six-group checklist and a six-line short version?',
+    options: [
+      'The short version replaces the full one entirely once you have memorized it',
+      'The full version traces each item back to the lesson that explains why it matters; the short version trades that explanation for something fast enough to actually paste into every PR',
+      'They check completely different things',
+      'The short version is only for beginners',
+    ],
+    answer: 1,
+    explain: 'Both check the same 24 underlying concerns. The full version is the reference with links; the short version is the practical, repeatable artifact meant to actually get used under time pressure.',
+  },
+  {
+    q: '```js\nasync function chargeCustomer(order) {\n  return billingClient.charge(order.customerId, order.total);\n}\nchargeCustomer(order);\n```\nWhich checklist item from the "Event loop & async" group catches this file, even though it contains none of the one-line grep\'s ten strings?',
+    options: [
+      '"Does the file mix require()/import, or reference __dirname inside ESM?"',
+      '"Is every Promise-returning call either awaited or given an explicit .catch()?"',
+      '"Is the request body size-limited before it is fully buffered?"',
+      '"Does every test() block contain at least one assertion that is actually reached?"',
+    ],
+    answer: 1,
+    explain: 'chargeCustomer(order); is a floating promise -- exactly the shape the "awaited or .catch()-ed" checklist item is written to catch, independent of whether any grep string appears in the file.',
+  },
+  {
+    q: 'Why is "the grep pass found nothing" not the same claim as "this diff has no bugs from the catalog"?',
+    options: [
+      'The grep pass is actually exhaustive -- this is a trick question',
+      'Roughly a third of the 24 catalog patterns (like a plain floating promise, or a Promise.all with no visible bound) have no single stable string to grep for at all',
+      'grep only works on files smaller than 100 lines',
+      'The grep pass only checks comments, never real code',
+    ],
+    answer: 1,
+    explain: 'The ten grep strings key on the patterns that happen to have a literal, stable textual signature. Patterns defined by absence (no await, no bound, no assertion) or by structure rather than text do not have one.',
+  },
+  {
+    q: 'A reviewer checks off every item in the six-line short version for a diff in under a minute, without reading the diff itself first. What does a clean checklist result actually prove?',
+    options: [
+      'The diff is provably free of every bug in the AI bug catalog',
+      'The diff does not exhibit any of the specific patterns the checklist happens to enumerate -- it says nothing about bugs outside that list, or about items the reviewer checked too quickly to verify honestly',
+      'The diff is now guaranteed to be production-ready',
+      'Nothing -- checklists have no value without reading every line first',
+    ],
+    answer: 1,
+    explain: 'A checklist is only as good as the honesty and thoroughness of each check -- ticking a box without actually verifying the corresponding code is worse than not having the checklist, since it creates false confidence that a real review already happened.',
+  },
+];
+
+<Quiz client:visible id="reading-node/review-checklist" questions={checklistQuiz} />
+
+<ProgressTracker client:visible id="reading-node/review-checklist" />

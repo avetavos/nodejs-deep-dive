@@ -1,0 +1,192 @@
+---
+title: How to read Node.js you did not write
+description: 'A reading order for unfamiliar Node.js code — follow the event loop, follow every lifetime, follow the boundaries, count the suppressions.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+Every earlier module in this course taught you to *write* Node.js. This module teaches the other half of the job: reading Node.js code someone — or something — else wrote, and deciding whether it actually does what it looks like it does. An AI assistant hands you a file that runs without throwing, looks exactly like the idiomatic examples you have studied, and is still wrong. "It ran and printed the right thing once" is not the same as correct — Node's event loop, its stream lifetimes, and its untyped boundaries all hide failure modes that only show up under load, on a slow connection, or the second time a listener fires. The four habits below are the order experienced Node reviewers actually read code in, and every later lesson in this module drills one of them.
+
+## Follow the event loop: what blocks, what is awaited
+
+Before trusting a file's logic, work out what actually runs synchronously and what gets deferred:
+
+- **What blocks the whole process?** `readFileSync`, a tight synchronous loop, `JSON.parse` on a huge string, `crypto` calls without their async form — all of these hold the single thread hostage, so every other request, timer, and callback waits behind them.
+- **What is awaited, and what merely returns a promise?** A call to an `async function` with no `await` in front of it still runs — it just runs concurrently with whatever comes next, and the caller has already moved on before it settles.
+- **What order do `nextTick`, microtasks, `setImmediate`, and `setTimeout` actually run in?** Code that looks top-to-bottom sequential on the page can interleave in an order that only makes sense once you know the event loop actually schedules these separately, not by reading position.
+
+## Follow every lifetime
+
+Every stream, socket, and listener has a beginning and — if the code is correct — an end. Reading a file well means finding both for each one:
+
+- Does every `http.createServer` response call `res.end()` exactly once, on every code path (including errors)?
+- Does every stream that is opened (`fs.createReadStream`, a socket, a child process) get closed or destroyed on both the success path and the error path, or only on success?
+- Does every `.on('event', handler)` registration have a matching removal, or does it accumulate a new listener on every request — the classic `MaxListenersExceededWarning` shape?
+
+## Follow the boundaries
+
+A boundary is any place data enters the program from somewhere the type system and the language cannot see ahead of time: `process.env`, an HTTP request body, `process.argv`, a file read from disk, a value from a database driver. Reading a boundary well means asking, for each one:
+
+- Is the value actually validated (right type, right shape, right range) before the rest of the program trusts it, or does it flow straight into logic that assumes it is already correct?
+- `process.env.PORT` is always a `string` or `undefined` — has the code coerced it to a number, and does it handle the case where the variable is missing entirely?
+- Is a request body size-limited before it is buffered, or can an unbounded upload grow memory without limit?
+
+## Count the suppressions
+
+Before judging a file's overall quality, count every empty `catch {}`, every `.catch(() => {})`, and every `process.on('uncaughtException', ...)` or `process.on('unhandledRejection', ...)` handler that logs and continues instead of failing loudly. Each one is a place the author decided an error should disappear instead of surfacing — sometimes for a genuinely safe reason (a best-effort cache write), and sometimes because a bug was silenced during development and never revisited. A file with zero suppressions that runs clean under `node --test` and `--trace-warnings` has actually been exercised. A file with five silent catches proves almost nothing about what happens when something really does go wrong.
+
+<NodeRunner client:visible code={readingOrderCode} />
+
+export const readingOrderCode = `// @browser
+function processOrder(order) {
+  console.log('start processing', order.id);
+  setTimeout(function () { console.log('inventory checked for', order.id); }, 0);
+  Promise.resolve().then(function () { console.log('payment charged for', order.id); });
+  console.log('order queued', order.id);
+}
+
+processOrder({ id: 1 });
+console.log('main done');
+`;
+
+Reading this top to bottom suggests "process, check inventory, charge payment, queue, done" — five steps, in that order. The real order is `start processing 1`, `order queued 1`, `main done`, `payment charged for 1`, `inventory checked for 1`: the synchronous lines finish first, then the microtask (the `Promise.resolve().then`) runs before the macrotask (the `setTimeout`), regardless of the `0` delay. Reading order and execution order are not the same thing, and the *Event Loop & Async* module's [microtasks vs. macrotasks](/nodejs/en/event-loop-async/microtasks-macrotasks/) lesson covers exactly why.
+
+## Mental Model
+
+<Mermaid code={`flowchart TD
+  A["Read the file"] --> B["Follow the event loop -- what blocks, what is awaited, what order do nextTick/microtask/setImmediate/setTimeout run in?"]
+  B --> C["Follow every lifetime -- does every stream/socket/listener that opens also close, on every path?"]
+  C --> D["Follow the boundaries -- env, request body, argv, disk, DB: validated, or just trusted?"]
+  D --> E["Count the suppressions -- empty catch, swallowed rejection, silent uncaughtException handler"]
+  E --> F["Only now: judge correctness"]`} title="Reading order for Node.js you did not write" />
+
+```text
+Reading order for Node.js you did not write:
+
+1. Event loop     -> what blocks the process, what is awaited, what actually runs first?
+2. Lifetimes      -> every stream/socket/listener that opens: does it also close, on every path?
+3. Boundaries     -> env / body / argv / disk / DB: validated, or just trusted?
+4. Suppressions   -> how many catch blocks make an error disappear instead of surfacing?
+
+Code that runs once without throwing answers none of these on its own.
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Reading the event loop order first | Catches interleaving bugs (a callback firing later than the code's layout suggests) before you trust the logic | Requires holding scheduling rules in your head, not just reading top to bottom |
+| Following lifetimes explicitly | Catches leaked listeners and streams left open on the error path, which only show up under sustained load | Slower than assuming a `try`/`finally` or a `.on('close', ...)` you glanced at is complete |
+| Following boundaries | Catches untrusted input reaching logic that assumes it is already valid | Requires checking every entry point, not just the ones that look suspicious |
+| Counting suppressions | Turns "does this feel safe" into a number you can compare across files or PRs | A raw count has no severity weighting — one silenced `uncaughtException` outweighs ten defensive empty catches around a logging call |
+
+## Common Misconceptions
+
+- **"It ran without throwing, so it's correct."** Every pattern in this module's catalog runs without throwing on its happy path — that is exactly what makes each one dangerous. A clean run proves the demo input didn't trigger the bug, not that the bug is absent.
+- **"Async code runs in the order it's written."** `async`/`await` and promises make async code *read* sequentially; they do not make unrelated async operations (a timer next to a promise, two unawaited calls) execute in that reading order.
+- **"If a human wrote it, it doesn't need this scrutiny; only AI code does."** Every pattern in this module's catalog also appears in human-written Node.js — AI just produces it at a much higher and more confident-looking volume, with comments that make the shortcut look deliberate.
+- **"A try/catch around the whole function means every error path is handled."** A `catch` that only logs and returns a default value has *handled* the error in the sense that the process didn't crash, but it may have also hidden a bug that should have failed the request instead of silently returning wrong data.
+
+## Reading AI-generated code
+
+When a reviewer opens an AI-generated diff, this module's order becomes a checklist:
+
+1. Grep the diff for `readFileSync`, `forEach(async`, `.then(`, `setTimeout`, `process.env`, `catch {}`, `.catch(() => {})`, `process.on('uncaughtException'` — every hit is a place to slow down.
+2. For each stream, socket, or listener the diff opens, confirm there is a matching close/destroy/removal on every code path, including the error path.
+3. For every value read from `process.env`, a request body, `process.argv`, or disk, confirm it is validated before logic trusts its type and shape.
+4. If the diff's tests pass and `node --trace-warnings` prints nothing, treat that as "no warning fired on this input," not "no bug exists."
+
+<SpotTheBug code={`async function loadConfig(path) {
+  try {
+    const raw = await fs.readFile(path, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}`}>
+The empty `catch {}` treats every possible failure the same way: a missing config file, a permissions error, a config file that exists but contains invalid JSON, and a disk I/O error all silently become `{}`. The caller cannot tell "there genuinely is no config, defaults are fine" apart from "the config exists and is broken, and the program is about to run with silently wrong settings." The fix is to only default on the specific, expected case (file not found) and let everything else surface: check `err.code === 'ENOENT'` before returning `{}`, and rethrow (or log loudly) for anything else — including a `JSON.parse` failure, which almost always means a human needs to fix the file, not silently get empty defaults.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Read the event loop order, follow every lifetime to its close, follow every boundary to its validation, and count the suppressions — code that ran once without throwing has told you almost nothing about whether it is correct.
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: '```js\nconsole.log(\'a\');\nsetTimeout(() => console.log(\'b\'), 0);\nPromise.resolve().then(() => console.log(\'c\'));\nconsole.log(\'d\');\n```\nWhat does this print, in order?',
+    options: [
+      'a, b, c, d',
+      'a, d, c, b',
+      'a, d, b, c',
+      'a, c, d, b',
+    ],
+    answer: 1,
+    explain: 'The two synchronous console.log calls (a, d) run first. Then the microtask queue drains before the next macrotask, so the resolved promise\'s .then (c) runs before the setTimeout callback (b), even with a 0ms delay.',
+  },
+  {
+    q: 'A code review finds an `http.createServer` handler that calls `res.end()` on the success path but not inside its `catch` block. What is the most likely symptom under load?',
+    options: [
+      'Nothing — Node always ends the response automatically',
+      'Requests that hit the catch block hang until the client times out, since no response is ever sent',
+      'The server crashes immediately on the first error',
+      'The response is sent twice',
+    ],
+    answer: 1,
+    explain: 'A response is a lifetime with a beginning (the request arriving) and an end (res.end()). If the error path never reaches res.end(), that connection just hangs from the client\'s perspective — a lifetime that opened but never closed.',
+  },
+  {
+    q: 'Why is `process.env.PORT` unsafe to pass directly to `server.listen(process.env.PORT)` without checking it first?',
+    options: [
+      'process.env.PORT is always a number in Node.js',
+      'process.env.PORT is a string or undefined — an unset variable means listen() receives undefined, and a non-numeric value means it receives an invalid string',
+      'server.listen() does not accept a port argument at all',
+      'Environment variables cannot be read inside an HTTP server',
+    ],
+    answer: 1,
+    explain: 'Every value in process.env is a string (or absent). Reading it as a boundary means checking that it is present and parses to a valid port number before trusting it, rather than assuming the deployment environment always sets it correctly.',
+  },
+  {
+    q: 'What does an empty `catch {}` block around a `JSON.parse` call hide that a `catch (err) { if (err.code !== \'ENOENT\') throw err; }` around a file read would not?',
+    options: [
+      'Nothing — both are equally safe',
+      'The empty catch treats "file missing" and "file exists but contains invalid JSON" identically, silently returning a default in both cases instead of surfacing the second one as a real bug',
+      'JSON.parse never throws, so the catch block is unreachable',
+      'The narrower catch is slower at runtime',
+    ],
+    answer: 1,
+    explain: 'An unconditional empty catch swallows every kind of failure the same way. Checking the error before deciding to suppress it (or not) is what lets a genuinely expected case (no config file yet) stay silent while an unexpected one (corrupt config) still surfaces.',
+  },
+  {
+    q: 'A reviewer sees a request handler register a fresh `db.on(\'error\', handler)` listener on every incoming request, with no matching `.off()`. What is the first symptom to expect after enough requests?',
+    options: [
+      'The server slows down gradually with no warning at all',
+      'A `MaxListenersExceededWarning`, and eventually each future db error firing every accumulated handler once',
+      'The process crashes immediately on the second request',
+      'Node automatically removes duplicate listeners for the same event name',
+    ],
+    answer: 1,
+    explain: 'EventEmitter warns once a single event name passes its default max-listener threshold (10) on one emitter. Past that, nothing crashes by itself, but every future error event fires every accumulated handler, which is its own kind of bug.',
+  },
+  {
+    q: 'Why does this module\'s reading order put "follow the event loop" before "judge correctness," rather than just running the file and checking the output once?',
+    options: [
+      'Because running code is never a reliable way to check it',
+      'Because a single run only exercises one interleaving and one set of inputs — the same file can behave differently under a slower disk, a larger payload, or a second call to the same listener-adding code',
+      'Because Node.js code cannot be run outside of a browser',
+      'There is no real reason — it is just this course\'s style',
+    ],
+    answer: 1,
+    explain: 'A demo run proves the chosen input didn\'t trigger a given bug on that occasion — it does not prove the bug is absent. Reading the scheduling, the lifetimes, the boundaries, and the suppressions finds classes of bugs that a single successful run cannot rule out.',
+  },
+];
+
+<Quiz client:visible id="reading-node/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="reading-node/index" />

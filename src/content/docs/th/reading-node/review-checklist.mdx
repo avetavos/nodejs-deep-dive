@@ -1,0 +1,198 @@
+---
+title: 'Checklist สำหรับรีวิวโค้ด'
+description: 'หน้าเดียว หกหมวด ทุกข้อเป็นคำถามที่ลิงก์ไปยังบทเรียน พร้อมเวอร์ชันสั้นที่ copy-paste ได้ และ grep บรรทัดเดียวสำหรับ pattern ที่หาเจอง่ายที่สุด'
+sidebar:
+  order: 3
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+บท *index* ให้ลำดับการอ่าน บท *AI bug catalog* ให้ 24 pattern ที่เป็นรูปธรรม หน้านี้แปลงทั้งสองอย่างให้เป็น checklist เดียวที่รันกับ diff จริงได้ แบ่งเป็นหกหมวดเดียวกับที่คอร์สนี้ใช้ทั่วทั้งเนื้อหา: event loop & async, streams & resources, HTTP boundaries, modules & packages, errors & process, และ testing & tooling ทุกข้อลิงก์ไปยังบทที่อธิบาย "ทำไม" ไว้แบบเต็ม ๆ
+
+### Event loop & async
+
+- ทุก call ที่คืน `Promise` ถูก `await` หรือมี `.catch()` ที่ชัดเจนแนบไว้หรือไม่? ดู [Async/Await](/nodejs/th/event-loop-async/async-await/)
+- มีจุดไหนส่ง `async` callback ให้ `Array.prototype.forEach`, `.map()` ที่ใช้เพื่อ side effect, หรือ method ที่คล้ายกันซึ่งไม่เคย await callback ของมันหรือไม่? ดู [Async/Await](/nodejs/th/event-loop-async/async-await/)
+- มี `Promise.all(...)` ที่รันบน list ที่ตัวโค้ดเองไม่ได้จำกัดความยาวไว้ (input จากผู้ใช้, การ scan ทั้งตาราง) หรือไม่? ดู [Promises](/nodejs/th/event-loop-async/promises/)
+- มีการใช้ `setTimeout(fn, 0)` ตรงไหนที่ `setImmediate` หรือ `process.nextTick` อธิบายจังหวะเวลาที่ต้องการได้ถูกต้องกว่าหรือไม่? ดู [libuv and the Threadpool](/nodejs/th/event-loop-async/libuv-and-threadpool/)
+- มีงาน synchronous (busy loop, `readFileSync`, `JSON.parse` ขนาดใหญ่) รันอยู่ใน path ที่ต้องให้บริการ request อื่นพร้อมกันด้วยหรือไม่? ดู [Call Stack](/nodejs/th/event-loop-async/call-stack/)
+
+### Streams & resources
+
+- ทุก object ที่เป็น `EventEmitter` (server, socket, class ของคุณเอง) มี listener `'error'` ลงทะเบียนไว้หรือไม่? ดู [EventEmitter](/nodejs/th/core-apis/events/)
+- listener ถูกลงทะเบียนครั้งเดียวและลบออกเมื่อทรัพยากรของมันถูกทำลาย แทนที่จะเพิ่มใหม่ทุกครั้งที่มี request หรือไม่? ดู [EventEmitter](/nodejs/th/core-apis/events/)
+- ทุกการเรียก `.pipe()` มีแผนจัดการ error ที่ชัดเจน หรือควรใช้ `stream.pipeline()` แทนเพื่อความปลอดภัยกว่าหรือไม่? ดู [Pipe & Pipeline](/nodejs/th/streams/pipe-pipeline/)
+- chunk ที่เข้ามาถูก decode แยกกันด้วย `.toString()` แทนที่จะผ่าน `StringDecoder` หรือสะสมให้ครบก่อนหรือไม่? ดู [Buffer](/nodejs/th/core-apis/buffer/)
+- `Buffer.concat([...])` ถูกเรียกครั้งละหนึ่ง chunk ข้างใน loop แทนที่จะเรียกครั้งเดียวตอนท้ายบน array ที่สะสมไว้หรือไม่? ดู [Buffer](/nodejs/th/core-apis/buffer/)
+
+### HTTP boundaries
+
+- ทุกการเรียก `res.end()` มี guard (`if (res.writableEnded) return;` หรือเทียบเท่า) เพื่อไม่ให้มันทำงานซ้ำสองครั้งสำหรับ response เดียวหรือไม่? ดู [HTTP Server](/nodejs/th/http-networking/http-server/)
+- header ทั้งหมดถูกตั้งก่อน `res.write()`/`res.end()` ครั้งแรกเสมอ ไม่ใช่หลังจากนั้นหรือไม่? ดู [HTTP Server](/nodejs/th/http-networking/http-server/)
+- ขนาดของ request body ถูกจำกัดก่อนที่จะถูก buffer จนครบหรือไม่? ดู [JSON API](/nodejs/th/http-networking/json-api/)
+- ทุก `JSON.parse` บน input ที่ไม่น่าเชื่อถือถูกครอบด้วย `try`/`catch` ที่คืน `400` อย่างสะอาดหรือไม่? ดู [JSON API](/nodejs/th/http-networking/json-api/)
+- ทุกการเรียก `fetch` เช็ก `response.ok` ก่อนเชื่อ body และส่ง timeout ที่ชัดเจน (`AbortSignal.timeout(...)`) หรือไม่? ดู [Requests](/nodejs/th/http-networking/requests/)
+
+### Modules & packages
+
+- ไฟล์นี้ปน `require()`/`import` กัน หรืออ้างอิง `__dirname`/`__filename` ข้างในไฟล์ `.mjs`/ESM หรือไม่? ดู [Modules](/nodejs/th/js-essentials/modules/)
+- มี lockfile ที่ commit ไว้ และ Dockerfile ใช้ `npm ci` แทน `npm install` หรือไม่? ดู [Dependencies](/nodejs/th/modules-npm/dependencies/)
+- ใน `exports` map ของ `package.json` เงื่อนไขที่เจาะจงอย่าง `types` มาก่อนเงื่อนไขทั่วไปอย่าง `default` หรือไม่? ดู [package.json](/nodejs/th/modules-npm/package-json/)
+
+### Errors & process
+
+- โค้ดเรียก `process.exit()` ตรงจุดไหนที่จริง ๆ แล้วสามารถ return ตามปกติหรือตั้ง `process.exitCode` แทนได้หรือไม่? ดู [process.env](/nodejs/th/core-apis/process-env/)
+- `console.log` กำลังบรรทุกข้อมูลที่ log pipeline ต้อง parse แทนที่จะเป็น JSON object โครงสร้างเดียวต่อบรรทัดหรือไม่? ดู [Debugging](/nodejs/th/testing-tooling/debugging/)
+- มีการเรียก `child_process.exec`, `eval`, หรือ `new Function` บน string ที่ประกอบจาก input ที่ไม่น่าเชื่อถือหรือไม่? ดู [Security Model](/nodejs/th/runtime-internals/security-model/)
+- ค่าจาก `process.env` ถูกเทียบหรือใช้ทางคณิตศาสตร์โดยไม่แปลงจาก string ก่อนหรือไม่? ดู [process.env](/nodejs/th/core-apis/process-env/)
+
+### Testing & tooling
+
+- ทุก block `test()` มี assertion อย่างน้อยหนึ่งตัวที่ถูกเรียกถึงจริงหรือไม่? ดู [Built-in Test Runner](/nodejs/th/testing-tooling/node-test/)
+- ทุก `mock.method`/`mock.fn` ถูกใช้ที่จุดเรียกเดียวกับที่โค้ดที่ทดสอบใช้จริง ไม่ใช่ reference ที่จับไว้ก่อนหน้าหรือไม่? ดู [Built-in Test Runner](/nodejs/th/testing-tooling/node-test/)
+- มี test ไหนที่พึ่งพา timer จริงให้ทำงานจนเสร็จ แทนที่จะใช้ `mock.timers` พร้อม `tick()` ที่ชัดเจนหรือไม่? ดู [Built-in Test Runner](/nodejs/th/testing-tooling/node-test/)
+
+## รอบ grep คำสั่งเดียว
+
+ไม่มีข้อไหนใน checklist ข้างบนที่ต้องอ่านทุกบรรทัดก่อน — ส่วนใหญ่สามารถกรองให้แคบลงได้ด้วย `grep` คำสั่งเดียวบน diff หรือทั้ง source tree โดยใช้ string ตรง ๆ ที่แคตตาล็อกของคอร์สนี้ยึดอยู่
+
+```bash
+grep -rnE "forEach\(async|readFileSync|\.pipe\(|process\.exit\(|catch *\{\}|shell: *true|exec\(|eval\(|JSON\.parse\(|res\.end\(" src/
+```
+
+<NodeRunner client:visible code={grepDemoCode} node expected={grepDemoOut} />
+
+export const grepDemoCode = `const buggyFile = "items.forEach(async function (x) { await save(x); });\\n" +
+  "const data = fs.readFileSync(path);\\n" +
+  "source.pipe(dest);\\n" +
+  "process.exit(1);\\n";
+
+const patterns = [/forEach\\(async/, /readFileSync/, /\\.pipe\\(/, /process\\.exit\\(/];
+
+for (const p of patterns) {
+  console.log(p.source + ':', p.test(buggyFile));
+}
+`;
+
+export const grepDemoOut = `forEach\\(async: true
+readFileSync: true
+\\.pipe\\(: true
+process\\.exit\\(: true`;
+
+ทั้งสี่ pattern ในตัวอย่างเล็ก ๆ นี้ match ทั้งหมด — เป็น regular expression ตัวเดียวกับที่ one-liner ข้างบนใช้ เพียงแต่รันเป็น JavaScript แทน shell `grep` เพื่อให้เป็น demo ที่รันได้จริง การ grep เจอไม่ใช่หลักฐานว่ามี bug (การเรียก `.pipe()` อาจมีการจัดการ error ที่รอบคอบอยู่แล้วที่อื่น) เป็นแค่จุดที่ต้องหยุดดูให้ดีเทียบกับ checklist ข้อที่ตรงกัน
+
+## เวอร์ชันสั้น
+
+วางอันนี้ลงใน PR description หรือ review comment เป็น checklist เริ่มต้น — หกบรรทัด ไม่มีลิงก์ ไว้ให้ติ๊กด้วยมือ
+
+```text
+[ ] Every promise awaited or .catch()-ed; no forEach(async ...); Promise.all has a bound
+[ ] Every EventEmitter/stream has an 'error' listener; listeners removed, not accumulated
+[ ] Every res.end() guarded against firing twice; body size limited; JSON.parse try/catch'd; fetch checks .ok + timeout
+[ ] No require/import mixing, no __dirname in ESM; lockfile committed; exports specific-before-generic
+[ ] No process.exit() mid-flight; structured logs, not console.log; no exec()/eval() on untrusted strings
+[ ] Every test() has a reached assertion; mocks applied at the real call site; no real-timer tests
+```
+
+## Mental Model
+
+checklist คือรูปแบบย่อที่ใช้ซ้ำได้ของนิสัยการอ่านจากบท *index* — แต่ละข้อมีอยู่เพราะ pattern จริงใน *AI bug catalog* เคยกัดใครสักคนมาแล้ว มันช่วยให้รีวิวเร็วขึ้น แต่ไม่ได้แทนที่การอ่านโค้ดในส่วนที่ checklist ยังคาดไม่ถึง
+
+## Trade-offs
+
+| แนวทาง | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| checklist เต็มหกหมวด | โยงทุกข้อกลับไปยังบทที่อธิบายเต็ม ๆ | ยาวพอที่การอ่านผ่าน ๆ ภายใต้แรงกดดันด้านเวลาจะทำลายจุดประสงค์ของมันเอง |
+| เวอร์ชันสั้นหกบรรทัด | เร็วพอที่จะวางลงใน PR ได้จริงทุกครั้ง | บีบอัด "ทำไม" ออกไป ทำให้ reviewer ที่ไม่เห็นด้วยกับข้อไหนต้องไปหาคำตอบเองอยู่ดี |
+| grep บรรทัดเดียว | หาจุดที่ตรงและเร็วที่สุดได้ในไม่กี่วินาที แม้กับ diff ขนาดใหญ่ | จับได้แค่ pattern ที่มี string ที่เสถียรและ grep ได้ — ส่วนใหญ่ของ pattern แบบ "ไม่มี — ต้องใช้คนเท่านั้น" ในแคตตาล็อกไม่มี string แบบนั้น |
+
+## Common Misconceptions
+
+- **"grep ผ่านแปลว่า diff สะอาด"** รอบ grep หาได้แค่ pattern ที่มี string เสถียรให้ค้นหา — ประมาณหนึ่งในสามของ 24 pattern ใน *AI bug catalog* ส่วนที่เหลือต้องอ่านจริง
+- **"checklist ยาวขนาดนี้ช้ากว่าแค่อ่านโค้ดให้ละเอียดเอง"** สำหรับ reviewer ที่ซึมซับนิสัยสี่ข้อจากบท *index* แล้ว checklist เป็นแค่การเช็กไขว้ที่เร็วในภายหลัง ไม่ใช่สิ่งทดแทนการอ่าน — ใช้ให้ดีจะใช้เวลาแค่ไม่กี่วินาทีต่อข้อ เพราะ reviewer รู้อยู่แล้วว่าต้องมองหาอะไร
+- **"ถ้าข้อไหนไม่อยู่ใน checklist นี้ แปลว่าไม่ต้องเช็ก"** checklist นี้สะท้อนแคตตาล็อกเดียวของ 24 pattern ที่รู้จักกันแล้ว โดเมนเฉพาะของ codebase หนึ่ง ๆ (payment, auth, PII) มักมีความเสี่ยงด้านขอบเขตข้อมูลและจุดกลืน error ที่ checklist ทั่วไปไม่มีทางระบุไว้ล่วงหน้าได้ครบ
+
+## อ่านโค้ดที่ AI เขียน
+
+รันรอบ grep ก่อน แล้วไล่ทำตามหกหมวดตามลำดับสำหรับสิ่งที่ grep ยังไม่ได้ flag ไว้ — เป็น triage แบบเดียวกับที่ reviewer ใช้กับตัว *AI bug catalog* เอง เพียงแต่ย่อให้เหลือแค่ checkbox แทนคำอธิบายเต็ม ๆ
+
+<SpotTheBug code={`// Reviewer's note: "grep found nothing, so this file is clean."
+async function chargeCustomer(order) {
+  const total = order.items.reduce(function (sum, item) { return sum + item.price; }, 0);
+  return billingClient.charge(order.customerId, total); // no timeout, no .ok-equivalent check, no retry limit
+}
+
+chargeCustomer(currentOrder); // BUG: floating promise -- not forEach-shaped, so the grep list never catches it
+`}>
+ไม่มี string ทั้งสิบตัวที่ grep ของบทนี้ระบุไว้ปรากฏในไฟล์นี้เลย — ไม่มี `forEach(async`, ไม่มี `exec(`, ไม่มี `catch {}` แต่ `chargeCustomer(currentOrder);` ที่บรรทัดล่างสุดเป็น floating promise ธรรมดามาก: ถ้า `billingClient.charge` reject เมื่อไร (บัตรถูกปฏิเสธ, network error) ไม่มีอะไรจับมันเลย และโปรเซสจะ crash จาก unhandled rejection checklist ข้อในหมวด event-loop-and-async — "ทุก call ที่คืน Promise ถูก await หรือมี .catch() ที่ชัดเจนแนบไว้หรือไม่?" — ยังคงจับสิ่งนี้ได้จากการอ่านจริง ซึ่งนั่นแหละคือเหตุผลที่รอบ grep เป็นแค่รอบแรก ไม่ใช่การรีวิวทั้งหมด
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+รอบ grep และ checklist หกหมวดคือการตัดผ่าน diff รอบแรกที่รวดเร็ว สร้างจาก pattern จริงในแคตตาล็อกของคอร์สนี้ — แต่ประมาณหนึ่งในสามของแคตตาล็อกนั้นไม่มี string ให้ grep เลย checklist จึงแค่ช่วยจำกัดขอบเขตการอ่าน ไม่เคยแทนที่มัน
+</Callout>
+
+export const checklistQuiz = [
+  {
+    q: 'The one-line grep in this lesson would find `readFileSync` and `process.exit(` in a diff. Which of the AI bug catalog\'s 24 patterns would it never find on its own, no matter how carefully the regex is tuned?',
+    options: [
+      'Double res.end() call',
+      'floating promise ที่เกิดจากการเรียกฟังก์ชันธรรมดา ไม่มี forEach, .then, หรือรูปแบบอื่นที่ grep ได้เลย',
+      'JSON.parse ที่ไม่มี try/catch ล้อมรอบ',
+      'exec() ที่ถูกเรียกด้วย string ที่ประกอบจาก user input',
+    ],
+    answer: 1,
+    explain: 'floating promise เป็นแค่การเรียกฟังก์ชันธรรมดาที่ไม่มี await -- ไม่มี string ที่เด่นชัดให้ grep แบบที่ res.end( หรือ exec( มี การหามันต้องอ่านจริงว่าผลลัพธ์ของ call ถูก await หรือจัดการหรือไม่',
+  },
+  {
+    q: 'Why does this lesson provide both a full six-group checklist and a six-line short version?',
+    options: [
+      'เวอร์ชันสั้นแทนที่เวอร์ชันเต็มไปเลยเมื่อจำได้แล้ว',
+      'เวอร์ชันเต็มโยงแต่ละข้อกลับไปยังบทที่อธิบายว่าทำไมมันสำคัญ ส่วนเวอร์ชันสั้นแลกคำอธิบายนั้นเพื่อความเร็วที่วางลงใน PR ได้จริงทุกครั้ง',
+      'ทั้งสองเช็กสิ่งที่ต่างกันโดยสิ้นเชิง',
+      'เวอร์ชันสั้นมีไว้สำหรับมือใหม่เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'ทั้งสองเช็กความกังวลพื้นฐานเดียวกันทั้ง 24 ข้อ เวอร์ชันเต็มเป็นเอกสารอ้างอิงพร้อมลิงก์ ส่วนเวอร์ชันสั้นเป็นสิ่งที่ใช้ซ้ำได้จริงในทางปฏิบัติ ตั้งใจให้ถูกใช้จริงภายใต้แรงกดดันด้านเวลา',
+  },
+  {
+    q: '```js\nasync function chargeCustomer(order) {\n  return billingClient.charge(order.customerId, order.total);\n}\nchargeCustomer(order);\n```\nWhich checklist item from the "Event loop & async" group catches this file, even though it contains none of the one-line grep\'s ten strings?',
+    options: [
+      '"ไฟล์นี้ปน require()/import กัน หรืออ้างอิง __dirname ข้างในไฟล์ ESM หรือไม่?"',
+      '"ทุก call ที่คืน Promise ถูก await หรือมี .catch() ที่ชัดเจนแนบไว้หรือไม่?"',
+      '"ขนาดของ request body ถูกจำกัดก่อนที่จะถูก buffer จนครบหรือไม่?"',
+      '"ทุก block test() มี assertion อย่างน้อยหนึ่งตัวที่ถูกเรียกถึงจริงหรือไม่?"',
+    ],
+    answer: 1,
+    explain: 'chargeCustomer(order); เป็น floating promise -- ตรงกับรูปแบบที่ checklist ข้อ "await หรือมี .catch() แนบไว้" ถูกเขียนขึ้นมาเพื่อจับพอดี ไม่ว่าไฟล์นั้นจะมี string จาก grep ปรากฏอยู่หรือไม่ก็ตาม',
+  },
+  {
+    q: 'Why is "the grep pass found nothing" not the same claim as "this diff has no bugs from the catalog"?',
+    options: [
+      'รอบ grep ครอบคลุมทุกอย่างจริง ๆ อยู่แล้ว -- นี่เป็นคำถามหลอก',
+      'ประมาณหนึ่งในสามของ 24 pattern ในแคตตาล็อก (เช่น floating promise ธรรมดา หรือ Promise.all ที่ไม่มีขอบเขตให้เห็น) ไม่มี string เดียวที่เสถียรพอให้ grep ได้เลย',
+      'grep ทำงานได้แค่กับไฟล์ที่สั้นกว่า 100 บรรทัด',
+      'รอบ grep เช็กแค่ comment เท่านั้น ไม่เคยเช็กโค้ดจริง',
+    ],
+    answer: 1,
+    explain: 'string ทั้งสิบตัวของ grep ยึดกับ pattern ที่บังเอิญมีลายเซ็นข้อความที่ชัดเจนและเสถียร pattern ที่นิยามด้วยการ "ไม่มี" (ไม่มี await, ไม่มีขอบเขต, ไม่มี assertion) หรือด้วยโครงสร้างแทนที่จะเป็นข้อความ ไม่มีลายเซ็นแบบนั้น',
+  },
+  {
+    q: 'A reviewer checks off every item in the six-line short version for a diff in under a minute, without reading the diff itself first. What does a clean checklist result actually prove?',
+    options: [
+      'diff นี้ปลอดจาก bug ทุกตัวใน AI bug catalog อย่างพิสูจน์ได้',
+      'diff นี้ไม่แสดง pattern เฉพาะที่ checklist ระบุไว้เท่านั้น -- มันไม่ได้บอกอะไรเกี่ยวกับ bug นอกลิสต์นั้น หรือเกี่ยวกับข้อที่ reviewer ติ๊กเร็วเกินกว่าจะตรวจสอบอย่างจริงจัง',
+      'diff นี้พร้อมสำหรับ production แล้วอย่างแน่นอน',
+      'ไม่มีอะไรเลย -- checklist ไม่มีคุณค่าเลยถ้าไม่อ่านทุกบรรทัดก่อน',
+    ],
+    answer: 1,
+    explain: 'checklist ดีได้แค่เท่าที่ความซื่อสัตย์และความละเอียดของการเช็กแต่ละข้อ -- การติ๊กช่องโดยไม่ตรวจสอบโค้ดที่เกี่ยวข้องจริงแย่กว่าไม่มี checklist เลยด้วยซ้ำ เพราะมันสร้างความมั่นใจปลอม ๆ ว่ามีการรีวิวจริงเกิดขึ้นแล้ว',
+  },
+];
+
+<Quiz client:visible id="reading-node/review-checklist" questions={checklistQuiz} />
+
+<ProgressTracker client:visible id="reading-node/review-checklist" />

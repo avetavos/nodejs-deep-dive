@@ -1,0 +1,750 @@
+---
+title: 'แคตตาล็อก bug ที่ AI มักเขียน'
+description: '24 pattern ที่ AI assistant มักเลือกใช้โดยดีฟอลต์ใน Node.js — โค้ดที่ผิด, อาการจริงที่สังเกตได้, วิธีแก้, และเครื่องมือ (ถ้ามี) ที่จับมันได้'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+ทุก pattern ด้านล่างคือโค้ดที่ AI assistant เขียนด้วยความมั่นใจจริง ๆ — หน้าตาเหมือนโค้ดที่ถูกต้อง รันได้กับ input ตัวอย่าง และผิดในแบบที่จะโผล่มาก็ต่อเมื่อใช้ input อื่น, ดิสก์ช้าลง, หรือมี load ต่อเนื่อง แต่ละรายการให้ snippet ที่ผิด, อาการจริงที่จับได้จากการรันจริงบน Node 24.13 (crash, ค่าที่ผิด, หรือ warning ที่ดักจับได้ — ไม่มีการแต่งขึ้นเอง), วิธีแก้, และเครื่องมือใดใน ladder ของคอร์สนี้ที่จับมันได้: `node --test`, `--trace-warnings`, พฤติกรรม crash เริ่มต้นของ unhandled rejection, กฎของ `eslint-plugin-n`/`eslint-plugin-promise`, `npm audit`, หรือ "ไม่มี — ต้องใช้คนเท่านั้น" บท *Verification Tools* จะแปลงลิสต์นี้เป็นตารางที่รันกับ diff จริงได้
+
+### Event loop & async
+
+**1. ลืม `await`** การเรียก `async function` โดยไม่มี `await` ก็ยังคงรันอยู่ — เพียงแค่มันคืนค่า `Promise` แทนค่าที่ resolve แล้ว และผู้เรียกได้เดินหน้าต่อไปแล้ว
+
+<NodeRunner client:visible code={forgottenAwaitCode} node expected={forgottenAwaitOut} />
+
+export const forgottenAwaitCode = `async function getUser(id) {
+  return { id: id, name: 'Ada' };
+}
+
+function printUser(id) {
+  const user = getUser(id); // BUG: missing await -- user is a Promise, not the resolved object
+  console.log('user:', user.name);
+}
+
+printUser(1);
+`;
+
+export const forgottenAwaitOut = `user: undefined`;
+
+ไม่มี crash ไม่มี warning — แค่ค่าที่ผิดอย่างเงียบ ๆ ซึ่งนั่นแหละคือสิ่งที่ทำให้ pattern นี้อันตราย วิธีแก้คือ `async function printUser(id) { const user = await getUser(id); ... }` **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (หรือ test ที่ assert รูปร่างค่าที่ resolve จริง) ไม่มี lint rule ที่ติดตั้งใน ladder ของคอร์สนี้ตรวจจับ `await` ที่หายไปใน JavaScript ธรรมดาที่ไม่มี type information ได้ ดู [Async/Await](/nodejs/th/event-loop-async/async-await/)
+
+**2. `forEach(async ...)`** `Array.prototype.forEach` ไม่เคย await ค่าที่ callback คืนกลับมาเลย — มันยิงทุก call แล้วเดินหน้าต่อทันที
+
+```js
+async function processAll(ids) {
+  ids.forEach(async function (id) {
+    await new Promise(function (r) { setTimeout(r, 10); });
+    console.log('done', id);
+  });
+  console.log('all done'); // BUG: prints before any "done" line, not after
+}
+
+processAll([1, 2, 3]);
+```
+
+```text
+all done
+done 1
+done 2
+done 3
+```
+
+ผู้เรียก `processAll` ไม่มีทางรู้ว่างานเสร็จจริงเมื่อไร — `console.log('all done')` รันก่อนที่ item ไหนจะถูกประมวลผลด้วยซ้ำ วิธีแก้คือ loop `for...of` ที่มี `await` ข้างใน (ทีละตัว) หรือ `await Promise.all(ids.map(...))` (พร้อมกัน แต่ยังคง await) **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** ไม่มีกฎใน `eslint-plugin-n`/`eslint-plugin-promise` ที่ตรวจจับ async callback ที่ส่งให้ `forEach` ดู [Async/Await](/nodejs/th/event-loop-async/async-await/)
+
+**3. Floating promise → unhandled rejection** promise ที่ reject แล้วไม่มีใครแนบ `.catch` (หรือ `try`/`await`) ให้ จะทำให้โปรเซส crash โดยดีฟอลต์ตั้งแต่ Node 15
+
+```js
+// @expect-throw
+async function saveRecord(record) {
+  if (!record.id) throw new Error('missing id');
+  return record;
+}
+
+function handleSave(record) {
+  saveRecord(record); // BUG: floating promise, its rejection is never caught
+  console.log('save queued');
+}
+
+handleSave({});
+```
+
+```text
+save queued
+Error: missing id
+    at saveRecord (...)
+```
+
+วิธีแก้: `saveRecord(record).catch(function (err) { console.error('save failed:', err.message); });` **เครื่องมือ: กฎ `promise/catch-or-return` ของ eslint-plugin-promise** ตรวจจับ call ที่คืน promise แล้วไม่มี `.catch`/`.then` แนบไว้; ตัว crash เองก็เป็นพฤติกรรมดีฟอลต์ของ Node อยู่แล้ว — ไม่ต้องใช้ flag `--unhandled-rejections=strict` ตั้งแต่ Node 15 ดู [Promises](/nodejs/th/event-loop-async/promises/)
+
+**4. `Promise.all` ที่ไม่จำกัด concurrency** `Promise.all(items.map(fn))` เริ่มทุก call พร้อมกันหมด — สำหรับ 10 รายการไม่มีปัญหา แต่สำหรับ 10,000 รายการอาจทำให้ socket, memory, หรือ rate limit หมดพร้อมกันหมด
+
+<NodeRunner client:visible code={unboundedConcurrencyCode} node expected={unboundedConcurrencyOut} />
+
+export const unboundedConcurrencyCode = `let active = 0;
+let maxActive = 0;
+async function fakeFetch(id) {
+  active++;
+  maxActive = Math.max(maxActive, active);
+  await new Promise(function (r) { setTimeout(r, 5); });
+  active--;
+  return id;
+}
+
+async function fetchAll(ids) {
+  return Promise.all(ids.map(function (id) { return fakeFetch(id); })); // BUG: no concurrency limit
+}
+
+fetchAll([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).then(function () {
+  console.log('max concurrent requests:', maxActive);
+});
+`;
+
+export const unboundedConcurrencyOut = `max concurrent requests: 10`;
+
+ทั้งสิบตัวยิงพร้อมกันหมด วิธีแก้คือ worker pool เล็ก ๆ: worker จำนวนคงที่แต่ละตัวดึง item ถัดไปจาก index ที่ใช้ร่วมกัน ทำให้มี call ทำงานพร้อมกันไม่เกิน `limit` ตัว **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (การทดสอบ load ด้วย `autocannon` หรือเหตุการณ์จริงใน production เท่านั้นที่จะเปิดเผยมัน ไม่ใช่ lint rule — ดู *Verification Tools*) ดู [Promises](/nodejs/th/event-loop-async/promises/)
+
+**5. `setTimeout(fn, 0)` ในที่ที่ควรใช้ `setImmediate`/`process.nextTick`** ทั้งสามตัวจัดตารางงานในเฟสที่ต่างกันพร้อมการรับประกันที่ต่างกัน การถือว่า `setTimeout(fn, 0)` แปลว่า "รันตัวนี้ถัดไป" เป็นสมมติฐานที่พบบ่อยแต่ผิด
+
+```js
+import { readFile } from 'node:fs';
+
+readFile(new URL(import.meta.url), function () {
+  setTimeout(function () { console.log('timeout (setTimeout 0)'); }, 0);
+  setImmediate(function () { console.log('immediate (setImmediate)'); }); // scheduled second, but the check phase always runs before the next timers phase inside an I/O callback
+});
+```
+
+```text
+immediate (setImmediate)
+timeout (setTimeout 0)
+```
+
+ภายใน I/O callback `setImmediate` *รับประกัน* ว่าจะรันก่อน timer ใด ๆ เสมอ ไม่ว่าจะถูกจัดลำดับไว้อย่างไร — ตรงข้ามกับสิ่งที่โครงสร้างโค้ดบอก **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** นี่เป็นทางเลือกด้าน semantics ของการจัดตารางเวลา ไม่ใช่สิ่งที่ linter ตรวจจับได้ ดู [libuv and the Threadpool](/nodejs/th/event-loop-async/libuv-and-threadpool/)
+
+### Streams & resources
+
+**6. งาน CPU แบบ synchronous ข้างใน request handler** server แบบ single-threaded ทำได้ทีละอย่างเท่านั้น — บล็อก synchronous ใน handler เดียวจะบล็อก request อื่นที่กำลังทำงานอยู่ด้วย
+
+```js
+function busySleep(ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {}
+}
+
+const log = [];
+
+function handleHeavy() {
+  log.push('start heavy');
+  busySleep(30); // BUG: blocks the event loop -- nothing else can run meanwhile
+  log.push('end heavy');
+}
+
+function handleFast() {
+  log.push('fast');
+}
+
+setImmediate(handleHeavy);
+setImmediate(handleFast);
+setImmediate(function () { console.log(log.join(' -> ')); });
+```
+
+```text
+start heavy -> end heavy -> fast
+```
+
+`handleFast` (request ที่สองซึ่งไม่เกี่ยวข้องกันใน server จริง) รันไม่ได้จนกว่า block synchronous ทั้งหมดของ `handleHeavy` จะเสร็จ ทั้งที่มันถูกจัดคิวไว้ก่อน `handleHeavy` จะเสร็จด้วยซ้ำ วิธีแก้คือแบ่งงาน CPU-bound เป็นชิ้น ๆ ที่ yield กลับให้ event loop ระหว่างกลาง (`await new Promise(r => setImmediate(r))`) หรือย้ายงาน CPU จริง ๆ ไปที่ `worker_thread` ไปเลย **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (วัดด้วย `--cpu-prof` หรือ `monitorEventLoopDelay` ซึ่งอยู่ใน *Verification Tools*) ดู [Call Stack](/nodejs/th/event-loop-async/call-stack/)
+
+**12. Listener leak** การลงทะเบียน listener ใหม่ทุกครั้งที่มี request โดยไม่เคยลบออกเลย จะสะสมไปเรื่อย ๆ ไม่มีที่สิ้นสุด
+
+<NodeRunner client:visible code={listenerLeakCode} node expected={listenerLeakOut} />
+
+export const listenerLeakCode = `import { EventEmitter } from 'node:events';
+
+const emitter = new EventEmitter();
+
+process.on('warning', function (warning) {
+  console.log('warning name:', warning.name);
+});
+
+function handleRequest() {
+  emitter.on('data', function () {}); // BUG: a new listener added on every "request", never removed
+}
+
+for (let i = 0; i < 11; i++) handleRequest();
+
+console.log('listener count:', emitter.listenerCount('data'));
+`;
+
+export const listenerLeakOut = `listener count: 11
+warning name: MaxListenersExceededWarning`;
+
+เกินขีดจำกัดดีฟอลต์ 10 listener สำหรับ event name เดียวบน emitter ตัวเดียว Node จะส่ง `MaxListenersExceededWarning` — เป็นแค่คำใบ้ ไม่ใช่ crash จึงพลาดได้ง่ายท่ามกลาง log ที่รกใน production วิธีแก้: ลงทะเบียน listener แค่ครั้งเดียวนอก path ที่รันทุก request หรือเรียก `.off()`/`.removeListener()` เมื่อทรัพยากรที่เกี่ยวข้องถูกทำลาย **เครื่องมือ: `--trace-warnings`** (แสดงว่า listener ถูกเพิ่มที่ไหนจริง ๆ) หรือดักจับ event `warning` ตรง ๆ ในเทสต์ ตามตัวอย่างข้างบน ดู [EventEmitter](/nodejs/th/core-apis/events/)
+
+**13. event `error` ที่ไม่มี listener** `EventEmitter` ถือว่า `'error'` ที่ไม่ถูกจัดการเป็นเรื่องร้ายแรงโดยการออกแบบ — มันเป็น event name เดียวที่ throw ถ้าไม่มีใครฟังอยู่
+
+```js
+// @expect-throw
+import { EventEmitter } from 'node:events';
+
+const emitter = new EventEmitter();
+
+emitter.emit('error', new Error('boom')); // BUG: no 'error' listener registered
+```
+
+```text
+Error: boom
+    at ... (Emitted 'error' event at:)
+```
+
+วิธีแก้คือลงทะเบียน handler `.on('error', ...)` เสมอสำหรับ emitter ใด ๆ ที่สามารถผลิต error ได้ — socket, stream, child process, หรือ class ของคุณเอง **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (การรันโค้ดตามตัวอย่างข้างบนคือวิธีที่เร็วที่สุดที่จะเห็นมัน ไม่มี lint rule ตรวจจับ listener `error` ที่หายไปแบบ static) ดู [EventEmitter](/nodejs/th/core-apis/events/)
+
+**14. `.pipe()` ที่ไม่มีการจัดการ error** `readable.pipe(writable)` ไม่ forward event `'error'` ระหว่างสอง stream — error ฝั่งใดฝั่งหนึ่งต้องมี listener ของตัวเอง
+
+```js
+// @expect-throw
+import { Readable, Writable } from 'node:stream';
+
+const source = new Readable({
+  read() {
+    this.emit('error', new Error('source failed'));
+  }
+});
+
+const dest = new Writable({
+  write(chunk, enc, cb) { cb(); }
+});
+
+source.pipe(dest); // BUG: pipe() forwards data, not errors -- and neither stream has an 'error' listener
+```
+
+```text
+Error: source failed
+    at ... (Emitted 'error' event on Readable instance at:)
+```
+
+วิธีแก้คือ `stream.pipeline(source, dest, function (err) { if (err) console.error('pipeline failed:', err.message); })` จาก `node:stream` ซึ่งทั้ง forward error และเก็บกวาด (destroy) ทุก stream ใน chain ให้ **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** แม้กฎที่ใกล้เคียงใน `eslint-plugin-n` ก็ไม่ครอบคลุมเรื่องนี้; บท [pipe/pipeline](/nodejs/th/streams/pipe-pipeline/) ในโมดูล *Streams & I/O* ครอบคลุม `pipeline()` แบบเต็ม ๆ
+
+**15. การ decode string ข้าม chunk boundary** การ decode แต่ละ chunk ของ stream แยกกันด้วย `.toString('utf8')` จะทำให้ตัวอักษร multi-byte ที่บังเอิญถูกตัดคาบสอง chunk เสียหาย
+
+<NodeRunner client:visible code={chunkDecodeCode} node expected={chunkDecodeOut} />
+
+export const chunkDecodeCode = `const full = Buffer.from('สวัสดี', 'utf8'); // Thai text, deliberately split mid-character below
+const mid = 4;
+const chunk1 = full.subarray(0, mid);
+const chunk2 = full.subarray(mid);
+
+let naive = '';
+naive += chunk1.toString('utf8'); // BUG: each chunk decoded independently
+naive += chunk2.toString('utf8');
+console.log(naive);
+console.log('matches original:', naive === full.toString('utf8'));
+`;
+
+export const chunkDecodeOut = `ส���ัสดี
+matches original: false`;
+
+ตัวอักษร multi-byte ที่ถูกตัดคาบกลายเป็นอักขระ replacement ของ Unicode (`�`) ทั้งสองฝั่งของรอยตัด และผลลัพธ์ที่ decode กลับมาก็ไม่ตรงกับข้อความต้นฉบับอีกต่อไป วิธีแก้คือ `StringDecoder` จาก `node:string_decoder` ซึ่งจะบัฟเฟอร์ลำดับ multi-byte ที่ยังไม่สมบูรณ์ไว้จนกว่า chunk ถัดไปจะทำให้มันสมบูรณ์ **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (สิ่งนี้ผ่าน test ที่สร้างจาก fixture แบบ ASCII ล้วนทุกอันได้อย่างสบาย) ดู [Buffer](/nodejs/th/core-apis/buffer/)
+
+**16. `Buffer.concat` ข้างใน loop** การเรียก `Buffer.concat([acc, chunk])` ทุกครั้งที่มี chunk เข้ามาจะคัดลอก buffer ที่สะสมไว้ทั้งหมดใหม่ทุกครั้ง — งานแบบ quadratic ในที่ที่ควรเป็น linear
+
+```js
+const chunks = [Buffer.from('ab'), Buffer.from('cd'), Buffer.from('ef')];
+
+let naive = Buffer.alloc(0);
+for (const chunk of chunks) {
+  naive = Buffer.concat([naive, chunk]); // BUG: re-copies everything accumulated so far, on every chunk
+}
+
+const collected = [];
+for (const chunk of chunks) {
+  collected.push(chunk); // FIX: collect references, concat once at the end
+}
+const fixed = Buffer.concat(collected);
+
+console.log(naive.toString(), fixed.toString(), naive.equals(fixed));
+```
+
+```text
+abcdef abcdef true
+```
+
+ทั้งสองแบบให้ผลลัพธ์ที่ถูกต้องเหมือนกันทุกประการบน input เล็ก ๆ นี้ — ซึ่งนั่นแหละคือกับดัก: ความถูกต้องดูดีในทุกขนาด และมีแค่ profiler เท่านั้นที่จะแสดงต้นทุนการคัดลอกแบบ quadratic ที่ขยายขึ้นเมื่อจำนวน chunk เพิ่มขึ้น **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** เปิดเผยด้วย `--cpu-prof` ภายใต้ traffic จริง (ดู *Verification Tools*) ไม่มีทางที่ functional test จะจับได้ ดู [Buffer](/nodejs/th/core-apis/buffer/)
+
+### HTTP boundaries
+
+**7. เรียก `res.end()` สองครั้ง** การเรียกครั้งที่สอง throw `ERR_STREAM_WRITE_AFTER_END` — และถ้าไม่มีใครฟัง event `error` ที่มันสร้างขึ้น โปรเซสจะ crash ก่อนที่ client จะได้รับ response ด้วยซ้ำ
+
+```js
+// @expect-throw
+import http from 'node:http';
+
+const server = http.createServer(function (req, res) {
+  res.end('first');
+  res.end('second'); // BUG: ERR_STREAM_WRITE_AFTER_END -- unhandled, this crashes the process
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port);
+});
+```
+
+```text
+Error [ERR_STREAM_WRITE_AFTER_END]: write after end
+    at ServerResponse.end (...)
+Emitted 'error' event on ServerResponse instance at:
+    at emitErrorNt (...)
+```
+
+การ crash เกิดขึ้นแบบ synchronous ข้างใน handler ก่อนที่ `fetch` ของ client จะได้รับ response เลยด้วยซ้ำ — การเรียก `res.end('first')` ครั้งแรกไม่เคยไปถึง socket จริง ๆ ก่อนที่โปรเซสจะตาย วิธีแก้คือ guard แบบ early-return: `if (res.writableEnded) return;` ก่อนทุกการเรียก `res.end()` รวมศูนย์ไว้ใน response helper ตัวเดียว (แบบที่บท *Production Server* ทำ) **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น**; การรัน handler ด้วย test ที่เรียกซ้ำสองครั้งคือวิธีที่เร็วที่สุดที่จะเห็นมัน ดู [HTTP Server](/nodejs/th/http-networking/http-server/)
+
+**8. ตั้ง header หลัง response ถูกส่งไปแล้ว** `res.setHeader()` (และ `res.writeHead()`) จะ throw `ERR_HTTP_HEADERS_SENT` เมื่อ header ถูกส่งออกไปทาง wire แล้ว
+
+```js
+// @expect-throw
+import http from 'node:http';
+
+const server = http.createServer(function (req, res) {
+  res.end('ok');
+  res.setHeader('X-Late', 'true'); // BUG: headers (and the body) are already sent by res.end()
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port);
+});
+```
+
+```text
+Error [ERR_HTTP_HEADERS_SENT]: Cannot set headers after they are sent to the client
+```
+
+วิธีแก้คือเรื่องลำดับ: ตั้งทุก header *ก่อน* เรียก `res.end()` หรือ `res.write()` เสมอ ไม่ใช่หลังจากนั้น **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (หรือเช็ก `res.headersSent` ก่อนเรียกเพื่อความปลอดภัย) ดู [HTTP Server](/nodejs/th/http-networking/http-server/)
+
+**9. ไม่จำกัดขนาด request body** การ buffer chunk ของ `req` โดยไม่มีเพดานเลย ทำให้ client (หรือผู้โจมตี) เพิ่ม memory ของ server ได้ไม่มีที่สิ้นสุด
+
+<NodeRunner client:visible code={bodyLimitCode} node expected={bodyLimitOut} />
+
+export const bodyLimitCode = `import http from 'node:http';
+
+const MAX_BODY = 1024;
+
+const server = http.createServer(function (req, res) {
+  let received = 0;
+  const chunks = [];
+  req.on('data', function (chunk) {
+    received += chunk.length;
+    if (received > MAX_BODY) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'payload too large' }));
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', function () {
+    if (res.writableEnded) return;
+    const body = Buffer.concat(chunks);
+    res.end('received ' + body.length + ' bytes');
+  });
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  const bigBody = 'x'.repeat(2000); // over MAX_BODY
+  fetch('http://localhost:' + port, { method: 'POST', body: bigBody }).then(function (r) { return r.status; }).then(function (status) {
+    console.log('status:', status);
+    server.close();
+  });
+});
+`;
+
+export const bodyLimitOut = `status: 413`;
+
+ถ้าไม่มี guard `received > MAX_BODY` (ตัว bug จริง) server ตัวเดียวกันนี้จะรับ body ขนาดเท่าใดก็ได้ **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** ยืนยันได้ภายใต้ load ด้วย `autocannon` ที่ส่ง body เกินขนาด (*Verification Tools*) ดู [JSON API](/nodejs/th/http-networking/json-api/)
+
+**10. `JSON.parse` โดยไม่มี `try`/`catch`** input ที่ผิดรูปแบบจะทำให้ handler ทั้งตัว crash ด้วย `SyntaxError` แทนที่จะคืน `400`
+
+```js
+// @expect-throw
+function parseConfig(raw) {
+  return JSON.parse(raw); // BUG: no try/catch -- malformed input throws uncaught
+}
+
+console.log(parseConfig('{ this is not valid json'));
+```
+
+```text
+SyntaxError: Expected property name or '}' in JSON at position 2 (line 1 column 3)
+```
+
+วิธีแก้คือครอบการ parse ด้วย `try`/`catch` แล้วคืน `400` พร้อมข้อความที่ชัดเจนเมื่อล้มเหลว แบบเดียวกับที่ route ในบท *JSON API* ทำ **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (หรือ `node --test` พร้อม test case ที่ใช้ input ผิดรูปแบบ) ดู [JSON API](/nodejs/th/http-networking/json-api/)
+
+**11. `fetch` โดยไม่เช็ก `.ok` และไม่มี timeout** `fetch` จะ reject ก็ต่อเมื่อ network ล้มเหลวเท่านั้น — response ที่เป็น `4xx`/`5xx` ยัง resolve ตามปกติ และถ้าไม่มี timeout ชัดเจน server ที่ค้างจะทำให้ผู้เรียกค้างไปตลอดกาล
+
+```js
+// @expect-throw
+import http from 'node:http';
+
+const server = http.createServer(function (req, res) {
+  res.writeHead(500, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'internal error' }));
+});
+
+server.listen(0, async function () {
+  const port = server.address().port;
+  const res = await fetch('http://localhost:' + port); // BUG: never checks res.ok
+  const body = await res.json();
+  console.log('user name:', body.name.toUpperCase()); // body.name is undefined on the error payload
+  server.close();
+});
+```
+
+```text
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+    at Server.<anonymous> (...)
+```
+
+response body ของ 500 (`{ error: 'internal error' }`) ไม่มี field `name` เลย และโค้ดไม่เคยสังเกตว่า status เป็น error ก่อนที่จะเชื่อรูปร่างของ body วิธีแก้คือเช็ก `res.ok` (หรือ status เฉพาะ) ก่อนเชื่อรูปร่างของ body และส่ง `signal: AbortSignal.timeout(5000)` เพื่อไม่ให้ server ที่ค้างทำให้ผู้เรียกค้างไปตลอดกาล **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** ไม่มี lint rule ใดพิสูจน์แบบ static ได้ว่า response ของ `fetch` ถูกตรวจสอบแล้ว ดู [Requests](/nodejs/th/http-networking/requests/)
+
+**17. `process.env.PORT` ถูกเทียบเป็น string** ทุกค่าใน `process.env` เป็น `string` (หรือไม่มีเลย) — การเทียบสองค่าด้วย `<`/`>` จะทำการเทียบแบบ lexicographic ไม่ใช่ numeric
+
+<NodeRunner client:visible code={envStringCode} node expected={envStringOut} />
+
+export const envStringCode = `process.env.PORT = '9000';
+process.env.MIN_PORT = '10000';
+
+if (process.env.PORT > process.env.MIN_PORT) { // BUG: string comparison -- '9' > '1' lexicographically
+  console.log('port is above the minimum');
+} else {
+  console.log('port is not above the minimum');
+}
+`;
+
+export const envStringOut = `port is above the minimum`;
+
+`9000` น้อยกว่า `10000` ในทางตัวเลขอย่างชัดเจน แต่ `'9000' > '10000'` เทียบทีละตัวอักษรและ `'9' > '1'` เป็น `true` วิธีแก้คือ `Number(process.env.PORT) > Number(process.env.MIN_PORT)` **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (หรือกฎแบบ `n/no-process-env` ของ `eslint-plugin-n` ที่ตรวจจับการอ่าน `process.env` เลยแต่ไม่ใช่ bug การเทียบค่าแบบนี้โดยเฉพาะ) ดู [process.env](/nodejs/th/core-apis/process-env/)
+
+### Modules & packages
+
+**19. ปน `require`/`import` กัน หรือใช้ `__dirname` ใน ES module** `__dirname` และ `__filename` เป็น global เฉพาะของ CommonJS — ES module ไม่มี `__dirname` เลย
+
+```js
+// @expect-throw
+console.log(__dirname); // BUG: __dirname does not exist in ES module scope
+```
+
+```text
+ReferenceError: __dirname is not defined in ES module scope
+```
+
+วิธีแก้คือ `import.meta.dirname` (stable ตั้งแต่ Node 21.2 / 20.11) ซึ่งทำงานเดียวกันโดยไม่ต้องใช้ `path.dirname(fileURLToPath(import.meta.url))` เลย **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (ข้อความ error เองก็ชัดเจนเมื่อเจอเข้า แต่ไม่มีอะไรจับมันได้ก่อนที่จะรันไฟล์) ดู [Modules](/nodejs/th/js-essentials/modules/)
+
+**20. ช่วงเวอร์ชัน `^0.x`, ไม่มี lockfile, `npm install` ใน Dockerfile** สำหรับ package `0.x` เครื่องหมาย caret (`^`) ของ npm อนุญาตแค่ patch bump — แต่การไม่มี lockfile หรือใช้ `npm install` แทน `npm ci` ข้างใน Docker build ยังคงทำให้ build resolve เวอร์ชัน transitive ที่ต่างกันได้ในแต่ละวัน
+
+```json
+{
+  "dependencies": {
+    "some-lib": "^0.4.2"
+  }
+}
+```
+
+```dockerfile
+# BUG: npm install can update the lockfile and resolve fresh versions on every build
+RUN npm install --omit=dev
+```
+
+วิธีแก้คือ commit `package-lock.json` และใช้ `npm ci --omit=dev` ใน Dockerfile ซึ่งจะติดตั้ง *ตรงตาม* ที่ lockfile บอกเป๊ะ ๆ และล้มเหลวอย่างชัดเจนถ้า `package.json` กับ lockfile ไม่ตรงกัน — deterministic บนทุกเครื่องและทุก build **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** สำหรับบรรทัด Dockerfile; `npm audit` และความล้มเหลวเมื่อไม่ตรงกันของ `npm ci` เองจับความคลาดเคลื่อนที่เกี่ยวข้องได้ ดู [Dependencies](/nodejs/th/modules-npm/dependencies/)
+
+**21. ลำดับ field `exports` ผิดใน `package.json`** Node จะ resolve เงื่อนไข *แรก* ที่ match ใน `exports` map — เงื่อนไขทั่วไปที่อยู่ก่อนเงื่อนไขที่เจาะจงกว่า (อย่าง `types`) จะบัง (shadow) มันไปเลย
+
+```json
+{
+  "exports": {
+    ".": {
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}
+```
+
+`"default"` ที่อยู่ก่อนแปลว่ามันชนะเสมอ — `"types"` ข้างล่างเป็น configuration ที่ตายไปแล้ว type checker จะไม่มีวันได้ใช้มันจริง วิธีแก้คือเรียง `"types"` ไว้ก่อน ตามกฎ "เงื่อนไขที่เจาะจงกว่ามาก่อน": `{ "types": "./dist/index.d.ts", "default": "./dist/index.js" }` **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** แม้ `npm pack --dry-run` ร่วมกับการ import tarball ที่ pack แล้วจริง ๆ จากโปรเจกต์ TypeScript จะเปิดเผยมันได้เร็ว ดู [package.json](/nodejs/th/modules-npm/package-json/)
+
+### Errors & process
+
+**18. `process.exit()` กลางงานที่ยังค้างอยู่** `process.exit()` หยุดโปรเซสทันที — มันไม่รอให้ microtask queue ระบายให้หมดก่อน ดังนั้นอะไรที่ยังค้างอยู่จะถูกทิ้งไปเฉย ๆ
+
+<NodeRunner client:visible code={exitMidFlushCode} node expected={exitMidFlushOut} />
+
+export const exitMidFlushCode = `process.on('exit', function (code) {
+  console.log('exit handler ran with code', code);
+});
+
+Promise.resolve().then(function () {
+  console.log('this microtask never runs'); // BUG: process.exit() below drops this
+});
+
+console.log('before exit');
+process.exit(0);
+console.log('this line never runs either');
+`;
+
+export const exitMidFlushOut = `before exit
+exit handler ran with code 0`;
+
+callback `.then` ที่ถูก queue ไว้ไม่เคยทำงาน และบรรทัดหลัง `process.exit()` ก็ไม่เคยรันเช่นกัน — มีแค่ listener `'exit'` แบบ synchronous เท่านั้นที่ได้โอกาสรัน วิธีแก้เกือบทุกครั้งคือ *ไม่* เรียก `process.exit()` เลย: ปล่อยให้ `main()` return แล้วให้ Node จบตามธรรมชาติเมื่อไม่มีอะไรเหลือให้ทำ หรือตั้ง `process.exitCode = 0` แล้ว return แทนการ exit ทันที **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (test ที่เช็กว่า side effect ที่คาดไว้ทั้งหมดเกิดขึ้นจริงจะ fail แต่ไม่มี static tool ตัวไหนตรวจจับสิ่งนี้ได้) ดู [process.env](/nodejs/th/core-apis/process-env/)
+
+**23. `console.log` แทนที่จะเป็น structured logging** `console.log` แบบ free-text หลาย argument อ่านครั้งเดียวใน terminal ได้ดี แต่ไม่มีอะไรที่อยู่ปลายทาง (log aggregator, grep, alert rule) จะ parse มันได้อย่างน่าเชื่อถือ
+
+```js
+function logRequest(method, path, status) {
+  console.log('request', method, path, 'returned', status); // BUG: free-text, not machine-parseable
+}
+
+logRequest('GET', '/health', 200);
+```
+
+```text
+request GET /health returned 200
+```
+
+วิธีแก้ จากบท *Production Server* คือหนึ่ง JSON object ต่อบรรทัด: `console.log(JSON.stringify({ event: 'request', method: method, path: path, status: status }))` — ข้อมูลเดิม แต่ตอนนี้ทุก field เป็น key ที่คงที่และ query ได้ **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (หรือ log pipeline ที่เริ่ม parse บรรทัดไม่ได้เมื่อ free-text message ของใครสักคนบังเอิญมี comma หรือ newline อยู่ข้างใน) ดู [Debugging](/nodejs/th/testing-tooling/debugging/)
+
+**24. `child_process.exec`/`eval`/`new Function` กับ input ที่ไม่น่าเชื่อถือ** `exec()` รัน argument ของมันผ่าน shell จริง — shell metacharacter ใด ๆ (`;`, `&&`, `` ` ``) ใน input ที่ไม่ผ่านการกรองจะรันเป็น command แยกต่างหาก `eval`/`new Function` กับ input ที่ไม่น่าเชื่อถือก็เป็นปัญหาเดียวกันในฝั่ง JavaScript ล้วน
+
+<NodeRunner client:visible code={execInjectionCode} node expected={execInjectionOut} />
+
+export const execInjectionCode = `import { execSync } from 'node:child_process';
+
+function listFiles(userInput) {
+  return execSync('echo start && echo ' + userInput).toString(); // BUG: string-built shell command
+}
+
+console.log(listFiles('hi; echo INJECTED')); // "input" that is actually a second command
+`;
+
+export const execInjectionOut = `start
+hi
+INJECTED
+`;
+
+`;` ใน "input" จบ command แรกแล้วเริ่ม command ที่สองซึ่งไม่เคยตั้งใจให้รัน — ด้วย input จากผู้ใช้จริง นี่คือการรัน command ตามใจชอบ วิธีแก้คือ `execFileSync('echo', ['start', userInput])` — การส่ง argument เป็น array จะรันโปรแกรมโดยตรง ไม่มี shell เข้ามาเกี่ยวข้อง metacharacter ใน `userInput` จึงเป็นแค่ข้อมูลเฉย ๆ **เครื่องมือ: ไม่มี — ต้องใช้คนเท่านั้น** (เครื่องมือสแกน dependency อย่าง `npm audit` หา package ที่มีช่องโหว่ที่รู้จักแล้ว ไม่ใช่ bug จาก injection ในโค้ดของคุณเอง); ดู [Security Model](/nodejs/th/runtime-internals/security-model/)
+
+### Testing & tooling
+
+**22. test ที่ไม่มี assertion, mock ที่ผูกกับ reference เก่า, หรือ test ที่ใช้ timer แล้วค้าง** ทั้งสามแบบทำให้ test suite รายงานว่าผ่านทั้งที่แทบไม่ได้พิสูจน์อะไรเลย
+
+```js
+import { test } from 'node:test';
+
+function add(a, b) {
+  return a - b; // a real, planted bug
+}
+
+test('adds two numbers', function () {
+  add(2, 3); // BUG: the result is never checked with an assertion
+});
+```
+
+ผลลัพธ์จริง (reporter ดีฟอลต์ของ `node:test` รันตรง ๆ โดยไม่มี flag `--test`; ตัวเลขเวลาของแต่ละ test จะต่างกันไปในแต่ละครั้งที่รัน ส่วนที่เหลือไม่เปลี่ยน):
+
+```text
+✔ adds two numbers (0.4ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+test นี้ผ่านทั้งที่ `add(2, 3)` คืนค่า `-1` การเพิ่ม assertion ที่หายไป (`assert.equal(add(2, 3), 5)`) จะทำให้ suite เดียวกันนี้แดงทันที — bug ใน `add` มีอยู่ตั้งแต่แรก แค่ไม่เคยถูกตรวจสอบ
+
+รูปแบบที่ซับซ้อนกว่าของธีมเดียวกัน: mock ฟังก์ชัน *หลังจาก* ส่วนอื่นของโค้ดจับ reference ตรงไปยังต้นฉบับไว้แล้ว
+
+```js
+// @expect-throw
+import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+const mailer = { send: function (to) { console.log('REALLY sending to', to); return true; } };
+const sendFn = mailer.send; // BUG: captured before the test can replace it
+
+function notify(to) {
+  return sendFn(to); // always calls the original, no matter what gets mocked on mailer later
+}
+
+test('notify does not really send mail', function () {
+  const sendMock = mock.method(mailer, 'send', function () { return 'mocked'; });
+  const result = notify('a@example.com');
+  assert.equal(sendMock.mock.calls.length, 1); // fails: the mock was never actually called
+});
+```
+
+```text
+REALLY sending to a@example.com
+✖ notify does not really send mail (1.196083ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  0 !== 1
+```
+
+`mock.method` แทนที่ property `send` บน `mailer` แต่ `sendFn` ยังถือฟังก์ชัน *ต้นฉบับ* จากก่อนที่ mock จะถูกติดตั้งอยู่ — การเรียก `sendFn(to)` จึงข้าม mock ไปเลย และ `mailer.send` ตัวจริงก็รันจริง (เห็นได้ตรง ๆ ใน stdout ที่จับมาได้) วิธีแก้คือเรียกผ่าน object ตรงจุดที่เรียกใช้ (`mailer.send(to)`) ไม่ใช่ผ่าน reference ที่จับไว้ก่อนหน้า
+
+รูปแบบที่สามของปัญหาเดียวกัน อธิบายไว้แทนที่จะรันจริงตรงนี้เพราะมันจะค้างจริงตามระยะเวลาเต็ม ๆ: test ที่เริ่ม `setTimeout(callback, 30000)` จริงแล้ว await ผลลัพธ์โดยไม่เคยติดตั้ง `mock.timers` หรือเลื่อนเวลาด้วยตัวเอง — timeout ต่อ test ดีฟอลต์ของ `node --test` จะ fail มันในที่สุด แต่ต้องรอจริงก่อน ทำให้ suite ทั้งหมดช้าลงโดยไม่จำเป็น วิธีแก้คือ `context.mock.timers.enable({ apis: ['setTimeout'] })` พร้อม `context.mock.timers.tick(30000)` ที่ชัดเจน ซึ่งอยู่ในบท *Verification Tools*
+
+**เครื่องมือ: `node --test`** จับได้ทั้งสามแบบ แต่ก็ต่อเมื่อมีการเขียน assertion จริง ๆ และ mock ถูกใช้ในตำแหน่งที่ถูกต้อง — เครื่องมือไม่สามารถสร้างการตรวจสอบที่หายไปให้คุณได้ ดู [Built-in Test Runner](/nodejs/th/testing-tooling/node-test/)
+
+## Mental Model
+
+ทุก pattern ข้างบนมีโครงสร้างเดียวกัน: โค้ดที่ *ถูกต้องตาม syntax* และ *ผิดในเชิงพฤติกรรมกับ input บางแบบที่ demo ไม่ได้บังเอิญใช้* ไม่มี pattern ไหนแปลกประหลาดเลย — ทั้งหมดเป็นรูปแบบดีฟอลต์ที่ AI assistant เลือกใช้เมื่อ prompt ไม่ได้ขอเวอร์ชันที่ปลอดภัยกว่าโดยเฉพาะ เพราะเวอร์ชันที่ไม่ปลอดภัยสั้นกว่า พบบ่อยกว่าใน training data และมักจะยัง "ดูถูกต้อง" เมื่ออ่านผ่าน ๆ
+
+## Trade-offs
+
+| แนวทางต่อแคตตาล็อกนี้ | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| จำทั้ง 24 ข้อโดยชื่อ | จับคู่ pattern ได้เร็วระหว่าง review | pattern ที่ 25 ที่แคตตาล็อกนี้ไม่ครอบคลุมยังต้องใช้นิสัยการอ่านจากบท *index* อยู่ดี |
+| รันทุก diff ผ่าน tool ladder ก่อน | จับได้แค่ส่วนน้อย (3 จาก 24) แบบเครื่องจักร ฟรี ๆ | ให้ความมั่นใจที่ผิด ๆ ว่า run สะอาดแปลว่า diff สะอาด — ส่วนใหญ่ของแคตตาล็อกนี้คือ "ไม่มี — ต้องใช้คนเท่านั้น" |
+| อ่านทุก diff ทีละบรรทัดไม่สนใจผล tool | จับได้ทุกอย่าง รวมถึง pattern ที่ยังไม่มีในแคตตาล็อกไหนเลย | ไม่ scale กับ diff ขนาดใหญ่ ถ้าไม่มีนิสัยการอ่านจากบท *index* มาช่วยจัดลำดับว่าจะดูตรงไหนก่อน |
+
+## Common Misconceptions
+
+- **"ถ้ามันเป็น bug จริง เครื่องมือน่าจะจับได้"** 21 จาก 24 pattern ในแคตตาล็อกนี้ถูกระบุว่า "ไม่มี — ต้องใช้คนเท่านั้น" ด้วยเหตุผลจริง: ไม่มีเครื่องมือที่ติดตั้งใน ladder ของคอร์สนี้ตรวจสอบพวกมันได้
+- **"bug ที่ AI สร้างเป็น edge case แปลกประหลาด"** ทุก pattern ที่นี่คือ footgun ของ Node.js/JavaScript ที่รู้จักกันดีมานานหลายสิบปี — AI แค่ผลิตมันได้คล่องแคล่วและบ่อยครั้งกว่า ไม่ได้คิดค้นอะไรใหม่
+- **"crash แย่กว่าค่าที่ผิดแบบเงียบ ๆ"** pattern 1 (ลืม `await`) ไม่เคย crash และให้ค่า `undefined` อย่างเงียบ ๆ — นั่นอาจอันตรายกว่า crash ที่ดังและเห็นชัดของ pattern 3 ด้วยซ้ำ เพราะไม่มีอะไรบังคับให้ใครสักคนสังเกตเห็นมัน
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ reviewer เปิด diff ที่ AI เขียนเทียบกับแคตตาล็อกนี้ การผ่านรอบแรกที่เร็วที่สุดคือแบบเครื่องจักร
+
+1. grep หา string ที่ pattern ในแคตตาล็อกนี้ยึดอยู่: `forEach(async`, `.then(` ที่ไม่มี `.catch` คู่กัน, `readFileSync`, `res.end(` มากกว่าหนึ่งครั้งต่อฟังก์ชัน, `JSON.parse(` ที่ไม่มี `try` ล้อมรอบ, `exec(`, `eval(`, `new Function(`, `catch {}`
+2. สำหรับทุกจุดที่เจอ หาว่ามันตรงกับ pattern ไหนใน 24 ข้อข้างบน แล้วเช็กว่าวิธีแก้ที่แสดงไว้สำหรับ pattern นั้นมีอยู่แล้วหรือยัง
+3. สิ่งที่เหลือ — pattern ที่ระบุว่า "ไม่มี — ต้องใช้คนเท่านั้น" ที่ grep ยึดไม่ได้ตรง ๆ (floating promise ที่ไม่ได้อยู่ในรูป `forEach`, listener leak ใน class method, `Promise.all` ที่ไม่มีขอบเขตให้เห็น) — ต้องการการอ่านจริงด้วยนิสัยสี่ข้อจากบท *index*
+
+<SpotTheBug code={`import http from 'node:http';
+
+const server = http.createServer(function (req, res) {
+  let body = '';
+  req.on('data', function (chunk) { body += chunk; }); // BUG 1: no size limit (pattern 9)
+  req.on('end', async function () {
+    const data = JSON.parse(body); // BUG 2: no try/catch (pattern 10)
+    const saved = await save(data); // BUG 3: floating promise if save() ever rejects before this line is reached
+    res.end(JSON.stringify(saved));
+    res.end(); // BUG 4: res.end() called twice (pattern 7)
+  });
+});
+
+async function save(data) {
+  if (!data.name) throw new Error('name is required');
+  return data;
+}`}>
+สี่ pattern จากแคตตาล็อกนี้ซ้อนกันอยู่ในสิบเอ็ดบรรทัด: ไม่มีการจำกัดขนาด body (9), `JSON.parse` ที่ไม่มี guard (10), และ `res.end()` สองครั้ง (7) ซึ่งจะ crash โปรเซสทันทีที่ `save()` สำเร็จ เพราะการเรียกครั้งที่สองจะ throw `ERR_STREAM_WRITE_AFTER_END` เสมอโดยไม่มีใครฟังมัน และถ้า `data.name` หายไป `save()` จะ reject *ข้างใน* event handler แบบ `async` โดยไม่มีอะไรจับมันเลย — unhandled rejection (3) ที่ crash โปรเซสก่อนที่ bug `res.end()` สองครั้งจะมีโอกาสได้ทำงานด้วยซ้ำ การอ่านไฟล์นี้ด้วยนิสัยจากบท *index* (ตามขอบเขตข้อมูล, ตามอายุของ `res`, นับว่าถ้ามี catch block จะมีกี่จุด) จะหาทั้งสี่ข้อได้ก่อนที่จะส่ง request สักครั้งเดียว
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+มีแค่ 3 จาก 24 pattern ในแคตตาล็อกนี้เท่านั้นที่ถูกเครื่องมือใน ladder ของคอร์สนี้จับได้จริง — `eslint-plugin-promise`, `--trace-warnings`, `node --test` ส่วนที่เหลือทั้งหมดผ่าน `node --test`, `--trace-warnings`, `eslint-plugin-n`/`eslint-plugin-promise`, และ `npm audit` ได้อย่างสะอาดเหมือนกันหมด และจะถูกพบได้ก็ต่อเมื่อคนจริง ๆ อ่าน event loop, อายุของทรัพยากร, ขอบเขตข้อมูล, และจุดที่กลืน error เท่านั้น
+</Callout>
+
+export const catalogQuiz = [
+  {
+    q: 'Which of these 24 patterns produces no crash and no warning at all, only a silently wrong value?',
+    options: [
+      'Double res.end()',
+      'ลืม await (pattern 1) -- ผู้เรียกได้ Promise object แทนค่าที่ resolve แล้ว โดยไม่มี error ใด ๆ',
+      'An error event with no listener',
+      'JSON.parse with no try/catch on malformed input',
+    ],
+    answer: 1,
+    explain: 'await ที่หายไปไม่ throw -- โค้ดแค่ได้รับ Promise ที่ยังไม่ resolve ในที่ที่คาดหวังค่า และการอ่าน property จากมัน (เช่น .name) จะคืน undefined แทนที่จะเกิด error ใด ๆ',
+  },
+  {
+    q: 'Why does eslint-plugin-promise\'s catch-or-return rule catch pattern 3 (a floating promise that later rejects) but not pattern 2 (forEach(async ...))?',
+    options: [
+      'มันไม่จับทั้งสองแบบเลย',
+      'catch-or-return ตรวจจับ expression statement ที่คืน promise โดยไม่มี .catch/.then แนบไว้เลย -- forEach(async fn) เป็นการเรียก forEach ไม่ใช่ floating promise expression ตรง ๆ ดังนั้นกฎจึงไม่มีอะไรให้ตรวจจับที่จุดเรียกนั้น',
+      'forEach(async ...) เป็น syntax ที่ถูกแบนใน JavaScript สมัยใหม่',
+      'ทั้งสอง pattern ถูกจับด้วยกฎเดียวกันเหมือนกันทุกประการ',
+    ],
+    answer: 1,
+    explain: 'กฎนี้ดูที่ expression statement โดยตรง saveRecord(record); เป็นรูปแบบนั้นพอดี ส่วน ids.forEach(async fn) เป็นการเรียก Array.prototype.forEach -- floating promise ถูกสร้างและทิ้งข้างในตัว forEach เอง ห่างออกไปหนึ่งชั้นจากสิ่งที่กฎนี้ตรวจสอบโดยตรง',
+  },
+  {
+    q: 'A server accepts a `Promise.all(items.map(fetchOne))` call for a list of 10 items in testing and a list of 50,000 items in production. What is the concrete risk that only shows up in production?',
+    options: [
+      'Promise.all จะ throw เสมอสำหรับ array ที่ยาวเกิน 1,000 รายการ',
+      'ทั้ง 50,000 call ยิงพร้อมกันหมดในทันที ซึ่งอาจทำให้ socket, memory, หรือ rate limit ปลายทางหมดไปพร้อมกัน -- สิ่งที่ 10 call พร้อมกันจะไม่มีวันทำได้',
+      'Promise.all จะทิ้ง item ที่เกิน index 999 อย่างเงียบ ๆ',
+      'ไม่มีความแตกต่างเลย -- Promise.all ทำงานเหมือนกันทุกประการไม่ว่าขนาด array จะเป็นเท่าไร',
+    ],
+    answer: 1,
+    explain: 'Promise.all เริ่มทุก promise ใน array ทันทีโดยไม่มีการจำกัด concurrency ในตัวเลย สิบ call พร้อมกันแทบมองไม่เห็น แต่ห้าหมื่นคือความเสี่ยงจริงของการทำให้ทรัพยากรหมด ซึ่ง test ขนาดเล็กจะไม่มีวันเปิดเผยได้',
+  },
+  {
+    q: 'Inside an fs.readFile callback, why does `setImmediate(fn)` reliably run before `setTimeout(fn, 0)`, even though the timeout was scheduled with a 0ms delay?',
+    options: [
+      'setImmediate รันแบบ synchronous เสมอ ก่อนที่ callback จะ return ด้วยซ้ำ',
+      'ข้างใน I/O callback เฟส check (ที่ setImmediate callback ทำงาน) รับประกันว่าจะทำงานก่อนเฟส timers ถัดไปเสมอ ไม่ว่าจะจัดลำดับไว้อย่างไรหรือ delay ที่ขอไว้จะเป็นเท่าไร',
+      'setTimeout(fn, 0) ถูก deprecate แล้วและไม่มีวันทำงานจริง',
+      'ลำดับนี้ไม่ได้ถูกกำหนดไว้และสุ่มเปลี่ยนไปในแต่ละครั้งที่รัน',
+    ],
+    answer: 1,
+    explain: 'เฟสของ event loop ใน libuv รันตามลำดับที่แน่นอนในแต่ละรอบ: timers จากนั้น (ในที่สุด) poll แล้วจึง check (setImmediate) เมื่อถูกจัดลำดับจากข้างใน I/O callback (ระหว่างเฟส poll) เฟส check จะมาถัดไปเสมอ ก่อนที่ loop จะกลับไปที่ timers อีกครั้ง',
+  },
+  {
+    q: 'Why does `res.end()` called a second time crash the process by default, instead of just being a harmless no-op?',
+    options: [
+      'Node.js เพิกเฉยต่อการเรียก res.end() ทุกครั้งหลังครั้งแรกโดยอัตโนมัติ',
+      'การเรียกครั้งที่สอง throw ERR_STREAM_WRITE_AFTER_END ซึ่งถูกส่งเป็น event "error" บน response stream -- และ event "error" ที่ไม่ถูกจัดการถือเป็นเรื่องร้ายแรงโดยการออกแบบใน Node.js',
+      'res.end() เรียกได้แค่ครั้งเดียวต่อโปรเซสเท่านั้นตลอดไป',
+      'มัน crash ก็ต่อเมื่อ response body ยาวเกิน 64KB เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'stream ที่ end ไปแล้วเขียนซ้ำไม่ได้อีก -- การพยายามทำเช่นนั้นจะยก ERR_STREAM_WRITE_AFTER_END เป็น event "error" และ EventEmitter ถือว่า event "error" ที่ไม่มี listener เลยเป็นเรื่องร้ายแรง โดย throw มันเป็น uncaught exception',
+  },
+  {
+    q: 'Why does `naive === full.toString(\'utf8\')` come back false in the chunk-decoding pattern, when both chunks together contain exactly the original bytes?',
+    options: [
+      'Buffer.subarray ทิ้ง byte ไปอย่างเงียบ ๆ',
+      'การ decode แต่ละ chunk เป็น string แยกกันอาจตัดตัวอักษร UTF-8 แบบ multi-byte คาบกลาง boundary กลายเป็นอักขระ replacement (U+FFFD) ทั้งสองฝั่งของรอยตัด',
+      'JavaScript string ไม่สามารถแทนตัวอักษรไทยได้',
+      'toString(\'utf8\') ทำงานได้แค่กับ chunk แรกของ stream เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'byte ยังคงครบถ้วนอยู่ในทั้งสอง chunk -- bug คือการ decode มันแยกกัน ตัวอักษร UTF-8 แบบ multi-byte ที่ถูกตัดกลางลำดับจะไม่ถูกต้องในแต่ละฝั่งเดี่ยว ๆ ดังนั้นครึ่งที่ไม่สมบูรณ์แต่ละฝั่งจึง decode เป็นอักขระ replacement แทนที่จะรอ byte ที่เหลือ',
+  },
+  {
+    q: 'In the exec-injection pattern, why does execFileSync(\'echo\', [\'start\', userInput]) treat `hi; echo INJECTED` as inert data, when execSync(\'echo start && echo \' + userInput) treats the same string as two commands?',
+    options: [
+      'execFileSync ลบ shell metacharacter ออกจาก argument ให้อัตโนมัติ',
+      'execFileSync รันโปรแกรมที่ระบุโดยตรงพร้อม argument ที่ให้มา โดยไม่มี shell เข้ามาตีความ ; หรือ && เลย -- ส่วน execSync ผ่าน shell จริงเสมอ ซึ่งตีความสิ่งเหล่านั้น',
+      'ทั้งสองฟังก์ชันทำงานเหมือนกันทุกประการ -- ความแตกต่างเป็นเรื่องบังเอิญ',
+      'userInput ถูก validate ให้อัตโนมัติโดย execFileSync',
+    ],
+    answer: 1,
+    explain: 'execSync (เหมือน exec) ส่ง string ทั้งก้อนให้ shell ซึ่งเป็นโปรแกรมที่รู้ความหมายของ ; และ && พอดี execFileSync เรียก executable เป้าหมายโดยตรงพร้อม argument array -- ไม่มี shell อยู่ในเส้นทางที่จะตีความ argument ใด ๆ เป็นคำสั่งแยกต่างหาก',
+  },
+  {
+    q: 'A test suite reports 100% passing after a reviewer\'s AI assistant "wrote tests" for a buggy add(a, b) function that returns a - b. What is the most likely explanation, based on pattern 22?',
+    options: [
+      'test suite เป็นไปไม่ได้ที่จะรันเลยด้วยซ้ำ',
+      'มีอย่างน้อยหนึ่ง test ที่เรียก add() โดยไม่เคย assert ค่าที่คืนกลับมาเลย ทำให้ test ผ่านไม่ว่า add() จะคืนอะไรจริง ๆ ก็ตาม',
+      'node --test ผ่านเสมอไม่ว่าจะมี assertion หรือไม่',
+      'add(a, b) ต้องถูกต้องจริงแน่ ๆ ถ้า test ผ่าน',
+    ],
+    answer: 1,
+    explain: 'test ที่ไม่มี assertion เลย (หรือ mock ผิด reference จนทำให้ code path ที่มี bug จริงไม่เคยถูกเรียกใช้) จะรายงานว่าผ่านไม่ว่าโค้ดที่ทดสอบจะทำอะไรจริง ๆ ก็ตาม -- test ที่ผ่านจะพิสูจน์อะไรได้ก็ต่อเมื่อมี assertion จริงที่เข้าถึงได้เท่านั้น',
+  },
+];
+
+<Quiz client:visible id="reading-node/ai-bug-catalog" questions={catalogQuiz} />
+
+<ProgressTracker client:visible id="reading-node/ai-bug-catalog" />

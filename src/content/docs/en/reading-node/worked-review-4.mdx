@@ -1,0 +1,280 @@
+---
+title: 'Worked review 4: a package with a test suite'
+description: 'A full review of a tiny AI-style npm package — a wrong exports order, a ^0.x dependency, and a test suite with a missing assertion and a real (unmocked) timer — with real npm ci and node --test transcripts proving each one.'
+sidebar:
+  order: 8
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The last of the four reviews is a package, not a script: a `package.json`, one source file, and one `node:test` suite — three files instead of one running program, which is why every transcript in this lesson is a real, separately-run command rather than a single `<NodeRunner>`. Four bugs from the *AI bug catalog* are planted across it: a wrong `exports` order, a `^0.x` dependency, a test with no assertion, and a test that waits on a real timer instead of `mock.timers`.
+
+## The package
+
+`package.json`:
+
+```json
+{
+  "name": "wr4-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./index.js",
+      "types": "./index.d.ts"
+    }
+  },
+  "dependencies": {
+    "left-pad": "^0.0.3"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
+```
+
+`index.js`:
+
+```js
+// @skip-verify multi-file package -- imported by index.test.js below, not run standalone
+export function double(n) {
+  return n * 2 - 1; // BUG 3: off by one -- should just be n * 2
+}
+```
+
+`index.test.js`:
+
+```js
+// @skip-verify multi-file package -- imports ./index.js as a sibling file
+import { test } from 'node:test';
+import { double } from './index.js';
+
+test('doubles a number', function () {
+  double(4); // BUG 3 (continued): no assertion at all -- this can never fail
+});
+
+test('resolves eventually', function (t, done) {
+  setTimeout(function () {
+    done();
+  }, 300); // BUG 4: a real timer, not mock.timers -- slows the suite for no real reason
+});
+```
+
+## Find the bugs before reading on
+
+Four planted bugs — one packaging convention, one version-range trap, one missing check, one slow test. Try to name all four before opening the answers below.
+
+<details>
+<summary>Bug 1 — `"default"` listed before `"types"` in the `exports` map</summary>
+
+**Symptom:** Node resolves the *first* matching condition in an `exports` map — with `"default"` first, it always wins, and `"types"` underneath it is dead configuration a TypeScript consumer's editor and `tsc` will never actually reach.
+
+**Evidence:** this produces no runtime error at all in plain Node.js — `require`/`import` in JavaScript never looks at the `"types"` condition to begin with. The only way to observe the bug is to actually try consuming this package's types from a TypeScript project and notice the editor falls back to implicit `any` instead of the real declarations.
+
+**Fix:** list the more specific condition first: `{ "types": "./index.d.ts", "default": "./index.js" }`.
+
+</details>
+
+<details>
+<summary>Bug 2 — `"left-pad": "^0.0.3"`</summary>
+
+**Symptom:** for a `0.0.x` version, npm's caret (`^`) allows *no* upgrades at all — not even patch releases — which is a sharper restriction than the same `^` on a `1.x` or even a `0.1.x` dependency permits.
+
+**Evidence:** not a crash — this is a version-range choice, not a bug that fails a build. It is worth flagging in review because it is easy to assume `^` always means "patch and minor upgrades allowed," when for anything under `0.0.x` it actually means "pinned exactly."
+
+**Fix:** nothing is strictly broken here, but a reviewer should confirm the author actually intended "never auto-update this dependency at all" — if not, waiting for the dependency to reach at least `0.1.0` (or pinning explicitly with no caret, to make the intent obvious) avoids the surprise.
+
+</details>
+
+<details>
+<summary>Bug 3 — `double(4);` with no assertion, on top of a genuinely wrong `double`</summary>
+
+**Symptom:** `index.js`'s `double` returns `n * 2 - 1` — `double(4)` is `7`, not `8` — and the test that calls it never checks the return value at all.
+
+**Evidence:** the real `node --test` transcript below: **both tests report a pass**, including this one, despite the underlying function being wrong.
+
+**Fix:** `assert.equal(double(4), 8);` — and once the assertion exists, fixing the actual bug in `index.js` (`n * 2`) is what makes the suite green again.
+
+</details>
+
+<details>
+<summary>Bug 4 — `setTimeout(function () { done(); }, 300);` with no `mock.timers`</summary>
+
+**Symptom:** the test genuinely waits 300 real milliseconds to prove nothing more than "a callback eventually fires" — a fact that does not require waiting on a real clock to verify.
+
+**Evidence:** the real transcript's own per-test timing, quoted below: this one test alone takes roughly 300ms, while every other test in the suite takes under a millisecond. Multiply that by however many similar tests a real suite accumulates, and a "fast" test suite becomes minutes long for no functional reason.
+
+**Fix:** `node:test`'s built-in `mock.timers`: enable it, register the same `setTimeout`, then call `t.mock.timers.tick(300)` to advance the mocked clock instantly instead of waiting on a real one.
+
+</details>
+
+## The fixed version
+
+`package.json`:
+
+```json
+{
+  "name": "wr4-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "dependencies": {
+    "left-pad": "^0.0.3"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
+```
+
+`index.js`:
+
+```js
+// @skip-verify multi-file package -- imported by index.test.js below, not run standalone
+export function double(n) {
+  return n * 2; // FIX: was n * 2 - 1
+}
+```
+
+`index.test.js`:
+
+```js
+// @skip-verify multi-file package -- imports ./index.js as a sibling file
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { double } from './index.js';
+
+test('doubles a number', function () {
+  assert.equal(double(4), 8); // FIX: a real, reachable assertion
+});
+
+test('resolves eventually', function (t) {
+  t.mock.timers.enable({ apis: ['setTimeout'] }); // FIX: mock the timer instead of waiting for real
+  return new Promise(function (resolve) {
+    setTimeout(resolve, 300);
+    t.mock.timers.tick(300); // advances the mocked clock instantly
+  });
+});
+```
+
+## What the tools caught
+
+**`npm ci` with no lockfile present (the state of the buggy package as checked in):**
+
+```text
+npm error code EUSAGE
+npm error
+npm error The `npm ci` command can only install with an existing package-lock.json or
+npm error npm-shrinkwrap.json with lockfileVersion >= 1. Run an install with npm@5 or
+npm error later to generate a package-lock.json file, then try again.
+```
+
+`npm ci` refuses to run at all without a committed lockfile — a real, immediate failure that has nothing to do with any of the four planted bugs, but is exactly the kind of thing a Dockerfile using `npm ci` (as the *Dependencies* lesson recommends) would catch on the very first build.
+
+**`npm install` (generates the lockfile), then `npm ci` again:**
+
+```text
+npm warn deprecated left-pad@0.0.3: use String.prototype.padStart()
+
+added 1 package, and audited 2 packages in 522ms
+
+found 0 vulnerabilities
+```
+
+npm's own deprecation warning calls out `left-pad` directly — a real, independent signal (unrelated to the `^0.0.3` version-range bug) that this specific dependency should not be a dependency of a new package at all in 2026, since the standard library has covered its job since ES2017.
+
+**`node --test` on the buggy version:**
+
+```text
+✔ doubles a number (0.4ms)
+✔ resolves eventually (302.7ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 367.2
+```
+
+Both tests pass — `double`'s real bug (returning `7` instead of `8`) is completely invisible to this test run, and `resolves eventually` costs 300+ real milliseconds to confirm something that needed no real waiting at all.
+
+**`node --test` on the fixed version:**
+
+```text
+✔ doubles a number (0.4ms)
+✔ resolves eventually (0.4ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 53.6
+```
+
+Same two tests, same "2 passed" headline — but now `doubles a number` is a real check (it would fail loudly if `double` regressed back to its buggy form), and `resolves eventually` finishes in under half a millisecond instead of 300+, because `mock.timers.tick(300)` advances a simulated clock instead of waiting on a real one.
+
+<Callout title="The one-line takeaway">
+"2 passed, 0 failed" was true for both the buggy and the fixed version of this suite — real transcripts of `npm ci` and `node --test` prove that a missing lockfile fails loudly and immediately, while a missing assertion and an unmocked timer both fail silently, one hiding a real bug and the other just wasting 300 real milliseconds per run for nothing.
+</Callout>
+
+export const quizWorkedReview4 = [
+  {
+    q: 'The npm ci transcript fails with EUSAGE before npm ever looks at any of this package\'s four planted bugs. What is npm ci actually checking at that point?',
+    options: [
+      'Whether package.json is syntactically valid JSON',
+      'Whether a package-lock.json (or npm-shrinkwrap.json) already exists to install from exactly -- npm ci refuses to run without one, rather than resolving versions fresh the way npm install would',
+      'Whether left-pad is a known-vulnerable package',
+      'Whether the exports field is correctly ordered',
+    ],
+    answer: 1,
+    explain: 'npm ci is designed for reproducible installs: it only ever installs exactly what an existing lockfile specifies, and refuses outright if that lockfile is missing, rather than falling back to resolving dependencies fresh.',
+  },
+  {
+    q: 'Why does node --test report "2 passed, 0 failed" for the buggy version, even though double(4) actually returns 7 instead of the correct 8?',
+    options: [
+      'node --test has a bug that prevents it from detecting incorrect return values',
+      'The test calls double(4) but never asserts anything about the result it gets back -- with no assertion to fail, the test cannot report anything but a pass',
+      'double(4) actually does return 8 in the buggy version',
+      'assert.equal was called but silently ignored the mismatch',
+    ],
+    answer: 1,
+    explain: 'This is pattern 22 from the AI bug catalog directly: a test that calls the function under test but checks nothing about its result reports a pass regardless of whether that result is correct.',
+  },
+  {
+    q: 'The buggy version\'s "resolves eventually" test takes roughly 300ms; the fixed version\'s equivalent test takes under a millisecond. What changed to make it that much faster, given both tests use the same 300ms setTimeout call?',
+    options: [
+      'The fixed version skips the test entirely',
+      'The fixed version enables mock.timers and calls t.mock.timers.tick(300), which advances a simulated clock instantly instead of the test actually waiting 300 real milliseconds for the real timer to fire',
+      'The fixed version uses a shorter, 1ms timeout instead of 300ms',
+      'node --test caches test results between runs',
+    ],
+    answer: 1,
+    explain: 'mock.timers replaces the real timer implementation with a controllable, simulated one. Calling tick(300) fires every timer scheduled for up to 300ms of simulated time immediately, verifying the same callback-eventually-fires behavior without any real waiting.',
+  },
+  {
+    q: 'Why is "^0.0.3" for left-pad flagged as worth a reviewer\'s attention even though it causes no test failure and no npm error?',
+    options: [
+      'It is invalid semver syntax',
+      'For a 0.0.x version, npm\'s caret range allows zero further upgrades at all (not even patches) -- a much stricter meaning than the same ^ symbol has on a 1.x dependency, which a reviewer skimming past the ^ symbol could easily miss',
+      'left-pad does not actually exist on the npm registry',
+      'It always causes npm ci to fail',
+    ],
+    answer: 1,
+    explain: 'Caret ranges behave differently depending on which version component is non-zero: ^1.2.3 allows minor and patch upgrades, ^0.2.3 allows only patch upgrades, and ^0.0.3 allows no upgrades at all. The same character means three different things depending on context, which is exactly the kind of detail worth a second look in review.',
+  },
+];
+
+<Quiz client:visible id="reading-node/worked-review-4" questions={quizWorkedReview4} />
+
+<ProgressTracker client:visible id="reading-node/worked-review-4" />

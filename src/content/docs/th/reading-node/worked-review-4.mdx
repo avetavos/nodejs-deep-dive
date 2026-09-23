@@ -1,0 +1,280 @@
+---
+title: 'รีวิวจริงที่ 4: package พร้อม test suite'
+description: 'รีวิวเต็มของ npm package สไตล์ AI ตัวเล็ก ๆ — ลำดับ exports ผิด, dependency แบบ ^0.x, และ test suite ที่ขาด assertion กับใช้ timer จริง (ไม่ mock) — พร้อม transcript จริงของ npm ci และ node --test ที่พิสูจน์แต่ละข้อ'
+sidebar:
+  order: 8
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+รีวิวสุดท้ายจากทั้งสี่บทนี้เป็น package ไม่ใช่สคริปต์เดียว: `package.json`, source ไฟล์เดียว, และ `node:test` suite หนึ่งชุด — สามไฟล์แทนที่จะเป็นโปรแกรมเดียวที่รันได้ ซึ่งเป็นเหตุผลที่ transcript ทุกอันในบทนี้เป็นคำสั่งจริงที่รันแยกกัน แทนที่จะเป็น `<NodeRunner>` เดียว bug สี่ตัวจาก *AI bug catalog* ถูกปลูกไว้ทั่วทั้ง package: ลำดับ `exports` ผิด, dependency แบบ `^0.x`, test ที่ไม่มี assertion, และ test ที่รอ timer จริงแทนที่จะใช้ `mock.timers`
+
+## Package
+
+`package.json`:
+
+```json
+{
+  "name": "wr4-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./index.js",
+      "types": "./index.d.ts"
+    }
+  },
+  "dependencies": {
+    "left-pad": "^0.0.3"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
+```
+
+`index.js`:
+
+```js
+// @skip-verify multi-file package -- imported by index.test.js below, not run standalone
+export function double(n) {
+  return n * 2 - 1; // BUG 3: off by one -- should just be n * 2
+}
+```
+
+`index.test.js`:
+
+```js
+// @skip-verify multi-file package -- imports ./index.js as a sibling file
+import { test } from 'node:test';
+import { double } from './index.js';
+
+test('doubles a number', function () {
+  double(4); // BUG 3 (continued): no assertion at all -- this can never fail
+});
+
+test('resolves eventually', function (t, done) {
+  setTimeout(function () {
+    done();
+  }, 300); // BUG 4: a real timer, not mock.timers -- slows the suite for no real reason
+});
+```
+
+## ลองหา bug ก่อนอ่านต่อ
+
+bug ที่ปลูกไว้สี่ตัว — หนึ่งข้อตกลงการแพ็กเกจ, หนึ่งกับดักช่วงเวอร์ชัน, หนึ่งการเช็กที่หายไป, หนึ่ง test ที่ช้า ลองเดาทั้งสี่ตัวก่อนเปิดคำตอบด้านล่าง
+
+<details>
+<summary>Bug 1 — `"default"` อยู่ก่อน `"types"` ใน `exports` map</summary>
+
+**อาการ:** Node resolve เงื่อนไข*แรก*ที่ match ใน `exports` map — เมื่อ `"default"` มาก่อน มันจะชนะเสมอ และ `"types"` ข้างล่างเป็น configuration ที่ตายแล้วซึ่ง editor ของ TypeScript และ `tsc` จะไม่มีวันได้ใช้จริง
+
+**หลักฐาน:** สิ่งนี้ไม่สร้าง runtime error เลยใน Node.js ธรรมดา — `require`/`import` ใน JavaScript ไม่เคยดูเงื่อนไข `"types"` ตั้งแต่แรก วิธีเดียวที่จะสังเกตเห็น bug นี้คือลองใช้ type ของ package นี้จากโปรเจกต์ TypeScript จริง ๆ แล้วสังเกตว่า editor กลับไปใช้ `any` โดยปริยายแทนที่จะเป็น declaration จริง
+
+**วิธีแก้:** เรียงเงื่อนไขที่เจาะจงกว่าไว้ก่อน: `{ "types": "./index.d.ts", "default": "./index.js" }`
+
+</details>
+
+<details>
+<summary>Bug 2 — `"left-pad": "^0.0.3"`</summary>
+
+**อาการ:** สำหรับเวอร์ชัน `0.0.x` เครื่องหมาย caret (`^`) ของ npm ไม่อนุญาตให้อัปเดตเลยแม้แต่นิดเดียว — ไม่แม้แต่ patch release — ซึ่งเข้มงวดกว่า `^` ตัวเดียวกันบน dependency แบบ `1.x` หรือแม้แต่ `0.1.x` มาก
+
+**หลักฐาน:** ไม่ใช่การ crash — นี่เป็นทางเลือกเรื่องช่วงเวอร์ชัน ไม่ใช่ bug ที่ทำให้ build ล้มเหลว มันคุ้มค่าที่จะ flag ไว้ตอนรีวิวเพราะง่ายที่จะสมมติว่า `^` แปลว่า "อัปเดต patch และ minor ได้เสมอ" ทั้งที่สำหรับอะไรก็ตามที่ต่ำกว่า `0.0.x` มันแปลว่า "pin ไว้แน่นอน" จริง ๆ
+
+**วิธีแก้:** ไม่มีอะไรพังจริง ๆ ที่นี่ แต่ reviewer ควรยืนยันว่าผู้เขียนตั้งใจจริง ๆ ว่า "ไม่อัปเดต dependency นี้เลยเด็ดขาด" — ถ้าไม่ใช่ การรอให้ dependency ถึงอย่างน้อย `0.1.0` (หรือ pin แบบไม่มี caret เลยเพื่อให้เจตนาชัดเจน) จะหลีกเลี่ยงความประหลาดใจนี้ได้
+
+</details>
+
+<details>
+<summary>Bug 3 — `double(4);` ไม่มี assertion บวกกับ `double` ที่ผิดจริง</summary>
+
+**อาการ:** `double` ใน `index.js` คืนค่า `n * 2 - 1` — `double(4)` คือ `7` ไม่ใช่ `8` — และ test ที่เรียกมันไม่เคยเช็กค่าที่คืนกลับมาเลย
+
+**หลักฐาน:** transcript จริงของ `node --test` ด้านล่าง: **ทั้งสอง test รายงานว่าผ่าน** รวมถึงตัวนี้ด้วย ทั้งที่ฟังก์ชันข้างใต้ผิดจริง
+
+**วิธีแก้:** `assert.equal(double(4), 8);` — และเมื่อมี assertion แล้ว การแก้ bug จริงใน `index.js` (`n * 2`) คือสิ่งที่ทำให้ suite เขียวอีกครั้ง
+
+</details>
+
+<details>
+<summary>Bug 4 — `setTimeout(function () { done(); }, 300);` ที่ไม่มี `mock.timers`</summary>
+
+**อาการ:** test นี้รอจริง 300 มิลลิวินาทีเพื่อพิสูจน์แค่ว่า "callback ทำงานในที่สุด" — ข้อเท็จจริงที่ไม่ต้องรอนาฬิกาจริงเพื่อยืนยันเลย
+
+**หลักฐาน:** เวลาต่อ test ของ transcript จริงเอง ตามที่ยกมาด้านล่าง: test ตัวนี้ตัวเดียวใช้เวลาประมาณ 300ms ในขณะที่ test อื่นทุกตัวใน suite ใช้เวลาต่ำกว่าหนึ่งมิลลิวินาที คูณด้วยจำนวน test แบบนี้ที่ suite จริงสะสมไว้ test suite ที่ "เร็ว" จะกลายเป็นยาวหลายนาทีโดยไม่มีเหตุผลเชิง functional เลย
+
+**วิธีแก้:** `mock.timers` ที่มากับ `node:test` เอง: เปิดใช้งานมัน, ลงทะเบียน `setTimeout` ตัวเดิม, แล้วเรียก `t.mock.timers.tick(300)` เพื่อเลื่อนนาฬิกาจำลองไปทันทีแทนที่จะรอนาฬิกาจริง
+
+</details>
+
+## เวอร์ชันที่แก้แล้ว
+
+`package.json`:
+
+```json
+{
+  "name": "wr4-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "dependencies": {
+    "left-pad": "^0.0.3"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
+```
+
+`index.js`:
+
+```js
+// @skip-verify multi-file package -- imported by index.test.js below, not run standalone
+export function double(n) {
+  return n * 2; // FIX: was n * 2 - 1
+}
+```
+
+`index.test.js`:
+
+```js
+// @skip-verify multi-file package -- imports ./index.js as a sibling file
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { double } from './index.js';
+
+test('doubles a number', function () {
+  assert.equal(double(4), 8); // FIX: a real, reachable assertion
+});
+
+test('resolves eventually', function (t) {
+  t.mock.timers.enable({ apis: ['setTimeout'] }); // FIX: mock the timer instead of waiting for real
+  return new Promise(function (resolve) {
+    setTimeout(resolve, 300);
+    t.mock.timers.tick(300); // advances the mocked clock instantly
+  });
+});
+```
+
+## เครื่องมือจับอะไรได้บ้าง
+
+**`npm ci` ตอนที่ยังไม่มี lockfile (สภาพของ package ที่มี bug ตอน commit):**
+
+```text
+npm error code EUSAGE
+npm error
+npm error The `npm ci` command can only install with an existing package-lock.json or
+npm error npm-shrinkwrap.json with lockfileVersion >= 1. Run an install with npm@5 or
+npm error later to generate a package-lock.json file, then try again.
+```
+
+`npm ci` ปฏิเสธที่จะรันเลยถ้าไม่มี lockfile ที่ commit ไว้ — ความล้มเหลวจริงและทันทีที่ไม่เกี่ยวกับ bug ทั้งสี่ตัวที่ปลูกไว้เลย แต่เป็นสิ่งที่ Dockerfile ที่ใช้ `npm ci` (ตามที่บท *Dependencies* แนะนำ) จะจับได้ตั้งแต่ build แรกพอดี
+
+**`npm install` (สร้าง lockfile) แล้ว `npm ci` อีกครั้ง:**
+
+```text
+npm warn deprecated left-pad@0.0.3: use String.prototype.padStart()
+
+added 1 package, and audited 2 packages in 522ms
+
+found 0 vulnerabilities
+```
+
+คำเตือน deprecated ของ npm เองเรียก `left-pad` ออกมาตรง ๆ — สัญญาณจริงที่เป็นอิสระ (ไม่เกี่ยวกับ bug ของช่วงเวอร์ชัน `^0.0.3`) ว่า dependency ตัวนี้ไม่ควรเป็น dependency ของ package ใหม่เลยในปี 2026 เพราะ standard library ทำหน้าที่นี้แทนได้ตั้งแต่ ES2017 แล้ว
+
+**`node --test` บนเวอร์ชันที่มี bug:**
+
+```text
+✔ doubles a number (0.4ms)
+✔ resolves eventually (302.7ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 367.2
+```
+
+ทั้งสอง test ผ่าน — bug จริงของ `double` (คืน `7` แทนที่จะเป็น `8`) มองไม่เห็นเลยสำหรับการรันนี้ และ `resolves eventually` เสียเวลาจริง 300+ มิลลิวินาทีเพื่อยืนยันสิ่งที่ไม่ต้องรอจริงเลย
+
+**`node --test` บนเวอร์ชันที่แก้แล้ว:**
+
+```text
+✔ doubles a number (0.4ms)
+✔ resolves eventually (0.4ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 53.6
+```
+
+test สองตัวเดิม หัวข้อ "2 passed" เดิม — แต่ตอนนี้ `doubles a number` เป็นการเช็กจริง (มันจะ fail ดัง ๆ ถ้า `double` กลับไปเป็นเวอร์ชันที่มี bug) และ `resolves eventually` เสร็จในเวลาต่ำกว่าครึ่งมิลลิวินาทีแทนที่จะเป็น 300+ เพราะ `mock.timers.tick(300)` เลื่อนนาฬิกาจำลองแทนที่จะรอนาฬิกาจริง
+
+<Callout title="สรุปหนึ่งบรรทัด">
+"2 passed, 0 failed" เป็นจริงทั้งเวอร์ชันที่มี bug และเวอร์ชันที่แก้แล้วของ suite นี้ — transcript จริงของ `npm ci` และ `node --test` พิสูจน์ว่า lockfile ที่หายไปล้มเหลวดังและทันที ในขณะที่ assertion ที่หายไปกับ timer ที่ไม่ mock ต่างก็ล้มเหลวอย่างเงียบ ๆ ตัวหนึ่งซ่อน bug จริง อีกตัวก็แค่เสียเวลาจริง 300 มิลลิวินาทีต่อการรันไปโดยเปล่าประโยชน์
+</Callout>
+
+export const quizWorkedReview4 = [
+  {
+    q: 'transcript ของ npm ci ล้มเหลวด้วย EUSAGE ก่อนที่ npm จะดู bug ทั้งสี่ตัวที่ปลูกไว้ใน package นี้ด้วยซ้ำ ตอนนั้น npm ci กำลังเช็กอะไรอยู่จริง ๆ?',
+    options: [
+      'ว่า package.json เป็น JSON ที่ถูกต้องตาม syntax หรือไม่',
+      'ว่ามี package-lock.json (หรือ npm-shrinkwrap.json) อยู่แล้วให้ติดตั้งตามเป๊ะ ๆ หรือไม่ -- npm ci ปฏิเสธที่จะรันถ้าไม่มี แทนที่จะ resolve เวอร์ชันใหม่แบบที่ npm install จะทำ',
+      'ว่า left-pad เป็น package ที่รู้กันว่ามีช่องโหว่หรือไม่',
+      'ว่า field exports ถูกเรียงลำดับถูกต้องหรือไม่',
+    ],
+    answer: 1,
+    explain: 'npm ci ถูกออกแบบมาเพื่อการติดตั้งที่ทำซ้ำได้: มันจะติดตั้งแค่สิ่งที่ lockfile ที่มีอยู่ระบุไว้เป๊ะ ๆ เท่านั้น และปฏิเสธทันทีถ้า lockfile นั้นหายไป แทนที่จะย้อนกลับไป resolve dependency ใหม่',
+  },
+  {
+    q: 'ทำไม node --test ถึงรายงาน "2 passed, 0 failed" สำหรับเวอร์ชันที่มี bug ทั้งที่ double(4) คืนค่า 7 จริง แทนที่จะเป็น 8 ที่ถูกต้อง?',
+    options: [
+      'node --test มี bug ที่ทำให้ตรวจจับค่าที่คืนกลับผิดไม่ได้',
+      'test เรียก double(4) แต่ไม่เคย assert อะไรเกี่ยวกับผลลัพธ์ที่ได้กลับมาเลย -- เมื่อไม่มี assertion ที่จะ fail test ก็รายงานได้แค่ว่าผ่านเท่านั้น',
+      'double(4) จริง ๆ แล้วคืนค่า 8 ในเวอร์ชันที่มี bug',
+      'assert.equal ถูกเรียกแต่เพิกเฉยต่อความไม่ตรงกันอย่างเงียบ ๆ',
+    ],
+    answer: 1,
+    explain: 'นี่คือ pattern 22 จาก AI bug catalog โดยตรง: test ที่เรียกฟังก์ชันที่ทดสอบแต่ไม่เช็กอะไรเกี่ยวกับผลลัพธ์ของมันเลยจะรายงานว่าผ่านไม่ว่าผลลัพธ์นั้นจะถูกต้องหรือไม่',
+  },
+  {
+    q: 'test "resolves eventually" ในเวอร์ชันที่มี bug ใช้เวลาประมาณ 300ms; test ที่เทียบเท่าในเวอร์ชันที่แก้แล้วใช้เวลาต่ำกว่าหนึ่งมิลลิวินาที อะไรเปลี่ยนไปที่ทำให้เร็วขึ้นขนาดนั้น ทั้งที่ทั้งสอง test ใช้การเรียก setTimeout 300ms เดียวกัน?',
+    options: [
+      'เวอร์ชันที่แก้แล้วข้าม test นี้ไปเลย',
+      'เวอร์ชันที่แก้แล้วเปิดใช้ mock.timers และเรียก t.mock.timers.tick(300) ซึ่งเลื่อนนาฬิกาจำลองไปทันทีแทนที่ test จะรอ 300 มิลลิวินาทีจริงให้ timer จริงทำงาน',
+      'เวอร์ชันที่แก้แล้วใช้ timeout ที่สั้นกว่า คือ 1ms แทน 300ms',
+      'node --test cache ผลลัพธ์ test ไว้ระหว่างการรัน',
+    ],
+    answer: 1,
+    explain: 'mock.timers แทนที่ implementation ของ timer จริงด้วยตัวจำลองที่ควบคุมได้ การเรียก tick(300) จะยิง timer ทุกตัวที่ตั้งไว้ภายในเวลาจำลอง 300ms ทันที ยืนยันพฤติกรรม callback-ทำงานในที่สุด แบบเดียวกันโดยไม่ต้องรอจริงเลย',
+  },
+  {
+    q: 'ทำไม "^0.0.3" สำหรับ left-pad ถึงถูก flag ว่าควรได้รับความสนใจจาก reviewer ทั้งที่มันไม่ทำให้ test fail หรือ npm error เลย?',
+    options: [
+      'มัน syntax semver ไม่ถูกต้อง',
+      'สำหรับเวอร์ชัน 0.0.x ช่วง caret ของ npm ไม่อนุญาตให้อัปเดตต่อเลย (ไม่แม้แต่ patch) -- ความหมายที่เข้มงวดกว่าเครื่องหมาย ^ ตัวเดียวกันบน dependency แบบ 1.x มาก ซึ่ง reviewer ที่มองผ่าน ๆ สัญลักษณ์ ^ อาจพลาดได้ง่าย',
+      'left-pad ไม่มีอยู่จริงบน npm registry',
+      'มันทำให้ npm ci ล้มเหลวเสมอ',
+    ],
+    answer: 1,
+    explain: 'ช่วง caret ทำงานต่างกันขึ้นอยู่กับว่าส่วนไหนของเวอร์ชันไม่เป็นศูนย์: ^1.2.3 อนุญาตอัปเดต minor และ patch, ^0.2.3 อนุญาตแค่ patch, และ ^0.0.3 ไม่อนุญาตอัปเดตเลย สัญลักษณ์ตัวเดียวกันมีความหมายสามแบบต่างกันขึ้นอยู่กับบริบท ซึ่งเป็นรายละเอียดที่คุ้มค่าจะดูซ้ำอีกครั้งตอนรีวิว',
+  },
+];
+
+<Quiz client:visible id="reading-node/worked-review-4" questions={quizWorkedReview4} />
+
+<ProgressTracker client:visible id="reading-node/worked-review-4" />

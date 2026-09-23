@@ -1,0 +1,192 @@
+---
+title: วิธีอ่านโค้ด Node.js ที่ไม่ได้เขียนเอง
+description: 'ลำดับการอ่านโค้ด Node.js ที่ไม่คุ้นเคย — ตาม event loop, ตามอายุของทุกทรัพยากร, ตามขอบเขตของข้อมูล, และนับจำนวนจุดที่กลืน error'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+ทุกโมดูลก่อนหน้านี้สอนให้คุณ *เขียน* Node.js ส่วนโมดูลนี้สอนอีกครึ่งหนึ่งของงาน นั่นคือการ *อ่าน* โค้ด Node.js ที่คนอื่น — หรือ AI — เขียนไว้ แล้วตัดสินว่ามันทำตามที่มันดูเหมือนจะทำจริงหรือไม่ AI assistant อาจส่งไฟล์ที่รันได้โดยไม่ throw หน้าตาเหมือนตัวอย่างที่ดีที่คุณเคยศึกษามาทุกอย่าง แต่ยังคงผิดอยู่ "รันแล้ว print ค่าถูกครั้งเดียว" ไม่เหมือนกับ "ถูกต้อง" — event loop, อายุของ stream, และขอบเขตข้อมูลที่ไม่มี type ของ Node ล้วนซ่อนรูปแบบความล้มเหลวที่จะโผล่มาก็ต่อเมื่อมี load สูง, connection ช้า, หรือ listener ตัวเดิมทำงานเป็นครั้งที่สอง นิสัยสี่ข้อด้านล่างคือลำดับที่ reviewer Node.js มืออาชีพใช้อ่านโค้ดจริง ๆ และทุกบทถัดไปในโมดูลนี้จะเจาะลึกทีละข้อ
+
+## ตาม event loop: อะไร block อะไร await
+
+ก่อนจะเชื่อ logic ของไฟล์ ให้หาก่อนว่าอะไรรันแบบ synchronous จริง ๆ และอะไรถูกเลื่อนออกไป
+
+- **อะไร block ทั้งโปรเซส?** `readFileSync`, loop synchronous ที่หนัก, `JSON.parse` บนสตริงขนาดใหญ่, เรียก `crypto` แบบไม่ใช้ฟอร์ม async — ทั้งหมดนี้ยึด thread เดียวไว้ ทำให้ request, timer, และ callback อื่นทุกตัวต้องรอต่อคิว
+- **อะไรถูก await จริง ๆ และอะไรแค่คืนค่า promise?** การเรียก `async function` โดยไม่มี `await` นำหน้ายังคงรันอยู่ — เพียงแต่มันรันแบบขนานไปกับโค้ดถัดไป และผู้เรียกได้เดินหน้าต่อไปแล้วก่อนที่มันจะเสร็จ
+- **`nextTick`, microtask, `setImmediate`, และ `setTimeout` รันตามลำดับไหนจริง ๆ?** โค้ดที่ดูเรียงจากบนลงล่างบนหน้าจอ อาจสลับลำดับกันจริงในแบบที่เข้าใจได้ก็ต่อเมื่อรู้ว่า event loop กำหนดตารางเวลาของแต่ละคิวแยกกัน ไม่ได้อ่านตามตำแหน่งในไฟล์
+
+## ตามอายุของทุกทรัพยากร
+
+ทุก stream, socket, และ listener มีจุดเริ่มต้น และ — ถ้าโค้ดถูกต้อง — มีจุดจบ การอ่านไฟล์ให้ดีคือการหาทั้งสองจุดของแต่ละตัว
+
+- ทุก response ของ `http.createServer` เรียก `res.end()` เพียงครั้งเดียวในทุก code path (รวมถึง path ที่เกิด error) หรือไม่?
+- ทุก stream ที่ถูกเปิด (`fs.createReadStream`, socket, child process) ถูกปิดหรือ destroy ทั้งใน success path และ error path หรือแค่ path เดียว?
+- ทุก `.on('event', handler)` มีการลบที่คู่กันหรือไม่ หรือมันสะสม listener ใหม่ทุกครั้งที่มี request เข้ามา — รูปแบบคลาสสิกของ `MaxListenersExceededWarning`?
+
+## ตามขอบเขตของข้อมูล
+
+ขอบเขต (boundary) คือจุดใด ๆ ที่ข้อมูลเข้าสู่โปรแกรมจากที่ที่ระบบ type และภาษาไม่สามารถมองเห็นล่วงหน้าได้ เช่น `process.env`, body ของ HTTP request, `process.argv`, ไฟล์ที่อ่านจากดิสก์, ค่าจาก database driver การอ่านขอบเขตให้ดีคือการถามสำหรับแต่ละจุดว่า
+
+- ค่านั้นถูกตรวจสอบจริง (type ถูกต้อง, รูปร่างถูกต้อง, ช่วงค่าถูกต้อง) ก่อนที่ส่วนอื่นของโปรแกรมจะเชื่อมันหรือไม่ หรือไหลตรงเข้าสู่ logic ที่สมมติว่ามันถูกต้องอยู่แล้ว?
+- `process.env.PORT` เป็น `string` หรือ `undefined` เสมอ — โค้ดแปลงมันเป็นตัวเลขหรือยัง และจัดการกรณีที่ตัวแปรนี้ไม่มีอยู่เลยหรือไม่?
+- request body ถูกจำกัดขนาดก่อนถูก buffer หรือไม่ หรือการอัปโหลดที่ไม่จำกัดขนาดสามารถทำให้ memory โตไม่มีที่สิ้นสุด?
+
+## นับจำนวนจุดที่กลืน error
+
+ก่อนตัดสินคุณภาพโดยรวมของไฟล์ ให้นับทุก `catch {}` ที่ว่างเปล่า, ทุก `.catch(() => {})`, และทุก `process.on('uncaughtException', ...)` หรือ `process.on('unhandledRejection', ...)` ที่แค่ log แล้วทำงานต่อแทนที่จะล้มเหลวให้เห็นชัด แต่ละจุดคือที่ที่ผู้เขียนตัดสินใจให้ error หายไปแทนที่จะแสดงออกมา — บางครั้งก็มีเหตุผลที่ปลอดภัยจริง (เช่นการเขียน cache แบบ best-effort) และบางครั้งก็เพราะ bug ถูกปิดเสียงไว้ระหว่างพัฒนาแล้วไม่เคยกลับมาแก้ ไฟล์ที่ไม่มีจุดกลืน error เลยและรันผ่าน `node --test` กับ `--trace-warnings` ได้สะอาด ถือว่าถูกทดสอบจริง ส่วนไฟล์ที่มี catch เงียบ ๆ ห้าจุด แทบไม่ได้พิสูจน์อะไรเลยว่าจะเกิดอะไรขึ้นเมื่อมีอะไรผิดพลาดจริง ๆ
+
+<NodeRunner client:visible code={readingOrderCode} />
+
+export const readingOrderCode = `// @browser
+function processOrder(order) {
+  console.log('start processing', order.id);
+  setTimeout(function () { console.log('inventory checked for', order.id); }, 0);
+  Promise.resolve().then(function () { console.log('payment charged for', order.id); });
+  console.log('order queued', order.id);
+}
+
+processOrder({ id: 1 });
+console.log('main done');
+`;
+
+การอ่านจากบนลงล่างทำให้ดูเหมือนลำดับคือ "ประมวลผล, ตรวจสต็อก, เก็บเงิน, เข้าคิว, เสร็จ" — ห้าขั้นตอนตามลำดับนั้น แต่ลำดับจริงคือ `start processing 1`, `order queued 1`, `main done`, `payment charged for 1`, `inventory checked for 1`: บรรทัด synchronous ทำงานเสร็จก่อนทั้งหมด จากนั้น microtask (`Promise.resolve().then`) รันก่อน macrotask (`setTimeout`) เสมอ ไม่ว่า delay จะเป็น `0` หรือไม่ก็ตาม ลำดับการอ่านกับลำดับการรันไม่ใช่สิ่งเดียวกัน และบท [microtasks vs. macrotasks](/nodejs/th/event-loop-async/microtasks-macrotasks/) ในโมดูล *Event Loop และ Async* อธิบายเหตุผลไว้ครบ
+
+## Mental Model
+
+<Mermaid code={`flowchart TD
+  A["Read the file"] --> B["Follow the event loop -- what blocks, what is awaited, what order do nextTick/microtask/setImmediate/setTimeout run in?"]
+  B --> C["Follow every lifetime -- does every stream/socket/listener that opens also close, on every path?"]
+  C --> D["Follow the boundaries -- env, request body, argv, disk, DB: validated, or just trusted?"]
+  D --> E["Count the suppressions -- empty catch, swallowed rejection, silent uncaughtException handler"]
+  E --> F["Only now: judge correctness"]`} title="ลำดับการอ่านโค้ด Node.js ที่ไม่ได้เขียนเอง" />
+
+```text
+Reading order for Node.js you did not write:
+
+1. Event loop     -> what blocks the process, what is awaited, what actually runs first?
+2. Lifetimes      -> every stream/socket/listener that opens: does it also close, on every path?
+3. Boundaries     -> env / body / argv / disk / DB: validated, or just trusted?
+4. Suppressions   -> how many catch blocks make an error disappear instead of surfacing?
+
+Code that runs once without throwing answers none of these on its own.
+```
+
+## Trade-offs
+
+| ได้อะไร | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| อ่านลำดับ event loop ก่อน | จับ bug จากการสลับลำดับ (callback ที่ทำงานช้ากว่าที่โครงสร้างโค้ดบอก) ก่อนที่จะเชื่อ logic | ต้องจำกฎการจัดตารางเวลาไว้ในหัว ไม่ใช่แค่อ่านจากบนลงล่าง |
+| ตามอายุของทรัพยากรอย่างชัดเจน | จับ listener ที่รั่วและ stream ที่ถูกปล่อยค้างไว้ใน error path ซึ่งจะโผล่มาก็ต่อเมื่อมี load ต่อเนื่อง | ช้ากว่าการสมมติว่า `try`/`finally` หรือ `.on('close', ...)` ที่เห็นผ่าน ๆ นั้นครบถ้วนแล้ว |
+| ตามขอบเขตข้อมูล | จับข้อมูลที่ไม่น่าเชื่อถือก่อนที่มันจะไหลเข้าสู่ logic ที่สมมติว่ามันถูกต้องแล้ว | ต้องตรวจทุกจุดเข้า ไม่ใช่แค่จุดที่ดูน่าสงสัย |
+| นับจำนวนจุดที่กลืน error | เปลี่ยน "รู้สึกว่าปลอดภัย" ให้เป็นตัวเลขที่เทียบกันระหว่างไฟล์หรือ PR ได้ | ตัวเลขดิบไม่มีการถ่วงน้ำหนักความรุนแรง — `uncaughtException` ที่ถูกปิดเสียงหนึ่งจุดมีน้ำหนักมากกว่า catch ว่างที่ป้องกันการ log สิบจุด |
+
+## Common Misconceptions
+
+- **"รันแล้วไม่ throw แปลว่าถูกต้อง"** ทุก pattern ในแคตตาล็อกของโมดูลนี้รันได้โดยไม่ throw บน happy path — นั่นแหละคือสิ่งที่ทำให้แต่ละ pattern อันตราย การรันผ่านครั้งเดียวพิสูจน์แค่ว่า input ที่ใช้ทดสอบไม่ได้ไปกระตุ้น bug ไม่ได้พิสูจน์ว่าไม่มี bug
+- **"โค้ด async รันตามลำดับที่เขียนไว้"** `async`/`await` และ promise ทำให้โค้ด async *อ่าน* ดูเรียงลำดับ แต่ไม่ได้ทำให้ operation async ที่ไม่เกี่ยวข้องกัน (timer ข้าง ๆ promise, สอง call ที่ไม่ await) รันตามลำดับการอ่านนั้นจริง
+- **"ถ้าคนเขียนก็ไม่ต้องตรวจสอบขนาดนี้ ต้องเป็นโค้ด AI เท่านั้น"** ทุก pattern ในแคตตาล็อกของโมดูลนี้ก็ปรากฏในโค้ด Node.js ที่คนเขียนเช่นกัน — AI แค่ผลิตมันในปริมาณที่มากกว่ามากและดูมั่นใจกว่า พร้อม comment ที่ทำให้ทางลัดดูเหมือนตั้งใจ
+- **"try/catch ครอบทั้งฟังก์ชันแปลว่าทุก error path ถูกจัดการแล้ว"** `catch` ที่แค่ log แล้วคืนค่า default ได้ "จัดการ" error ในแง่ที่โปรเซสไม่ crash แต่มันอาจซ่อน bug ที่ควรทำให้ request ล้มเหลวแทนที่จะคืนข้อมูลผิด ๆ อย่างเงียบ ๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+เมื่อ reviewer เปิด diff ที่ AI เขียน ลำดับของโมดูลนี้กลายเป็น checklist
+
+1. grep diff หา `readFileSync`, `forEach(async`, `.then(`, `setTimeout`, `process.env`, `catch {}`, `.catch(() => {})`, `process.on('uncaughtException'` — ทุกจุดที่เจอคือจุดที่ต้องหยุดดูให้ดี
+2. สำหรับทุก stream, socket, หรือ listener ที่ diff เปิดขึ้น ตรวจว่ามี close/destroy/removal ที่คู่กันในทุก code path รวมถึง error path
+3. สำหรับทุกค่าที่อ่านจาก `process.env`, request body, `process.argv`, หรือดิสก์ ตรวจว่าถูก validate ก่อนที่ logic จะเชื่อ type และรูปร่างของมัน
+4. ถ้า test ของ diff ผ่านและ `node --trace-warnings` ไม่ print อะไรเลย ให้ถือว่านั่นคือ "ไม่มี warning เกิดขึ้นกับ input นี้" ไม่ใช่ "ไม่มี bug"
+
+<SpotTheBug code={`async function loadConfig(path) {
+  try {
+    const raw = await fs.readFile(path, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}`}>
+`catch {}` ที่ว่างเปล่าจัดการทุกความล้มเหลวที่เป็นไปได้เหมือนกันหมด: ไฟล์ config หาย, permission ผิด, ไฟล์ config มีอยู่แต่มี JSON ผิดรูปแบบ, และ disk I/O error ทั้งหมดกลายเป็น `{}` อย่างเงียบ ๆ ผู้เรียกไม่สามารถแยกได้ว่า "ไม่มี config จริง ๆ ใช้ default ได้เลย" กับ "config มีอยู่แต่พัง และโปรแกรมกำลังจะรันด้วยค่าที่ผิดอย่างเงียบ ๆ" ทางแก้คือให้ default เฉพาะกรณีที่คาดไว้จริง ๆ (ไฟล์ไม่พบ) แล้วปล่อยให้ทุกอย่างอื่นแสดงออกมา: ตรวจ `err.code === 'ENOENT'` ก่อนคืน `{}` แล้ว rethrow (หรือ log ให้ชัด) สำหรับกรณีอื่น — รวมถึง `JSON.parse` ที่ล้มเหลว ซึ่งมักหมายความว่าต้องให้คนแก้ไฟล์ ไม่ใช่ได้ default ว่างเปล่าอย่างเงียบ ๆ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+อ่านลำดับ event loop, ตามอายุของทุกทรัพยากรไปจนถึงจุดปิด, ตามทุกขอบเขตข้อมูลไปจนถึงจุดตรวจสอบ, และนับจำนวนจุดที่กลืน error — โค้ดที่รันผ่านครั้งเดียวโดยไม่ throw บอกอะไรได้น้อยมากว่ามันถูกต้องหรือไม่
+</Callout>
+
+export const indexQuiz = [
+  {
+    q: '```js\nconsole.log(\'a\');\nsetTimeout(() => console.log(\'b\'), 0);\nPromise.resolve().then(() => console.log(\'c\'));\nconsole.log(\'d\');\n```\nโค้ดนี้ print อะไร ตามลำดับ?',
+    options: [
+      'a, b, c, d',
+      'a, d, c, b',
+      'a, d, b, c',
+      'a, c, d, b',
+    ],
+    answer: 1,
+    explain: 'console.log แบบ synchronous สองบรรทัด (a, d) รันก่อน จากนั้น microtask queue จะระบายให้หมดก่อน macrotask ถัดไป ดังนั้น .then ของ promise ที่ resolve แล้ว (c) จึงรันก่อน callback ของ setTimeout (b) แม้ delay จะเป็น 0ms ก็ตาม',
+  },
+  {
+    q: 'code review พบว่า handler ของ `http.createServer` เรียก `res.end()` บน success path แต่ไม่เรียกใน `catch` block อาการที่น่าจะเกิดขึ้นเมื่อมี load คืออะไร?',
+    options: [
+      'ไม่มีอะไรเกิดขึ้น — Node จะ end response ให้อัตโนมัติเสมอ',
+      'request ที่ไปเข้า catch block จะค้างอยู่จนกว่า client จะ timeout เพราะไม่มี response ถูกส่งเลย',
+      'server จะ crash ทันทีที่เกิด error ครั้งแรก',
+      'response ถูกส่งซ้ำสองครั้ง',
+    ],
+    answer: 1,
+    explain: 'response คืออายุของทรัพยากรที่มีจุดเริ่ม (request เข้ามา) และจุดจบ (res.end()) ถ้า error path ไม่เคยไปถึง res.end() connection นั้นก็จะค้างจากมุมมองของ client — อายุที่เปิดแต่ไม่เคยปิด',
+  },
+  {
+    q: 'ทำไมการส่ง `process.env.PORT` ตรง ๆ ให้ `server.listen(process.env.PORT)` โดยไม่ตรวจก่อนถึงไม่ปลอดภัย?',
+    options: [
+      'process.env.PORT เป็นตัวเลขเสมอใน Node.js',
+      'process.env.PORT เป็น string หรือ undefined — ถ้าตัวแปรไม่ถูกตั้งค่า listen() จะได้ undefined และถ้าค่าไม่ใช่ตัวเลขก็จะได้ string ที่ไม่ถูกต้อง',
+      'server.listen() ไม่รับ argument พอร์ตเลย',
+      'อ่าน environment variable ข้างในตัว HTTP server ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'ทุกค่าใน process.env เป็น string (หรือไม่มีเลย) การอ่านมันในฐานะขอบเขตข้อมูลคือการตรวจว่ามันมีอยู่จริงและแปลงเป็นเลขพอร์ตที่ถูกต้องได้ก่อนจะเชื่อมัน แทนที่จะสมมติว่า environment ของ deployment ตั้งค่ามันถูกต้องเสมอ',
+  },
+  {
+    q: '`catch {}` ที่ว่างเปล่าครอบ `JSON.parse` ซ่อนอะไรที่ `catch (err) { if (err.code !== \'ENOENT\') throw err; }` ครอบการอ่านไฟล์ไม่ซ่อน?',
+    options: [
+      'ไม่มีอะไรต่างกัน — ปลอดภัยเท่ากันทั้งคู่',
+      'catch ว่างเปล่าปฏิบัติต่อ "ไฟล์หาย" กับ "ไฟล์มีอยู่แต่มี JSON ผิดรูปแบบ" เหมือนกันหมด คืนค่า default อย่างเงียบ ๆ ทั้งสองกรณีแทนที่จะทำให้กรณีที่สองแสดงเป็น bug จริง',
+      'JSON.parse ไม่มีทาง throw ดังนั้น catch block จึงเป็นโค้ดที่ไม่มีวันถูกเรียก',
+      'catch แบบแคบกว่าทำงานช้ากว่าตอน runtime',
+    ],
+    answer: 1,
+    explain: 'catch ว่างเปล่าแบบไม่มีเงื่อนไขกลืนทุกความล้มเหลวเหมือนกันหมด การตรวจ error ก่อนตัดสินใจว่าจะกลืนมันหรือไม่ (หรือไม่กลืน) คือสิ่งที่ทำให้กรณีที่คาดไว้จริง (ยังไม่มีไฟล์ config) เงียบต่อไปได้ ในขณะที่กรณีที่ไม่คาดคิด (config เสีย) ยังคงแสดงออกมา',
+  },
+  {
+    q: 'reviewer เห็น request handler ลงทะเบียน `db.on(\'error\', handler)` ตัวใหม่ทุกครั้งที่มี request เข้ามา โดยไม่มี `.off()` คู่กัน อาการแรกที่คาดว่าจะเกิดหลังจาก request มากพอคืออะไร?',
+    options: [
+      'server จะช้าลงเรื่อย ๆ โดยไม่มีสัญญาณเตือนใด ๆ เลย',
+      '`MaxListenersExceededWarning` และในที่สุด error ของ db แต่ละครั้งจะยิง handler ที่สะสมไว้ทั้งหมดพร้อมกัน',
+      'process จะ crash ทันทีตั้งแต่ request ที่สอง',
+      'Node จะลบ listener ที่ซ้ำกันสำหรับ event name เดียวกันให้อัตโนมัติ',
+    ],
+    answer: 1,
+    explain: 'EventEmitter จะเตือนหนึ่งครั้งเมื่อ event name หนึ่งบน emitter ตัวเดียวเกิน threshold ค่าเริ่มต้น (10) หลังจากนั้นจะไม่มีอะไร crash เอง แต่ทุก error event ในอนาคตจะยิง handler ที่สะสมไว้ทั้งหมด ซึ่งเป็น bug อีกแบบหนึ่งในตัวมันเอง',
+  },
+  {
+    q: 'ทำไมลำดับการอ่านของโมดูลนี้ถึงให้ "ตาม event loop" มาก่อน "ตัดสินความถูกต้อง" แทนที่จะแค่รันไฟล์แล้วเช็ก output ครั้งเดียว?',
+    options: [
+      'เพราะการรันโค้ดไม่เคยเป็นวิธีตรวจสอบที่น่าเชื่อถือเลย',
+      'เพราะการรันครั้งเดียวทดสอบแค่การสลับลำดับหนึ่งแบบกับชุด input หนึ่งชุด — ไฟล์เดียวกันอาจทำงานต่างออกไปเมื่อ disk ช้าลง, payload ใหญ่ขึ้น, หรือ listener ตัวเดิมถูกเรียกเป็นครั้งที่สอง',
+      'เพราะโค้ด Node.js รันนอกเบราว์เซอร์ไม่ได้',
+      'ไม่มีเหตุผลจริง ๆ แค่เป็นสไตล์ของคอร์สนี้',
+    ],
+    answer: 1,
+    explain: 'การรัน demo ครั้งหนึ่งพิสูจน์แค่ว่า input ที่เลือกไม่ได้ไปกระตุ้น bug ตัวใดตัวหนึ่งในครั้งนั้น — ไม่ได้พิสูจน์ว่า bug นั้นไม่มีอยู่ การอ่านตารางเวลา, อายุของทรัพยากร, ขอบเขตข้อมูล, และจุดที่กลืน error ช่วยหา bug กลุ่มที่การรันสำเร็จเพียงครั้งเดียวไม่สามารถตัดออกได้',
+  },
+];
+
+<Quiz client:visible id="reading-node/index" questions={indexQuiz} />
+
+<ProgressTracker client:visible id="reading-node/index" />

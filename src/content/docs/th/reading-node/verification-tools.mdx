@@ -1,0 +1,409 @@
+---
+title: 'บันไดเครื่องมือตรวจสอบ'
+description: 'node --test พร้อม coverage, --trace-warnings และ --unhandled-rejections=strict, eslint-plugin-n + eslint-plugin-promise ที่รันจริง, npm audit และ osv-scanner, --cpu-prof และ autocannon, และ knip — ทุกขั้นพร้อมผลลัพธ์จริง และตารางว่า pattern ไหนถูกจับด้วยขั้นไหน'
+sidebar:
+  order: 4
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+*AI bug catalog* ระบุเครื่องมือไว้สำหรับแต่ละ 24 pattern — ส่วนใหญ่คือ "ไม่มี — ต้องใช้คนเท่านั้น" บทนี้รันเครื่องมือทุกตัวที่ *มีจริง* ให้ดูจริง กับโค้ด Node.js จริง และยกผลลัพธ์ที่ได้มาตรง ๆ: ไม่มีการแต่งผลลัพธ์ ไม่มีชื่อกฎที่คิดขึ้นเอง ไม่มีเครื่องมือไหนใน repo นี้เลย — แต่ละตัวถูกติดตั้งในโปรเจกต์ scratch แบบใช้แล้วทิ้ง (`npm install --save-dev` สำหรับ npm package, `brew install osv-scanner` สำหรับตัวที่ไม่ใช่) แล้วรันที่นั่น เหมือนกับที่ reviewer จะติดตั้งให้โปรเจกต์ที่ยังไม่มีเครื่องมือนี้จริง ๆ
+
+## ขั้นที่ 1: `node --test` พร้อม coverage
+
+test runner ในตัวไม่ต้องติดตั้งอะไรเลย เมื่อมี `math.cjs` ที่ export `add` กับ `subtract` และไฟล์ test ที่ใช้แค่ `add`
+
+```js
+// @skip-verify illustrative -- ./math.cjs is a separate file, shown only to name the setup
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { add } = require('./math.cjs');
+
+test('adds two numbers', function () {
+  assert.equal(add(2, 3), 5);
+});
+```
+
+<NodeRunner client:visible code={assertDemoCode} node expected={assertDemoOut} />
+
+export const assertDemoCode = `import assert from 'node:assert/strict';
+
+function add(a, b) { return a + b; }
+
+assert.equal(add(2, 3), 5);
+console.log('assertion passed');
+`;
+
+export const assertDemoOut = `assertion passed`;
+
+รันจริงด้วย `node --test --experimental-test-coverage`:
+
+```text
+✔ adds two numbers (0.5ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 58.8
+ℹ start of coverage report
+ℹ ----------------------------------------------------------
+ℹ file      | line % | branch % | funcs % | uncovered lines
+ℹ ----------------------------------------------------------
+ℹ math.cjs  |  66.67 |   100.00 |   50.00 | 5-7
+ℹ ----------------------------------------------------------
+ℹ all files |  66.67 |   100.00 |   50.00 |
+ℹ ----------------------------------------------------------
+ℹ end of coverage report
+```
+
+(เวลาต่อ test ต่างกันไปในแต่ละครั้งที่รัน แต่ตัวเลข coverage ไม่ต่างกัน) `subtract` ไม่เคยถูกเรียกจากไฟล์ test เลย และรายงาน coverage ก็บอกตรง ๆ: line coverage 66.67% บรรทัดของ `subtract` ถูกระบุเป็น uncovered `--experimental-test-coverage` ยังเป็น flag แบบ experimental บน Node 24.13 — เสถียรพอที่จะพึ่งพาได้ แต่ยังไม่เสถียรพอที่รูปแบบรายงานที่แน่นอนของมันจะไม่เปลี่ยนในเวอร์ชันถัดไป
+
+## ขั้นที่ 2: `--trace-warnings`, `--unhandled-rejections=strict`, `--trace-uncaught`
+
+`--trace-warnings` เปลี่ยน warning เปล่า ๆ ให้กลายเป็น stack trace เต็มที่ชี้ไปยังจุดที่ปัญหาถูกสร้างขึ้นจริง รันกับ pattern listener leak จาก *AI bug catalog*:
+
+```text
+listener count: 11
+(node:45399) MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 data listeners added to [EventEmitter]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit
+    at genericNodeError (node:internal/errors:985:15)
+    at wrappedFn (node:internal/errors:539:14)
+    at _addListener (node:events:582:17)
+    at EventEmitter.addListener (node:events:600:10)
+    at handleRequest (file:///.../listener-leak.mjs:10:11)
+    at file:///.../listener-leak.mjs:13:30
+warning name: MaxListenersExceededWarning
+```
+
+ถ้าไม่มี flag นี้ warning ก็ยัง print อยู่ — แค่ไม่มี stack เหลือแค่ "listener นี้ถูกเพิ่มที่ไหนจริง ๆ" เป็นการค้นหาด้วยมือทั่วทั้ง codebase แทนที่จะเป็นเลขบรรทัดที่ชัดเจน
+
+`--unhandled-rejections=strict` เป็นพฤติกรรม *ดีฟอลต์* มาตั้งแต่ Node 15 — รันแบบระบุ flag ตรง ๆ กับ pattern floating promise ให้ผล crash เดียวกันไม่ว่าจะมี flag หรือไม่:
+
+```text
+save queued
+Error: missing id
+    at saveRecord (...)
+Node.js v24.13.0
+```
+
+flag นี้มีความหมายสำหรับโค้ดที่ยังรันบน Node เวอร์ชันเก่ามาก ๆ หรือ codebase ที่จงใจ override ค่าดีฟอลต์กลับไปเป็น `warn` — บน Node 24.13 ปัจจุบัน การ crash เกิดขึ้นเหมือนกันไม่ว่าจะมี flag หรือไม่
+
+`--trace-uncaught` เพิ่มอีกหนึ่งส่วน `Thrown at:` เข้าไปบน output ดีฟอลต์ของ uncaught exception ใน Node — ชี้ไปยังบรรทัดที่ error ถูก throw จริง แยกจากจุดที่มันถูก catch (หรือไม่ถูก catch) ขึ้นไปใน stack กับ pattern event `error` ที่ไม่มี listener output ดีฟอลต์ก็แสดง `Emitted 'error' event at:` อยู่แล้ว `--trace-uncaught` เพิ่ม block `Thrown at:` ที่สองเข้ามาด้วยตำแหน่งเดียวกันสำหรับกรณีง่าย ๆ นี้ แต่ทั้งสองอาจต่างกันได้ในโค้ดที่ error ถูก throw ที่หนึ่งแล้วโผล่ขึ้นไปถึง top level ที่อีกจุดหนึ่งไปเลย
+
+## ขั้นที่ 3: `eslint-plugin-n` + `eslint-plugin-promise` รันจริง
+
+ติดตั้งในโปรเจกต์ scratch: `eslint@9.39.5`, `eslint-plugin-n@18.3.0`, `eslint-plugin-promise@7.3.0` flat config โดยใช้ flat preset ที่แต่ละ plugin export มาเอง:
+
+```js
+// @skip-verify eslint config, not a runnable program
+import n from 'eslint-plugin-n';
+import promise from 'eslint-plugin-promise';
+
+export default [
+  n.configs['flat/recommended-module'],
+  promise.configs['flat/recommended'],
+  {
+    rules: {
+      'no-eval': 'error',
+    },
+  },
+];
+```
+
+รันกับไฟล์เป้าหมายที่สร้างขึ้นเพื่อรวม pattern จาก *AI bug catalog* หลายตัวไว้ด้วยกัน:
+
+```js
+// @expect-throw
+import fs from 'node:fs';
+
+const data = fs.readFileSync('/etc/hosts');
+
+function fetchUser(id) {
+  return new Promise(function (ok, bad) {
+    ok({ id: id });
+  });
+}
+
+function handleUser(id) {
+  fetchUser(id).then(function (user) {
+    console.log(user);
+  });
+}
+
+function chained(id) {
+  return fetchUser(id).then(function (user) {
+    fetchUser(user.id + 1).then(function (next) {
+      console.log(next);
+    });
+  });
+}
+
+handleUser(1);
+chained(2);
+
+eval('console.log(1)');
+
+process.exit(1);
+
+new Buffer(10);
+```
+
+`npx eslint bad-file.mjs` ผลลัพธ์จริง:
+
+```text
+  6:32  error    Promise constructor parameters must be named to match "^_?resolve$"                          promise/param-names
+  6:36  error    Promise constructor parameters must be named to match "^_?reject$"                           promise/param-names
+  12:3  error    Expected catch() or return                                                                   promise/catch-or-return
+  12:22 error    Each then() should return a value or throw                                                   promise/always-return
+  18:29 error    Each then() should return a value or throw                                                   promise/always-return
+  19:5  error    Expected catch() or return                                                                   promise/catch-or-return
+  19:28 warning  Avoid nesting promises                                                                       promise/no-nesting
+  19:33 error    Each then() should return a value or throw                                                   promise/always-return
+  28:1  error    eval can be harmful                                                                          no-eval
+  30:1  error    Don't use process.exit(); throw an error instead                                             n/no-process-exit
+  32:1  error    'new Buffer()' was deprecated since v6.0.0. Use 'Buffer.alloc()' or 'Buffer.from()' instead   n/no-deprecated-api
+
+✖ 11 problems (10 errors, 1 warning)
+```
+
+เจ็ดกฎที่ต่างกันทำงานบนไฟล์เดียว: `promise/param-names`, `promise/catch-or-return`, `promise/always-return`, `promise/no-nesting`, `no-eval`, `n/no-process-exit`, `n/no-deprecated-api` สังเกตสิ่งที่ *ไม่* ทำงาน: `fs.readFileSync` บรรทัด 3 (pattern 6, งาน synchronous ใน hot path) ไม่มีกฎใดจับมันเลย — การอ่านว่ามันเสี่ยงต้องรู้ว่ามันรันข้างใน request handler ซึ่งเป็นบริบทที่ linter ที่มองไฟล์เดียวไม่มีทางรู้ได้
+
+## ขั้นที่ 4: `npm audit` และ `osv-scanner`
+
+กับโปรเจกต์ scratch ที่ pin ไว้ที่ `lodash@4.17.4` (`npm audit` ผลลัพธ์จริง):
+
+```text
+# npm audit report
+
+lodash  <=4.17.23
+Severity: critical
+Prototype Pollution in lodash - https://github.com/advisories/GHSA-fvqr-27wr-82fm
+Command Injection in lodash - https://github.com/advisories/GHSA-35jh-r3h4-6jhm
+Prototype Pollution in lodash - https://github.com/advisories/GHSA-4xc9-xhrj-v574
+Prototype Pollution in lodash - https://github.com/advisories/GHSA-jf85-cpcp-j695
+Prototype Pollution in lodash - https://github.com/advisories/GHSA-p6mc-m468-83gw
+Regular Expression Denial of Service (ReDoS) in lodash - https://github.com/advisories/GHSA-29mw-wpgm-hmr9
+Regular Expression Denial of Service (ReDoS) in lodash - https://github.com/advisories/GHSA-x5rq-j2xg-h7qm
+lodash vulnerable to Code Injection via `_.template` imports key names - https://github.com/advisories/GHSA-r5fr-rjxr-66jc
+lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit` - https://github.com/advisories/GHSA-f23m-r3pf-42rh
+Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions - https://github.com/advisories/GHSA-xxjr-mmjv-4gpg
+fix available via `npm audit fix --force`
+Will install lodash@4.18.1, which is outside the stated dependency range
+node_modules/lodash
+
+1 critical severity vulnerability
+```
+
+`package-lock.json` ตัวเดียวกัน `osv-scanner scan source -L package-lock.json` (`osv-scanner` 2.6.0 ติดตั้งด้วย `brew install osv-scanner`):
+
+```text
+Total 1 package affected by 8 known vulnerabilities (1 Critical, 2 High, 4 Medium, 0 Low, 1 Unknown) from 1 ecosystem.
+8 vulnerabilities can be fixed.
+
++-------------------------------------+------+-----------+---------+---------+---------------+
+| OSV URL                             | CVSS | ECOSYSTEM | PACKAGE | VERSION | FIXED VERSION |
++-------------------------------------+------+-----------+---------+---------+---------------+
+| https://osv.dev/GHSA-29mw-wpgm-hmr9 | 5.3  | npm       | lodash  | 4.17.4  | 4.17.21       |
+| https://osv.dev/GHSA-35jh-r3h4-6jhm | 8.1  | npm       | lodash  | 4.17.4  | 4.17.21       |
+| https://osv.dev/GHSA-4xc9-xhrj-v574 |      | npm       | lodash  | 4.17.4  | 4.17.11       |
+| https://osv.dev/GHSA-f23m-r3pf-42rh | 6.9  | npm       | lodash  | 4.17.4  | 4.18.0        |
+| https://osv.dev/GHSA-fvqr-27wr-82fm | 6.5  | npm       | lodash  | 4.17.4  | 4.17.5        |
+| https://osv.dev/GHSA-jf85-cpcp-j695 | 9.1  | npm       | lodash  | 4.17.4  | 4.17.12       |
+| https://osv.dev/GHSA-p6mc-m468-83gw | 7.4  | npm       | lodash  | 4.17.4  | 4.17.19       |
+| https://osv.dev/GHSA-x5rq-j2xg-h7qm | 6.5  | npm       | lodash  | 4.17.4  | 4.17.11       |
++-------------------------------------+------+-----------+---------+---------+---------------+
+```
+
+ทั้งสองเครื่องมือพบ advisory พื้นฐานเดียวกันจาก lockfile เดียวกัน; `osv-scanner` เพิ่มเติมด้วยคะแนน CVSS และเวอร์ชันที่แก้แล้วเฉพาะของแต่ละ advisory และอ่านฐานข้อมูล OSV โดยตรงแทนที่จะเป็น advisory feed ของ npm เอง ไม่มีเครื่องมือไหนเกี่ยวข้องกับ pattern 24 ของแคตตาล็อก (`exec`/`eval` injection ใน *โค้ดของคุณเอง*) เลย — ทั้งคู่รู้แค่เรื่องช่องโหว่ใน package ที่คุณ depend ไว้ ไม่ใช่ bug ที่คุณเขียนเอง
+
+## ขั้นที่ 5: `--cpu-prof` และ `autocannon` กับ Production Server
+
+กับ server ตัวจริงจากบท *Production Server* ที่ listen บนพอร์ตจริง `autocannon -c 10 -d 4` บน `/health`:
+
+```text
+┌─────────┬──────┬──────┬───────┬──────┬─────────┬─────────┬──────┐
+│ Stat    │ 2.5% │ 50%  │ 97.5% │ 99%  │ Avg     │ Stdev   │ Max  │
+├─────────┼──────┼──────┼───────┼──────┼─────────┼─────────┼──────┤
+│ Latency │ 0 ms │ 0 ms │ 0 ms  │ 0 ms │ 0.01 ms │ 0.05 ms │ 6 ms │
+└─────────┴──────┴──────┴───────┴──────┴─────────┴─────────┴──────┘
+┌───────────┬─────────┬─────────┬─────────┬─────────┬───────────┬──────────┬─────────┐
+│ Stat      │ 1%      │ 2.5%    │ 50%     │ 97.5%   │ Avg       │ Stdev    │ Min     │
+├───────────┼─────────┼─────────┼─────────┼─────────┼───────────┼──────────┼─────────┤
+│ Req/Sec   │ 60,479  │ 60,479  │ 67,007  │ 71,487  │ 67,572    │ 4,487.68 │ 60,456  │
+└───────────┴─────────┴─────────┴─────────┴─────────┴───────────┴──────────┴─────────┘
+
+270k requests in 4.01s, 58.7 MB read
+```
+
+จัดเป็น bucket เพื่อให้ reproduce ได้ (ตัวเลขแน่นอนเปลี่ยนไปในแต่ละครั้งที่รัน แต่ bucket ไม่เปลี่ยน): latency ต่ำกว่ามิลลิวินาที ประมาณ **60k–75k requests/second** บนเครื่องนี้สำหรับ handler ที่ไม่มีงานจริงเลยนอกจาก `JSON.stringify` การรัน load เดียวกันด้วย `node --cpu-prof --cpu-prof-dir=. --cpu-prof-name=prod.cpuprofile server.cjs` สร้างไฟล์ `.cpuprofile` จริง (โหลดใน panel Performance ของ Chrome DevTools ได้ หรือตรวจสอบเป็น JSON ตรง ๆ ก็ได้); รวม hit count ตามชื่อฟังก์ชันจาก profile จริงของการรันนี้:
+
+```text
+(idle)               1899
+writev                 973
+(program)              229
+writevGeneric           59
+finish                  53
+_storeHeader            45
+nextTick                44
+(garbage collector)     41
+```
+
+`(idle)` ครองอันดับหนึ่ง — ตามคาดสำหรับ handler แบบ health-check ที่ไม่มีงาน CPU-bound เลย — และ frame ที่ร้อนรองลงมาล้วนอยู่ใน path การเขียน HTTP ของ Node เอง (`writev`, `writevGeneric`, `_storeHeader`, `finish`) ไม่ใช่โค้ดแอปพลิเคชัน นี่คือลายเซ็นที่จะ *ต่างออกไป* สำหรับ pattern 6 (งาน CPU แบบ synchronous ใน handler) โดยตรง: busy-loop หรือ `JSON.parse` ขนาดใหญ่จะโผล่มาเป็น frame แอปพลิเคชันที่ร้อนและมีชื่อ แทนที่จะหายไปใน `(idle)` และ internal ของการเขียน socket
+
+## ขั้นที่ 6: `knip` (unused exports)
+
+กับ package scratch สองไฟล์ที่ `math.js` export `add`, `subtract`, และ `multiply` แต่มีแค่ `add` เท่านั้นที่ถูก import ใช้จริง:
+
+```text
+Unused exports (2)
+subtract  function  src/math.js:5:17
+multiply  function  src/math.js:9:17
+```
+
+`knip` หาสิ่งนี้ได้จากการตาม import graph จริง ไม่ใช่การจับคู่ข้อความ — เป็นเครื่องมือตัวเดียวใน ladder นี้ที่ตอบคำถามที่ 24 pattern ในแคตตาล็อกไม่ได้พูดถึงจริง ๆ ("โค้ดนี้ถูกเรียกถึงได้หรือไม่") แทนที่จะเป็น "โค้ดที่ถูกเรียกถึงได้นี้ถูกต้องหรือไม่"
+
+## ตาราง pattern-to-rung
+
+| # | Pattern | ขั้นที่จับได้ |
+|---|---|---|
+| 1 | ลืม `await` | ไม่มี — ต้องใช้คนเท่านั้น |
+| 2 | `forEach(async ...)` | ไม่มี — ต้องใช้คนเท่านั้น |
+| 3 | Floating promise / unhandled rejection | `promise/catch-or-return` ของ `eslint-plugin-promise`; ตัว crash เป็นดีฟอลต์ของ Node เอง |
+| 4 | `Promise.all` ไม่จำกัด concurrency | ไม่มี — ต้องใช้คนเท่านั้น (เปิดเผยได้ด้วย autocannon/load จริง) |
+| 5 | `setTimeout(fn, 0)` เทียบกับ `setImmediate`/`nextTick` | ไม่มี — ต้องใช้คนเท่านั้น |
+| 6 | งาน CPU แบบ synchronous ใน handler | ไม่มี — ต้องใช้คนเท่านั้น (เปิดเผยได้ด้วย `--cpu-prof`/`monitorEventLoopDelay`) |
+| 7 | `res.end()` เรียกสองครั้ง | ไม่มี — ต้องใช้คนเท่านั้น |
+| 8 | ตั้ง header หลังส่ง response แล้ว | ไม่มี — ต้องใช้คนเท่านั้น |
+| 9 | ไม่จำกัดขนาด request body | ไม่มี — ต้องใช้คนเท่านั้น (เปิดเผยได้ด้วย autocannon) |
+| 10 | `JSON.parse` ไม่มี `try`/`catch` | ไม่มี — ต้องใช้คนเท่านั้น |
+| 11 | `fetch` ไม่เช็ก `.ok`/timeout | ไม่มี — ต้องใช้คนเท่านั้น |
+| 12 | Listener leak | `--trace-warnings` |
+| 13 | event `error` ไม่มี listener | ไม่มี — ต้องใช้คนเท่านั้น |
+| 14 | `.pipe()` ไม่มีการจัดการ error | ไม่มี — ต้องใช้คนเท่านั้น |
+| 15 | decode string ข้าม chunk boundary | ไม่มี — ต้องใช้คนเท่านั้น |
+| 16 | `Buffer.concat` ข้างใน loop | ไม่มี — ต้องใช้คนเท่านั้น (เปิดเผยได้ด้วย `--cpu-prof`) |
+| 17 | `process.env.PORT` ถูกเทียบเป็น string | ไม่มี — ต้องใช้คนเท่านั้น |
+| 18 | `process.exit()` กลางงานที่ยังค้าง | ไม่มี — ต้องใช้คนเท่านั้น |
+| 19 | ปน `require`/`import`, `__dirname` ใน ESM | ไม่มี — ต้องใช้คนเท่านั้น (runtime error เกิดขึ้นทันที) |
+| 20 | `^0.x`, ไม่มี lockfile, `npm install` ใน Docker | `npm audit`/`npm ci` จับความคลาดเคลื่อนที่เกี่ยวข้องได้ ไม่ใช่ตัวเลือก Dockerfile เอง |
+| 21 | ลำดับ field `exports` ผิด | ไม่มี — ต้องใช้คนเท่านั้น |
+| 22 | ไม่มี assertion / mock ผิดที่ / test ใช้ timer จริง | `node --test` เมื่อมี assertion จริงและ mock ถูกใช้ในตำแหน่งที่ถูกต้อง |
+| 23 | `console.log` แทน structured log | ไม่มี — ต้องใช้คนเท่านั้น |
+| 24 | `exec`/`eval` injection | ไม่มี — ต้องใช้คนเท่านั้น (`npm audit`/`osv-scanner` จับ *dependency* ที่มีช่องโหว่ ไม่ใช่สิ่งนี้) |
+
+## คำสั่งเดียวสำหรับทั้ง ladder
+
+```bash
+node --test --experimental-test-coverage && \
+  NODE_OPTIONS="--trace-warnings --unhandled-rejections=strict" node --test && \
+  npx eslint . && \
+  npm audit --audit-level=high
+```
+
+สี่ขั้นในบรรทัด shell เดียว เชื่อมด้วย `&&` ทำให้ล้มเหลวที่ขั้นไหนก็หยุดที่เหลือทันที — `--cpu-prof`/`autocannon` และ `knip` ถูกตั้งใจไม่รวมไว้ใน one-liner นี้ เพราะต้องมี server ที่รันอยู่จริงและ import graph เต็ม ๆ ตามลำดับ ไม่ใช่แค่ source tree ให้ lint และ test
+
+## Mental Model
+
+ทุกขั้นใน ladder นี้ตอบคำถามที่แคบและเฉพาะเจาะจง — โค้ดทำตามที่ test บอกไหม มีอะไร warn ไหม style สม่ำเสมอไหม dependency มีช่องโหว่ที่รู้จักไหม เร็วพอไหม มีอะไรเรียกไม่ถึงไหม — และไม่มีข้อไหนตอบว่า "โค้ดนี้ถูกต้องหรือไม่" ตัวเลขในตาราง pattern-to-rung เองก็ยืนยันสิ่งนี้ชัดเจน: 21 จาก 24 pattern ในแคตตาล็อกไม่มีขั้นอัตโนมัติจับได้เลย
+
+## Trade-offs
+
+| ทางเลือก | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| รัน ladder เต็มทุก PR | จับ bug กลุ่มจริงแม้จะแคบได้อัตโนมัติทุกครั้ง | หกเครื่องมือแยกกัน หลายตัวต้องการ network/CI setup (`osv-scanner`, `autocannon` ที่ต้องมี server รันอยู่จริง) |
+| รันแค่ `node --test` + eslint | เร็วพอสำหรับ pre-commit hook | พลาด dependency ที่มีช่องโหว่, โค้ดที่เรียกไม่ถึง, และ performance regression ไปเลย |
+| ถือว่า ladder รันสะอาดแล้วแปลว่า "รีวิวแล้ว" | ไม่มี — นี่ไม่เคยเป็นข้อแลกเปลี่ยนที่ดี | ทุกเครื่องมือที่นี่แคบโดยการออกแบบ; run สะอาดพิสูจน์แค่ว่าสิ่งแคบ ๆ ที่มันเช็กนั้นโอเค |
+
+## Common Misconceptions
+
+- **"`--experimental-test-coverage` เป็น experimental แปลว่าเชื่อถือไม่ได้"** ชื่อ flag บอกว่ารูปแบบรายงานอาจยังเปลี่ยนได้ ไม่ได้บอกว่าตัวเลข coverage ที่มันแสดงวันนี้ผิด — มันมาจาก V8 coverage instrumentation จริง เป็น primitive เดียวกับที่เครื่องมือแบบ Istanbul สร้างต่อยอด
+- **"`npm audit` กับ `osv-scanner` ซ้ำซ้อนกันเพราะเจอ advisory เดียวกันในตัวอย่างนี้"** ทั้งคู่อ่านฐานข้อมูลต่างกัน (advisory feed ของ npm เองเทียบกับ aggregator ของ OSV) และอาจต่างกันได้ในระบบนิเวศที่ไม่ใช่ npm หรือ advisory ที่เพิ่งออกมาไม่นาน — รันตัวใดตัวหนึ่งไม่ใช่สิ่งทดแทนอีกตัวสำหรับทุกโปรเจกต์
+- **"load test ด้วย autocannon พิสูจน์ว่า server ไม่มี bug"** มันพิสูจน์แค่ว่า handler *ตัวนี้* รับ concurrency *นี้* และ payload รูปร่าง *นี้* ไหวบนเครื่อง *นี้* — ไม่ได้บอกอะไรเลยเกี่ยวกับ route อื่น, body ที่ใหญ่กว่า, หรือ handler ที่เป็น CPU-bound จริง ๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนจะเชื่อคำอ้างของ AI assistant ว่า "test ผ่านแล้ว" หรือ "lint สะอาดแล้ว" ให้ reproduce มันเอง: pattern 22 ของ *AI bug catalog* มีอยู่ก็เพราะ `node --test` ที่เขียวสามารถแปลว่า "ไม่มี assertion ที่เรียกถึงได้ตัวไหน fail" ไม่ใช่ "โค้ดนี้ถูกต้อง" รัน ladder จริงข้างบนกับ diff จริง อ่านชื่อกฎจริงใน output แล้วเช็กแต่ละจุดที่เจอกับตาราง pattern-to-rung ก่อนจะตัดสินว่าเครื่องมือ "จัดการ" เรื่องที่ตารางบอกว่ามันไม่ครอบคลุมแล้ว
+
+<SpotTheBug code={`// PR description: "Added tests, lint is clean, ran npm audit -- all green."
+function calculateDiscount(price, percent) {
+  return price - percent; // BUG: should be price - (price * percent / 100)
+}
+
+import { test } from 'node:test';
+test('applies a discount', function () {
+  calculateDiscount(100, 10); // BUG: result never checked with an assertion
+});`}>
+"lint สะอาด" กับ "npm audit เขียว" เป็นจริงทั้งคู่และไม่เกี่ยวข้องทั้งคู่: ไม่มีกฎ eslint ใน ladder ของคอร์สนี้เช็กเลขคณิต และ `npm audit` สแกนแค่ dependency ไม่ใช่ logic ของไฟล์นี้เอง ขั้นเดียวที่น่าจะจับ bug จริงได้ — `node --test` — ก็รายงานผ่านเช่นกัน เพราะ test ไม่เคย assert อะไรเกี่ยวกับค่าที่คืนกลับมาเลย ทั้งสามเครื่องมือรันจริงทั้งหมด และทั้งสามไม่ได้บอกอะไรเลยว่า `calculateDiscount` ถูกต้องหรือไม่ มีแค่การอ่าน body ของฟังก์ชันเทียบกับชื่อของมันเท่านั้นที่จับได้ว่า `100 - 10` ถูกคืนกลับมาแทนที่จะเป็น `100 - (100 * 10 / 100)`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+หกเครื่องมือจริง หกคำตอบที่แคบ — `node --test`, `--trace-warnings`, eslint-plugin-n/promise, npm audit/osv-scanner, `--cpu-prof`/autocannon, และ knip รวมกันยังจับได้แค่ 3 จาก 24 pattern ในแคตตาล็อกของคอร์สนี้แบบอัตโนมัติ ตาราง pattern-to-rung คือแผนที่ว่าตัวไหนบ้าง จะได้ไม่ต้องเดา
+</Callout>
+
+export const toolsQuiz = [
+  {
+    q: 'The eslint run in this lesson fires 7 distinct rules on an 18-line file, but says nothing about `fs.readFileSync(\'/etc/hosts\')` on line 3. Why not?',
+    options: [
+      'eslint-plugin-n ไม่มีกฎสำหรับ synchronous fs call เลย',
+      'การที่ synchronous call จะอันตรายหรือไม่ขึ้นอยู่กับว่ามันรันข้างใน hot path ที่รับ request พร้อมกันหรือเปล่า -- บริบทที่ linter ซึ่งดูแค่ไฟล์เดียวไม่มีทางรู้',
+      'ไฟล์นี้มี syntax error ที่ทำให้ eslint หยุดก่อนถึงบรรทัด 3',
+      'readFileSync ถูก deprecate แต่ config ที่ใช้ในตัวอย่างนี้ปิดกฎนั้นไว้',
+    ],
+    answer: 1,
+    explain: 'linter ตรวจ pattern เชิง syntax และโครงสร้างภายในไฟล์ ส่วนการที่ readFileSync ตัวหนึ่งจะเป็นปัญหาจริงหรือไม่ขึ้นอยู่กับบริบท runtime (ไฟล์นี้รันต่อ request หรือเปล่า) ซึ่ง static analysis ของไฟล์เดียวไม่สามารถระบุได้',
+  },
+  {
+    q: 'Why do `npm audit` and `osv-scanner`, run against the same lockfile pinned to lodash@4.17.4, report the same underlying vulnerabilities but with some different details?',
+    options: [
+      'เครื่องมือตัวใดตัวหนึ่งรายงาน false positive',
+      'ทั้งคู่ query ฐานข้อมูลช่องโหว่ที่ต่างกัน (advisory feed ของ npm เองเทียบกับ aggregator ของ OSV) จึงอาจต่างกันได้ในรายละเอียดเสริมอย่างคะแนน CVSS แม้จะเห็นตรงกันในชุด advisory หลัก',
+      'osv-scanner ทำงานได้แค่กับโปรเจกต์ Python เท่านั้น',
+      'npm audit กับ osv-scanner จริง ๆ แล้วเป็นเครื่องมือเดียวกันแค่คนละชื่อ',
+    ],
+    answer: 1,
+    explain: 'ทั้งสองเครื่องมือสแกนหาช่องโหว่ที่รู้จักใน dependency แต่ดึงข้อมูลจากแหล่งต่างกัน การเห็นตรงกันในชุด advisory หลักพร้อม metadata เสริมที่ต่างกัน (เช่นคะแนน CVSS) เป็นเรื่องคาดหวังได้ ไม่ใช่สัญญาณว่าเครื่องมือตัวไหนผิด',
+  },
+  {
+    q: 'According to the pattern-to-rung table, which of these AI bug catalog patterns is the ONLY one caught by an eslint rule directly, rather than being "none -- only a human"?',
+    options: [
+      'Pattern 7 (double res.end())',
+      'Pattern 3 (floating promise ที่ reject ในภายหลัง) ผ่านกฎ catch-or-return ของ eslint-plugin-promise',
+      'Pattern 15 (การ decode string ข้าม chunk boundary)',
+      'Pattern 24 (exec/eval injection)',
+    ],
+    answer: 1,
+    explain: 'จาก 24 pattern มีแค่ pattern 3 เท่านั้นที่มีกฎ eslint จับตรง ๆ (promise/catch-or-return); pattern 12 ถูกจับด้วย --trace-warnings และ pattern 22 ด้วย node --test เมื่อมี assertion จริง -- ทั้งสองอย่างนี้ไม่ใช่กฎ eslint',
+  },
+  {
+    q: 'The autocannon run against the Production Server\'s /health route reports roughly 60k-75k requests/second on this machine. What does this number NOT tell you?',
+    options: [
+      'route /health เองรับ traffic พร้อมกันจริงได้หรือไม่',
+      'route อื่นใน server เดียวกัน -- ตัวที่ query database จริงหรือทำงาน CPU แบบ synchronous -- จะทำงานได้ใกล้เคียงกันหรือไม่',
+      'ลำดับขนาดของ throughput โดยประมาณสำหรับ handler ธรรมดาตัวนี้โดยเฉพาะ',
+      'ว่า server จัดการ request ที่ autocannon ส่งมาได้สำเร็จ',
+    ],
+    answer: 1,
+    explain: 'load test วัดแค่ route, payload, และ concurrency เฉพาะที่ใช้รันตอนนั้น health check ที่ไม่มีงานจริงเลยไม่ได้บอกอะไรว่า route ที่ทำ I/O หรืองาน CPU จริง ๆ จะทำงานได้อย่างไรภายใต้ load เดียวกัน',
+  },
+  {
+    q: 'A reviewer sees a PR with a `node --test` run that reports "1 passed, 0 failed" for a new function, and treats this as proof the function is correct. Based on this lesson and the AI bug catalog, what is the gap in that reasoning?',
+    options: [
+      'node --test ไม่ได้รันโค้ดจริงเลย เช็กแค่ syntax เท่านั้น',
+      'test ที่ผ่านพิสูจน์แค่ว่า assertion ที่ test นั้นมีอยู่จริงไม่ล้มเหลว -- ถ้า test ไม่มี assertion เลย (หรือ assert ผิดสิ่ง) การผ่านก็ไม่ได้พิสูจน์อะไรเกี่ยวกับความถูกต้องเลย',
+      'ผล node --test เชื่อถือไม่ได้บนเครื่องอื่นที่ไม่ใช่เครื่องที่รันมัน',
+      'ไม่มีช่องโหว่ในเหตุผลนี้เลย -- test ที่ผ่านพิสูจน์ความถูกต้องเสมอ',
+    ],
+    answer: 1,
+    explain: 'นี่คือ pattern 22 จาก AI bug catalog พอดี: test ที่ไม่มี assertion ที่เรียกถึงได้เลย (หรือเช็กผิดสิ่ง) จะรายงานผ่านไม่ว่าโค้ดที่ทดสอบจะถูกต้องจริงหรือไม่ก็ตาม',
+  },
+];
+
+<Quiz client:visible id="reading-node/verification-tools" questions={toolsQuiz} />
+
+<ProgressTracker client:visible id="reading-node/verification-tools" />

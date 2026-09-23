@@ -1,0 +1,249 @@
+---
+title: 'รีวิวจริงที่ 2: CLI ประมวลผลไฟล์'
+description: 'รีวิวเต็มของสคริปต์ประมวลผล stream สไตล์ AI ตัวเล็ก ๆ — bug ที่ปลูกไว้สี่ตัว, crash จริงบนแถวข้อมูลที่เสีย, และเวอร์ชันที่แก้แล้วซึ่งใช้ pipeline() กับ StringDecoder'
+sidebar:
+  order: 6
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+
+สคริปต์สไตล์ CLI เล็ก ๆ: อ่านไฟล์ข้อความ, แปลงทุกบรรทัดเป็นตัวพิมพ์ใหญ่, เขียนผลลัพธ์ลงอีกไฟล์หนึ่ง — ตัวอย่างแบบ "streams" ที่ AI assistant เลือกใช้เป็นประจำ มันเขียนไฟล์ input ของตัวเองเพื่อให้ demo สมบูรณ์ในตัว และเก็บกวาดทั้งสองไฟล์ตอนจบ bug สี่ตัวจาก *AI bug catalog* ถูกปลูกไว้ในโค้ดประมาณ 35 บรรทัด
+
+## โปรแกรม
+
+<NodeRunner client:visible code={wr2BuggyCode} node expected={wr2BuggyOut} />
+
+export const wr2BuggyCode = `// @expect-throw
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Transform } from 'node:stream';
+
+const inputPath = path.join(os.tmpdir(), 'wr2-input.txt');
+const outputPath = path.join(os.tmpdir(), 'wr2-output.txt');
+
+process.on('exit', function () {
+  try { fs.unlinkSync(inputPath); } catch {}
+  try { fs.unlinkSync(outputPath); } catch {}
+});
+
+fs.writeFileSync(inputPath, 'hello\\nสวัสดี\\nCORRUPT_ROW\\nworld\\n', 'utf8');
+
+// BUG 1: reads the whole file into memory synchronously before streaming even starts
+const wholeFile = fs.readFileSync(inputPath);
+console.log('read', wholeFile.length, 'bytes synchronously before streaming even starts');
+
+function slowHash(text) {
+  // BUG 4: synchronous CPU work per chunk -- blocks the event loop while "streaming"
+  let sum = 0;
+  for (let i = 0; i < text.length; i++) {
+    for (let j = 0; j < 5000; j++) { sum = (sum + text.charCodeAt(i) * j) % 100000007; }
+  }
+  return sum;
+}
+
+const upper = new Transform({
+  transform(chunk, encoding, callback) {
+    const text = chunk.toString('utf8'); // BUG 3: decodes each chunk independently
+    slowHash(text);
+    if (text.includes('CORRUPT')) {
+      callback(new Error('corrupt row encountered'));
+      return;
+    }
+    callback(null, text.toUpperCase());
+  }
+});
+
+const source = fs.createReadStream(inputPath, { highWaterMark: 8 });
+const dest = fs.createWriteStream(outputPath);
+
+source.pipe(upper).pipe(dest); // BUG 2: no error handling anywhere in this pipe chain
+
+dest.on('finish', function () {
+  const written = fs.readFileSync(outputPath, 'utf8');
+  console.log('output:', JSON.stringify(written));
+});
+`;
+
+export const wr2BuggyOut = `read 43 bytes synchronously before streaming even starts`;
+
+มีแค่ stdout บรรทัดเดียว แล้ว crash — `dest.on('finish', ...)` ไม่เคยทำงาน ดังนั้นบรรทัด `output:` จึงไม่เคยโผล่มาเลย
+
+**ผลลัพธ์จริง (stderr ตามหลังบรรทัดข้างบน):**
+
+```text
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+Error: corrupt row encountered
+    at Transform.transform [as _transform] (...)
+Emitted 'error' event on Transform instance at:
+    at Transform.onerror (...)
+```
+
+## ลองหา bug ก่อนอ่านต่อ
+
+bug ที่ปลูกไว้สี่ตัว — หนึ่งเรื่องการใช้ memory, หนึ่งอายุของทรัพยากร, หนึ่งขอบเขตข้อมูล, หนึ่ง call ที่บล็อก ลองเดาทั้งสี่ตัวก่อนเปิดคำตอบด้านล่าง
+
+<details>
+<summary>Bug 1 — `fs.readFileSync(inputPath)` ก่อน stream ไฟล์เดียวกันนั้นทันที</summary>
+
+**อาการ:** จุดประสงค์ทั้งหมดของ stream คือหลีกเลี่ยงการเก็บทั้งไฟล์ไว้ใน memory พร้อมกัน — บรรทัดนี้ทำลายจุดประสงค์นั้นทันที โดยโหลดทั้งไฟล์แบบ synchronous ก่อนที่แม้แต่ chunk เดียวจาก stream จะถูกอ่าน
+
+**หลักฐาน:** บนไฟล์ demo เล็ก ๆ นี้มันไม่มีต้นทุนที่เห็นได้ แต่บนไฟล์ log ขนาดหลายกิกะไบต์ มันคือความต่างระหว่างการใช้ memory คงที่กับการ crash แบบ out-of-memory "43 bytes" ในผลลัพธ์จริงข้างบนดูเล็กจนหลอกได้ — ต้นทุนของ bug นี้แปรผันตามขนาดไฟล์ ไม่ใช่ว่ามี bug นี้อยู่หรือไม่
+
+**วิธีแก้:** ลบบรรทัดนี้ทิ้งไปเลย ไม่มีอะไรข้างล่างในไฟล์นี้ใช้ `wholeFile` เลย — มันมีอยู่แค่เพื่อ diagnostic ที่ไม่เคยถูกลบออก
+
+</details>
+
+<details>
+<summary>Bug 2 — `source.pipe(upper).pipe(dest);` ที่ไม่มีการจัดการ error</summary>
+
+**อาการ:** `.pipe()` forward ข้อมูลระหว่าง stream แต่ไม่เคย forward event `'error'` — error บน stream ใดใน chain ก็ไม่มีที่ไป
+
+**หลักฐาน:** crash จริงข้างบน `callback(new Error(...))` ของ `Transform` บนแถวที่เสียยกระดับเป็น event `'error'` บน `upper`; เมื่อไม่มีอะไรฟังมันเลย Node ถือว่ามันร้ายแรงและฆ่าทั้งโปรเซสก่อนที่ `dest` จะเสร็จด้วยซ้ำ
+
+**วิธีแก้:** `stream.pipeline()` จาก `node:stream/promises` ซึ่งส่ง error ของ stream ใดก็ตามมารวมที่จุดเดียว และยัง destroy ทุก stream ใน chain ด้วยเพื่อไม่ให้มีอะไรค้างครึ่ง ๆ กลาง ๆ
+
+</details>
+
+<details>
+<summary>Bug 3 — `chunk.toString('utf8')` ข้างในตัว transform</summary>
+
+**อาการ:** แต่ละ chunk ถูก decode เป็น string แยกกัน โดย `highWaterMark: 8` ถูกตั้งให้เล็กโดยเจตนาเพื่อตัดข้อความไทยแบบ multi-byte คาบกลางตัวอักษร
+
+**หลักฐาน:** สิ่งนี้มองไม่เห็นใน crash ข้างบน (แถวที่เสีย crash โปรเซสก่อนที่ output ของ bug นี้จะโผล่มา) แต่การรันแค่สองบรรทัดแรกของ input (ไม่มีแถวที่เสีย) จะทำให้ข้อความไทยที่เสียเห็นได้ตรง ๆ ในไฟล์ output — การเสียแบบเดียวกับอักขระ replacement `�` เหมือน pattern 15 ใน *AI bug catalog*
+
+**วิธีแก้:** `StringDecoder` จาก `node:string_decoder` ซึ่งบัฟเฟอร์ลำดับ multi-byte ที่ยังไม่สมบูรณ์ไว้จนกว่า chunk ที่ทำให้มันสมบูรณ์จะมาถึง
+
+</details>
+
+<details>
+<summary>Bug 4 — เรียก `slowHash(text)` แบบ synchronous ข้างใน `transform()`</summary>
+
+**อาการ:** loop ที่หนัก CPU ซ้อนกันรันแบบ synchronous สำหรับทุก chunk บล็อก event loop ตลอดระยะเวลาทั้งหมดของมัน — ข้างในโค้ดที่ควรจะ "streaming" เพื่อหลีกเลี่ยงการบล็อกโดยเฉพาะ
+
+**หลักฐาน:** มองไม่เห็นใน output ของ demo เล็ก ๆ นี้ (ผลลัพธ์ของมัน คือ `sum` ไม่ได้ถูกใช้ด้วยซ้ำ) ซึ่งนั่นแหละคืออันตราย: มันเสียเวลาจริงที่วัดได้ภายใต้ load โดยไม่เคยให้คำตอบที่ผิดเห็นได้ชัดเลย
+
+**วิธีแก้:** ลบมันทิ้ง — ไม่มีอะไรในสคริปต์นี้ที่ต้องการ checksum จริง ๆ ถ้าการคำนวณต่อ chunk จริงจำเป็นต้องมี มันควรอยู่นอก main thread (`worker_thread`) แทนที่จะบล็อก request หรือ timer อื่นทุกตัวขณะที่มันทำงาน
+
+</details>
+
+## เวอร์ชันที่แก้แล้ว
+
+<NodeRunner client:visible code={wr2FixedCode} node expected={wr2FixedOut} />
+
+export const wr2FixedCode = `import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { StringDecoder } from 'node:string_decoder';
+
+const inputPath = path.join(os.tmpdir(), 'wr2-input.txt');
+const outputPath = path.join(os.tmpdir(), 'wr2-output.txt');
+
+process.on('exit', function () {
+  try { fs.unlinkSync(inputPath); } catch {}
+  try { fs.unlinkSync(outputPath); } catch {}
+});
+
+fs.writeFileSync(inputPath, 'hello\\nสวัสดี\\nworld\\n', 'utf8');
+
+// FIX 1: no upfront readFileSync -- go straight to streaming
+
+function makeUpperTransform() {
+  const decoder = new StringDecoder('utf8'); // FIX 3: buffers incomplete multi-byte sequences
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      const text = decoder.write(chunk); // FIX 4: no synchronous per-chunk busy work either
+      callback(null, text.toUpperCase());
+    },
+    flush(callback) {
+      const rest = decoder.end();
+      callback(null, rest ? rest.toUpperCase() : undefined);
+    }
+  });
+}
+
+const source = fs.createReadStream(inputPath, { highWaterMark: 8 });
+const dest = fs.createWriteStream(outputPath);
+
+try {
+  await pipeline(source, makeUpperTransform(), dest); // FIX 2: pipeline forwards errors and cleans up every stream
+  const written = fs.readFileSync(outputPath, 'utf8');
+  console.log('output:', JSON.stringify(written));
+} catch (err) {
+  console.log('pipeline failed:', err.message);
+}
+`;
+
+export const wr2FixedOut = `output: "HELLO\\nสวัสดี\\nWORLD\\n"`;
+
+บรรทัดภาษาไทยรอดจากการไปกลับครั้งนี้ครบถ้วน — `StringDecoder` เก็บ byte ที่ถูกตัดจาก chunk เล็กแรกไว้จนกว่า chunk ถัดไปจะทำให้ตัวอักษรสมบูรณ์ แทนที่จะ decode แต่ละครึ่งที่ไม่สมบูรณ์แยกกัน ถ้า run นี้มีบรรทัด `CORRUPT_ROW` เหมือนเวอร์ชันที่มี bug ด้วย `catch` block ของ `pipeline()` ก็จะ print `pipeline failed: corrupt row encountered` แล้วจบแบบสะอาดที่ exit code `0` แทนที่จะ crash โปรเซสแบบที่ chain `.pipe()` ที่ไม่มีการจัดการ error ของเวอร์ชันที่มี bug ทำ
+
+## เครื่องมือจับอะไรได้บ้าง
+
+`npx eslint` บนเวอร์ชันที่มี bug: **ไม่มีปัญหาเลย** ไม่มี bug ทั้งสี่ตัวนี้เลย — การ `readFileSync` ล่วงหน้าที่ไม่จำเป็น, chain `.pipe()` ที่ไม่มีการจัดการ error, `toString()` ต่อ chunk, และ loop แบบ synchronous ข้างใน stream callback — ตรงกับกฎไหนใน `eslint-plugin-n` หรือ `eslint-plugin-promise` เลย
+
+`node --trace-warnings` บนเวอร์ชันที่มี bug: ไม่มีอะไรเลย — ตัวนี้ crash ผ่าน event `'error'` ที่ไม่ถูกจัดการบน stream ซึ่งเป็นกลไกที่ต่างจาก event `warning` ที่ flag นั้นถูกสร้างมาเพื่อ trace
+
+การรันไฟล์จับ bug 2 ได้ทันที (การ crash) และทางอ้อมก็จับ bug 1 ได้ด้วย (การอ่านแบบ synchronous ที่รันก่อนหน้ามันทันที เห็นได้ในบรรทัดเดียวของผลลัพธ์จริง) bug 3 และ 4 ไม่มีอาการที่เห็นได้เลยใน run นี้ — bug 3 ต้องการ run *ที่ไม่ crash* เพื่อเห็น output ที่เสีย และ bug 4 ต้องการ input ที่ใหญ่กว่ามากหรือ profiler (`--cpu-prof` จากบท *Verification Tools*) เพื่อให้เห็นเป็น latency ที่วัดได้
+
+<Callout title="สรุปหนึ่งบรรทัด">
+สคริปต์ "streaming" ที่มี bug สี่ตัวสามารถ crash จากแค่ตัวเดียว (การไม่มีการจัดการ error) ในขณะที่อีกสามตัว — การอ่านทั้งไฟล์ที่ไม่จำเป็น, การ decode ที่ถูกตัดข้าม chunk, และการคำนวณที่บล็อกต่อ chunk — เงียบสนิทจนกว่าไฟล์จะใหญ่ขึ้น, input จะต่างออกไป, หรือ profiler จะเข้ามาทดสอบมันจริง ๆ
+</Callout>
+
+export const quizWorkedReview2 = [
+  {
+    q: 'ทำไม bug 1 (fs.readFileSync ล่วงหน้า) ถึงไม่มีต้นทุนที่เห็นได้ใน demo นี้ แต่สำคัญมากบนไฟล์ log จริงขนาดหลายกิกะไบต์?',
+    options: [
+      'readFileSync ล้มเหลวแบบเงียบ ๆ เสมอบนไฟล์ขนาดใหญ่',
+      'ต้นทุนของ bug นี้แปรผันตามขนาดไฟล์ -- บนไฟล์ demo 43 byte มันวัดไม่ได้ แต่บนไฟล์หลายกิกะไบต์มันบังคับให้ทั้งไฟล์เข้า memory พร้อมกัน ซึ่งเป็นสิ่งที่ streaming ถูกออกแบบมาเพื่อหลีกเลี่ยงโดยเฉพาะ',
+      'readFileSync ทำงานถูกต้องแค่กับไฟล์ที่เล็กกว่า 1KB เท่านั้น',
+      'นี่ไม่ใช่ bug จริง ๆ -- การอ่านทั้งไฟล์ก่อนคือ pattern ที่แนะนำ',
+    ],
+    answer: 1,
+    explain: 'จุดประสงค์ทั้งหมดของการใช้ stream คือการประมวลผลข้อมูลเป็น chunk ขนาดจำกัดไม่ว่าไฟล์ทั้งหมดจะใหญ่แค่ไหน การอ่านทั้งไฟล์แบบ synchronous ก่อนทำลายจุดประสงค์นั้นในแบบที่แปรผันตามขนาดไฟล์ ซึ่งไฟล์ demo เล็ก ๆ ไม่สามารถเปิดเผยได้ด้วยตัวเอง',
+  },
+  {
+    q: 'เวอร์ชันที่มี bug crash บนบรรทัด "CORRUPT_ROW" อะไรที่ทำให้ .pipe() ป้องกัน crash นั้นไม่ได้ ทั้งที่ .pipe() forward ข้อมูลของทุกบรรทัดอื่นได้สำเร็จ?',
+    options: [
+      '.pipe() ทำงานได้แค่กับ chunk แรกของ stream เท่านั้น',
+      '.pipe() forward ข้อมูลระหว่าง stream แต่ไม่เคย forward event "error" -- error ที่เกิดข้างใน Transform ไม่มีทางไปถึงอะไรที่จะจัดการมันได้เลย',
+      '.pipe() ต้องการให้ input ทั้งหมดถูกตรวจสอบล่วงหน้าก่อนที่ streaming จะเริ่ม',
+      'CORRUPT_ROW เป็นคำสงวนที่ทำให้ Node.js stream crash เสมอ',
+    ],
+    answer: 1,
+    explain: 'นี่คือความแตกต่างที่บท pipe/pipeline ของโมดูล Streams & I/O อธิบายไว้พอดี: .pipe() เป็นแค่กลไก forward ข้อมูลล้วน ๆ การกระจาย error และการเก็บกวาดทั้ง chain คือสิ่งที่ stream.pipeline() เพิ่มเข้ามาบนกลไกนั้น',
+  },
+  {
+    q: 'ทำไม StringDecoder ในเวอร์ชันที่แก้แล้วถึงสร้าง "สวัสดี" กลับมาถูกต้อง ทั้งที่ fs.createReadStream ยังตั้งค่า highWaterMark: 8 เล็ก ๆ ตัวเดียวกับที่ทำให้มันเสียในเวอร์ชันที่มี bug?',
+    options: [
+      'highWaterMark: 8 ไม่ได้มีผลต่อขอบเขตของ chunk จริง ๆ',
+      'StringDecoder บัฟเฟอร์ลำดับ multi-byte ที่ไม่สมบูรณ์ซึ่งเหลืออยู่ท้าย chunk และต่อมันเข้ากับ chunk ถัดไปก่อน decode แทนที่จะ decode แต่ละ chunk แยกกัน',
+      'เวอร์ชันที่แก้แล้วอ่านทั้งไฟล์ทีเดียว หลีกเลี่ยงการแบ่ง chunk ไปเลย',
+      'ตัวอักษร UTF-8 ไม่มีวันถูกตัดข้าม chunk boundary ใน Node.js stream',
+    ],
+    answer: 1,
+    explain: 'ขอบเขตของ chunk เหมือนกันทุกประการระหว่างเวอร์ชันที่มี bug กับที่แก้แล้ว -- สิ่งที่เปลี่ยนคือ StringDecoder ติดตามลำดับ byte ที่ไม่สมบูรณ์ข้ามการเรียก .write() ภายในตัวมันเอง โดยจะปล่อยตัวอักษรออกมาก็ต่อเมื่อ byte ทั้งหมดของมันมาถึงจริง ๆ เท่านั้น',
+  },
+  {
+    q: 'Bug 4 (การเรียก slowHash แบบ synchronous) ไม่เคยให้คำตอบที่ผิดเห็นได้ชัดที่ไหนเลยในรีวิวนี้ ทำไมมันถึงยังเป็น bug จริงที่ควรแก้?',
+    options: [
+      'มันไม่ใช่ bug จริง เพราะไม่มีอะไรใน output ที่ผิดเลย',
+      'มันบล็อก event loop เป็นเวลาจริงที่วัดได้ในทุก chunk โดยไม่ให้ประโยชน์อะไรเลย (ผลลัพธ์ของมันถูกทิ้งไป) -- ต้นทุนที่มองไม่เห็นใน demo เล็ก ๆ และ functional test แต่จะโผล่เป็น latency ภายใต้ load จริง',
+      'slowHash ทำให้ output ของ Transform เสียจริง แค่ไม่ใช่ใน input ตัวนี้โดยเฉพาะ',
+      'มันสำคัญแค่ตอนรันบน Node เวอร์ชันเก่ากว่า 18 เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'นี่มีรูปแบบเดียวกับ pattern 6 และ pattern 16 ใน AI bug catalog: bug ด้าน performance ที่ไม่มีอาการทาง functional เลย วัดได้ก็ต่อเมื่อใช้ profiler หรือ load test เท่านั้น -- review ที่เน้นความถูกต้องและ functional test ต่างพลาดมันโดยการออกแบบทั้งคู่',
+  },
+];
+
+<Quiz client:visible id="reading-node/worked-review-2" questions={quizWorkedReview2} />
+
+<ProgressTracker client:visible id="reading-node/worked-review-2" />

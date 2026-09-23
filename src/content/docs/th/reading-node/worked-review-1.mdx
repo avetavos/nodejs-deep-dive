@@ -1,0 +1,304 @@
+---
+title: 'รีวิวจริงที่ 1: HTTP JSON API'
+description: 'รีวิวเต็มของ items API สไตล์ AI ตัวเล็ก ๆ — bug ที่ปลูกไว้สี่ตัว, crash จริง, และเวอร์ชันที่แก้แล้วซึ่งรันได้ถูกต้อง'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+
+นี่คือรีวิวเต็มบทแรกจากทั้งหมดสี่บท แต่ละบทให้โปรแกรมสไตล์ AI ที่สมบูรณ์ ให้คุณลองหา bug ที่ปลูกไว้ด้วยนิสัยจากสี่บทแรกของโมดูลนี้ แล้วจึงแสดงผลลัพธ์จริงของเครื่องมือจริง พร้อมเวอร์ชันที่แก้แล้วซึ่งรันได้ถูกต้องจริง บทนี้เป็น JSON API เล็ก ๆ สำหรับสร้างและแสดงรายการ "items" — health check, route แสดงรายการ, และ route สร้างรายการ พร้อม bug สี่ตัวจาก *AI bug catalog* ที่ปลูกไว้ในโค้ดประมาณ 60 บรรทัด
+
+## โปรแกรม
+
+<NodeRunner client:visible code={wr1BuggyCode} node expected={wr1BuggyOut} />
+
+export const wr1BuggyCode = `// @expect-throw
+import http from 'node:http';
+
+let nextId = 1;
+const items = [];
+
+function sendJson(res, status, body) {
+  const json = JSON.stringify(body);
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(json);
+}
+
+const server = http.createServer(function (req, res) {
+  if (req.method === 'GET' && req.url === '/health') {
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/items') {
+    sendJson(res, 200, items);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/items') {
+    let body = '';
+    req.on('data', function (chunk) {
+      body += chunk; // BUG 1: no size limit on the accumulated body at all
+    });
+    req.on('end', function () {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch (err) {
+        sendJson(res, 400, { error: 'malformed JSON' });
+        sendJson(res, 500, { error: 'this line should never run' }); // BUG 2: sendJson already called res.end() above
+        return;
+      }
+      const item = { id: nextId++, name: parsed.name };
+      items.push(item);
+      sendJson(res, 201, item);
+    });
+    return;
+  }
+
+  sendJson(res, 404, { error: 'not found' });
+});
+// BUG 3: no server.on('error', ...) and no res.on('error', ...) anywhere in this file
+
+process.env.PORT = '9000';
+process.env.MIN_ALLOWED_PORT = '10000';
+const PORT = process.env.PORT || '3000'; // BUG 4: stays a string
+if (PORT > process.env.MIN_ALLOWED_PORT) {
+  console.log('port looks fine relative to the minimum');
+} else {
+  console.log('warning: port is below the configured minimum');
+}
+
+server.listen(Number(PORT), async function () {
+  const base = 'http://localhost:' + PORT;
+  await fetch(base + '/health').then(function (r) { return r.json(); }).then(function (j) { console.log('health:', JSON.stringify(j)); });
+  await fetch(base + '/items', { method: 'POST', body: JSON.stringify({ name: 'widget' }) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { console.log('created:', JSON.stringify(j)); });
+  await fetch(base + '/items', { method: 'POST', body: '{ not valid json' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { console.log('malformed response:', JSON.stringify(j)); });
+});
+`;
+
+export const wr1BuggyOut = `port looks fine relative to the minimum
+health: {"ok":true}
+created: {"id":1,"name":"widget"}`;
+
+demo นี้ print สามบรรทัด แล้ว crash ก่อนบรรทัดที่สี่ — ไม่มีบรรทัด `malformed response:` โผล่มาเลย
+
+**ผลลัพธ์จริง (stderr ตามหลังสามบรรทัดข้างบน):**
+
+```text
+Error [ERR_HTTP_HEADERS_SENT]: Cannot write headers after they are sent to the client
+    at ServerResponse.writeHead (node:_http_server:356:11)
+    at sendJson (...)
+    at IncomingMessage.<anonymous> (...)
+```
+
+## ลองหา bug ก่อนอ่านต่อ
+
+bug ที่ปลูกไว้สี่ตัว — หนึ่งขอบเขตข้อมูล, หนึ่งอายุของทรัพยากร, หนึ่ง listener ที่หายไป, หนึ่ง type ลองเดาทั้งสี่ตัวก่อนเปิดคำตอบด้านล่าง
+
+<details>
+<summary>Bug 1 — `body += chunk;` ที่ไม่มีการเช็กขนาด</summary>
+
+**อาการ:** handler ของ `POST /items` สะสม request body ทั้งหมดลงใน string เดียวโดยไม่มีขีดจำกัดบนเลย
+
+**หลักฐาน:** ไม่มีอะไรใน demo run นี้ที่ทดสอบ body ขนาดใหญ่จริง ๆ ซึ่งนั่นแหละคืออันตราย — bug นี้มองไม่เห็นในทุก request ขนาดปกติ และจะเสียค่า memory ก็ต่อเมื่อ client (หรือผู้โจมตี) ส่งข้อมูลระดับกิกะไบต์
+
+**วิธีแก้:** ติดตามจำนวน byte ที่สะสมไว้แล้วปฏิเสธ (`413` แล้ว `req.destroy()`) เมื่อเกินขีดจำกัด `MAX_BODY` แบบเดียวกับ route ในบท *JSON API*
+
+</details>
+
+<details>
+<summary>Bug 2 — `sendJson(res, 500, ...)` ต่อจาก `sendJson(res, 400, ...)` ทันที</summary>
+
+**อาการ:** ใน request ที่มี JSON ผิดรูปแบบ catch block เรียก `sendJson` สองครั้ง — และ `sendJson` เรียก `res.writeHead()` แล้ว `res.end()` เสมอ
+
+**หลักฐาน:** crash จริงข้างบน — `ERR_HTTP_HEADERS_SENT` ถูก throw จากการเรียก `sendJson` ครั้ง*ที่สอง*ที่ `res.writeHead()` เพราะ header ถูกส่งไปแล้วโดยการเรียกครั้งแรกก่อนหน้านั้นไม่กี่ขณะ
+
+**วิธีแก้:** helper สำหรับส่ง response ทุกตัวต้องมี guard ป้องกันการทำงานซ้ำสองครั้ง: `if (res.writableEnded) return;` ที่ต้นฟังก์ชัน `sendJson` และ `return` ทันทีหลังการเรียก `sendJson` ครั้งแรกใน catch block (ซึ่งไฟล์นี้มีอยู่แล้ว — การเรียกครั้งที่สองเป็นแค่โค้ดที่ตายแล้วซึ่งไม่ควรถูกเขียนขึ้นมาตั้งแต่แรก)
+
+</details>
+
+<details>
+<summary>Bug 3 — ไม่มี listener `error` เลย</summary>
+
+**อาการ:** ทั้ง `server` และ `res` แต่ละตัวไม่มี handler `.on('error', ...)` เลย
+
+**หลักฐาน:** นี่คือเหตุผล*ที่แท้จริง*ว่าทำไม bug 2 ถึง crash ทั้งโปรเซสแทนที่จะแค่ล้มเหลวหนึ่ง request — `ERR_HTTP_HEADERS_SENT` ถูกส่งเป็น event `'error'` บน response stream และเมื่อไม่มี listener เลย Node ก็ถือว่ามันร้ายแรง
+
+**วิธีแก้:** `res.on('error', function (err) { console.error(...); })` ข้างใน request handler และ `server.on('error', function (err) { console.error(...); })` ที่ระดับบนสุด เพื่อให้ response ที่พังลดระดับลงเหลือแค่ error ที่ log ไว้ แทนที่จะดึงทุก request ที่กำลังทำงานอยู่ล้มไปด้วย
+
+</details>
+
+<details>
+<summary>Bug 4 — `PORT > process.env.MIN_ALLOWED_PORT`</summary>
+
+**อาการ:** ข้อความที่ print กลับด้าน: `'9000' > '10000'` ถูกเทียบเป็น `string` (ทั้งสองฝั่งเป็น string) จึงเทียบแบบ lexicographic — `'9' > '1'` เป็น `true` — โค้ดจึง print "port looks fine" สำหรับพอร์ตที่จริง ๆ แล้ว*ต่ำกว่า*ค่าต่ำสุดที่กำหนดไว้
+
+**หลักฐาน:** บรรทัดแรกของผลลัพธ์จริงข้างบน — `port looks fine relative to the minimum` — เป็น branch ที่ผิด; `9000 < 10000` ควร print คำเตือนแทน
+
+**วิธีแก้:** `Number(process.env.PORT) > Number(process.env.MIN_ALLOWED_PORT)`
+
+</details>
+
+## เวอร์ชันที่แก้แล้ว
+
+<NodeRunner client:visible code={wr1FixedCode} node expected={wr1FixedOut} />
+
+export const wr1FixedCode = `import http from 'node:http';
+
+const MAX_BODY = 1024 * 1024; // 1 MiB
+let nextId = 1;
+const items = [];
+
+function sendJson(res, status, body) {
+  if (res.writableEnded) return; // FIX 2: guard against sending twice
+  const json = JSON.stringify(body);
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(json);
+}
+
+const server = http.createServer(function (req, res) {
+  res.on('error', function (err) { console.error('response error:', err.code); }); // FIX 3
+
+  if (req.method === 'GET' && req.url === '/health') {
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/items') {
+    sendJson(res, 200, items);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/items') {
+    let received = 0;
+    const chunks = [];
+    req.on('data', function (chunk) {
+      received += chunk.length;
+      if (received > MAX_BODY) { // FIX 1: enforce a body size limit
+        sendJson(res, 413, { error: 'payload too large' });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', function () {
+      if (res.writableEnded) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch (err) {
+        sendJson(res, 400, { error: 'malformed JSON' });
+        return;
+      }
+      const item = { id: nextId++, name: parsed.name };
+      items.push(item);
+      sendJson(res, 201, item);
+    });
+    return;
+  }
+
+  sendJson(res, 404, { error: 'not found' });
+});
+
+server.on('error', function (err) { console.error('server error:', err.code); }); // FIX 3
+
+process.env.PORT = '9000';
+process.env.MIN_ALLOWED_PORT = '10000';
+const PORT = Number(process.env.PORT || '3000'); // FIX 4: convert to a real number
+if (PORT > Number(process.env.MIN_ALLOWED_PORT)) {
+  console.log('port looks fine relative to the minimum');
+} else {
+  console.log('warning: port is below the configured minimum');
+}
+
+server.listen(PORT, async function () {
+  const base = 'http://localhost:' + PORT;
+  await fetch(base + '/health').then(function (r) { return r.json(); }).then(function (j) { console.log('health:', JSON.stringify(j)); });
+  await fetch(base + '/items', { method: 'POST', body: JSON.stringify({ name: 'widget' }) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { console.log('created:', JSON.stringify(j)); });
+  await fetch(base + '/items', { method: 'POST', body: '{ not valid json' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { console.log('malformed response:', JSON.stringify(j)); });
+  server.close();
+});
+`;
+
+export const wr1FixedOut = `warning: port is below the configured minimum
+health: {"ok":true}
+created: {"id":1,"name":"widget"}
+malformed response: {"error":"malformed JSON"}`;
+
+ทั้งสี่ request เสร็จสมบูรณ์แล้ว: คำเตือนเรื่องพอร์ตถูกต้อง health check และการสร้างรายการที่ถูกต้องทั้งคู่ทำงานได้ และ request ที่ผิดรูปแบบได้ `400` ที่สะอาดแทนที่จะทำให้โปรเซส crash
+
+## เครื่องมือจับอะไรได้บ้าง
+
+`npx eslint` (flat config พร้อม `eslint-plugin-n` + `eslint-plugin-promise`) บนเวอร์ชันที่มี bug: **ไม่มีปัญหาเลย** ไม่มี bug ทั้งสี่ตัวที่ตรงกับกฎไหนเลย — ไม่มีการจำกัด body, การส่ง response ซ้ำสองครั้ง, ไม่มี error listener, และการเทียบ string กับ string ล้วนอยู่นอกเหนือสิ่งที่กฎที่ติดตั้งในคอร์สนี้ตรวจสอบ
+
+`node --trace-warnings` บนเวอร์ชันที่มี bug: ไม่มี warning เลย — ไฟล์นี้ crash ด้วย uncaught exception ไม่ใช่ warning ดังนั้น `--trace-warnings` จึงไม่มีอะไรเพิ่มเติมให้ที่นี่ (flag นั้นมีไว้สำหรับ bug 12 ในแคตตาล็อก คือ listener leak ไม่ใช่ตัวนี้)
+
+การรันไฟล์คือสิ่งที่จับ bug ได้จริงสามใน สี่ตัว (2, 3, และ 4 ทั้งหมดเห็นได้ในผลลัพธ์จริงข้างบน); bug 1 (ไม่จำกัด body) ไม่มีอาการที่เห็นได้เลยใน run นี้ — ต้องใช้ request ที่ขนาดใหญ่เกิน ไม่ใช่แค่ผิดรูปแบบ ถึงจะสังเกตเห็นมันได้ เหมือนกับ pattern 9 ใน *AI bug catalog* เป๊ะ
+
+<Callout title="สรุปหนึ่งบรรทัด">
+eslint ไม่มีปัญหาเลยและ demo ที่ "ทำงานได้เกือบทั้งหมด" ที่นี่ซ่อน bug สามตัวที่ประกอบกัน (การส่ง response ซ้ำที่ไม่มี guard, ไม่มี error listener คอยรับไว้, และการเช็กพอร์ตที่กลับด้าน) และทิ้ง bug ตัวที่สี่ไว้ (ไม่จำกัด body) จนมองไม่เห็นจนกว่าจะมี request ที่ใหญ่กว่านี้ — มีแค่การอ่านขอบเขตข้อมูลและอายุของ response เท่านั้นที่หามันเจอ
+</Callout>
+
+export const quizWorkedReview1 = [
+  {
+    q: 'เวอร์ชันที่มี bug crash ด้วย ERR_HTTP_HEADERS_SENT ไม่ใช่ ERR_STREAM_WRITE_AFTER_END แบบ pattern ที่คล้ายกันใน AI bug catalog ทำไม error ถึงต่างกัน?',
+    options: [
+      'นี่เป็น bug ที่ต่างไปจาก double res.end() ในแคตตาล็อกโดยสิ้นเชิง',
+      'sendJson เรียก res.writeHead() ก่อน res.end() -- การเรียกครั้งที่สองล้มเหลวที่ขั้นตอน writeHead() (header ถูกส่งไปแล้ว) แทนที่จะไปถึง end() เลยด้วยซ้ำ',
+      'ERR_HTTP_HEADERS_SENT เกิดขึ้นแค่กับ GET request เท่านั้น',
+      'ชนิดของ error เป็นแบบสุ่มและเปลี่ยนไปในแต่ละครั้งที่รัน',
+    ],
+    answer: 1,
+    explain: 'error ทั้งสองแบบมาจากปัญหาพื้นฐานเดียวกัน (การตอบกลับสองครั้ง) แต่จะเห็นแบบไหนขึ้นอยู่กับว่า method ไหนถูกเรียกเป็นครั้งที่สอง ในกรณีนี้ writeHead() รันก่อนในการเรียก sendJson ครั้งที่สองและเป็นตัวที่ throw จริง เพราะตั้ง header ซ้ำไม่ได้',
+  },
+  {
+    q: 'ทำไม bug 3 (ไม่มี error listener) ถึงสำคัญ ทั้งที่ไฟล์นี้ไม่เคยจงใจ trigger event "error" เลย?',
+    options: [
+      'ไม่สำคัญเลย -- bug 3 ไม่มีผลจริงในไฟล์นี้',
+      'การส่งซ้ำของ bug 2 สร้าง error เป็น event "error" บน response stream -- เมื่อไม่มี listener เลย error นั้นก็กลายเป็น uncaught exception ที่ crash ทั้งโปรเซสแทนที่จะแค่ทำให้ request เดียวล้มเหลว',
+      'error listener ที่หายไปสำคัญแค่กับ WebSocket connection เท่านั้น',
+      'error listener จะป้องกัน bug 2 ไม่ให้เกิดขึ้นเลยตั้งแต่แรก',
+    ],
+    answer: 1,
+    explain: 'bug 3 เองไม่ได้ทำให้ crash โดยตรง -- มันแค่เอาตาข่ายนิรภัยที่จะเปลี่ยน error ของ bug 2 ให้เป็นความล้มเหลวที่ถูก log ไว้อย่างจำกัด แทนที่จะเป็น uncaught exception ที่จบโปรเซสออกไป',
+  },
+  {
+    q: 'บรรทัดแรกของผลลัพธ์จริง "port looks fine relative to the minimum" พิสูจน์อะไรจริง ๆ เกี่ยวกับ bug 4?',
+    options: [
+      'ว่าการเทียบพอร์ตถูกต้อง',
+      'ว่า \'9000\' > \'10000\' ให้ผลเป็น true ภายใต้การเทียบแบบ string (lexicographic) แม้ว่า 9000 จะน้อยกว่า 10000 อย่างชัดเจนในทางตัวเลข -- พิสูจน์ว่าการเทียบกำลังทำงานบน string ไม่ใช่ตัวเลข',
+      'ว่า process.env.PORT ไม่เคยถูกตั้งค่าจริง ๆ',
+      'ว่า server เริ่มทำงานไม่สำเร็จ',
+    ],
+    answer: 1,
+    explain: 'นี่คือหลักฐานชัดเจนสำหรับ bug 4: ข้อความที่ print เป็น branch ที่ผิดสำหรับความสัมพันธ์เชิงตัวเลขจริงระหว่าง 9000 กับ 10000 ซึ่งจะเกิดขึ้นได้ก็ต่อเมื่อ operator การเทียบกำลังทำงานบน string เท่านั้น',
+  },
+  {
+    q: 'ทำไม eslint ถึงรายงานว่าไม่มีปัญหาเลยบนไฟล์ที่มี bug จริงที่ปลูกไว้สี่ตัว?',
+    options: [
+      'eslint config ที่ใช้ใน ladder ของคอร์สนี้ตั้งค่าผิด',
+      'ไม่มี bug ทั้งสี่ตัวนี้ (ไม่จำกัด body, ส่ง response ซ้ำ, ไม่มี error listener, เทียบ string กับ string) ตรงกับกฎไหนใน eslint-plugin-n หรือ eslint-plugin-promise เลย -- ต้องอ่านพฤติกรรมจริงของโค้ด ไม่ใช่แค่ syntax ของมัน',
+      'eslint วิเคราะห์ไฟล์ที่ใช้ fetch() ไม่ได้',
+      'bug เหล่านี้ไม่ได้มีอยู่จริงในไฟล์ที่ eslint ตรวจ',
+    ],
+    answer: 1,
+    explain: 'ตรงกับตาราง pattern-to-rung จากบท Verification Tools โดยตรง: bug ทั้งสี่ประเภทนี้ถูกระบุว่า "ไม่มี -- ต้องใช้คนเท่านั้น" หมายความว่าไม่มีกฎ linter ที่ติดตั้งไว้ตรวจจับมันเลย',
+  },
+];
+
+<Quiz client:visible id="reading-node/worked-review-1" questions={quizWorkedReview1} />
+
+<ProgressTracker client:visible id="reading-node/worked-review-1" />

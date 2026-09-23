@@ -1,0 +1,750 @@
+---
+title: 'The AI bug catalog'
+description: '24 patterns AI assistants reach for by default in Node.js — the wrong code, the real observed symptom, the fix, and exactly which tool (if any) catches it.'
+sidebar:
+  order: 2
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+Every pattern below is code an AI assistant writes with real confidence — it looks idiomatic, it runs on the demo input, and it is wrong in a way that only shows up under a different input, a slower disk, or sustained load. Each entry gives the wrong snippet, the real symptom captured by actually running it on Node 24.13 (a crash, a wrong value, or a captured warning — never invented), the fix, and which tool in this course's ladder catches it: `node --test`, `--trace-warnings`, the language's default unhandled-rejection crash, an `eslint-plugin-n`/`eslint-plugin-promise` rule, `npm audit`, or "none — only a human." The *Verification Tools* lesson turns this list into a table you can run against a real diff.
+
+### Event loop & async
+
+**1. Forgotten `await`.** A call to an `async function` still runs without `await` — it just returns a `Promise` instead of its resolved value, and the caller has already moved on.
+
+<NodeRunner client:visible code={forgottenAwaitCode} node expected={forgottenAwaitOut} />
+
+export const forgottenAwaitCode = `async function getUser(id) {
+  return { id: id, name: 'Ada' };
+}
+
+function printUser(id) {
+  const user = getUser(id); // BUG: missing await -- user is a Promise, not the resolved object
+  console.log('user:', user.name);
+}
+
+printUser(1);
+`;
+
+export const forgottenAwaitOut = `user: undefined`;
+
+No crash, no warning — just a silently wrong value, which is what makes this pattern dangerous. The fix is `async function printUser(id) { const user = await getUser(id); ... }`. **Tool: none — only a human** (or a test asserting on the real resolved shape); no installed lint rule in this course's ladder flags a missing `await` in plain JavaScript without type information. See [Async/Await](/nodejs/en/event-loop-async/async-await/).
+
+**2. `forEach(async ...)`.** `Array.prototype.forEach` never awaits its callback's return value — it fires every call and immediately moves on.
+
+```js
+async function processAll(ids) {
+  ids.forEach(async function (id) {
+    await new Promise(function (r) { setTimeout(r, 10); });
+    console.log('done', id);
+  });
+  console.log('all done'); // BUG: prints before any "done" line, not after
+}
+
+processAll([1, 2, 3]);
+```
+
+```text
+all done
+done 1
+done 2
+done 3
+```
+
+`processAll`'s caller has no way to know when the work is actually finished — `console.log('all done')` runs before any item is processed. The fix is a `for...of` loop with `await` inside it (sequential), or `await Promise.all(ids.map(...))` (concurrent, but still awaited). **Tool: none — only a human**; no rule in `eslint-plugin-n`/`eslint-plugin-promise` flags an async callback passed to `forEach`. See [Async/Await](/nodejs/en/event-loop-async/async-await/).
+
+**3. Floating promise → unhandled rejection.** A rejected promise nobody attaches a `.catch` (or `try`/`await`) to crashes the process by default since Node 15.
+
+```js
+// @expect-throw
+async function saveRecord(record) {
+  if (!record.id) throw new Error('missing id');
+  return record;
+}
+
+function handleSave(record) {
+  saveRecord(record); // BUG: floating promise, its rejection is never caught
+  console.log('save queued');
+}
+
+handleSave({});
+```
+
+```text
+save queued
+Error: missing id
+    at saveRecord (...)
+```
+
+The fix: `saveRecord(record).catch(function (err) { console.error('save failed:', err.message); });`. **Tool: eslint-plugin-promise's `promise/catch-or-return` rule** flags a promise-returning call with no `.catch`/`.then` attached; the crash itself is also Node's own default behavior — no `--unhandled-rejections=strict` flag needed since Node 15. See [Promises](/nodejs/en/event-loop-async/promises/).
+
+**4. `Promise.all` with unbounded concurrency.** `Promise.all(items.map(fn))` starts every call at once — for 10 items that is fine; for 10,000 it can exhaust sockets, memory, or a rate limit all at once.
+
+<NodeRunner client:visible code={unboundedConcurrencyCode} node expected={unboundedConcurrencyOut} />
+
+export const unboundedConcurrencyCode = `let active = 0;
+let maxActive = 0;
+async function fakeFetch(id) {
+  active++;
+  maxActive = Math.max(maxActive, active);
+  await new Promise(function (r) { setTimeout(r, 5); });
+  active--;
+  return id;
+}
+
+async function fetchAll(ids) {
+  return Promise.all(ids.map(function (id) { return fakeFetch(id); })); // BUG: no concurrency limit
+}
+
+fetchAll([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).then(function () {
+  console.log('max concurrent requests:', maxActive);
+});
+`;
+
+export const unboundedConcurrencyOut = `max concurrent requests: 10`;
+
+All ten fire simultaneously. The fix is a small worker pool: a fixed number of workers each pull the next item off a shared index, so at most `limit` calls are ever in flight. **Tool: none — only a human** (an `autocannon` load test or a real production incident is what actually surfaces it, not a lint rule — see *Verification Tools*). See [Promises](/nodejs/en/event-loop-async/promises/).
+
+**5. `setTimeout(fn, 0)` where `setImmediate`/`process.nextTick` is what was meant.** These three schedule work in different phases with different guarantees; treating `setTimeout(fn, 0)` as "run this next" is a common but incorrect assumption.
+
+```js
+import { readFile } from 'node:fs';
+
+readFile(new URL(import.meta.url), function () {
+  setTimeout(function () { console.log('timeout (setTimeout 0)'); }, 0);
+  setImmediate(function () { console.log('immediate (setImmediate)'); }); // scheduled second, but the check phase always runs before the next timers phase inside an I/O callback
+});
+```
+
+```text
+immediate (setImmediate)
+timeout (setTimeout 0)
+```
+
+Inside an I/O callback, `setImmediate` is *guaranteed* to run before any timer, no matter the order they were scheduled in — the opposite of what the code's layout suggests. **Tool: none — only a human**; this is a scheduling-semantics choice, not something a linter can flag. See [libuv and the Threadpool](/nodejs/en/event-loop-async/libuv-and-threadpool/).
+
+### Streams & resources
+
+**6. Synchronous CPU work inside a request handler.** A single-threaded server can only do one thing at a time — a synchronous block in one handler blocks every other in-flight request too.
+
+```js
+function busySleep(ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {}
+}
+
+const log = [];
+
+function handleHeavy() {
+  log.push('start heavy');
+  busySleep(30); // BUG: blocks the event loop -- nothing else can run meanwhile
+  log.push('end heavy');
+}
+
+function handleFast() {
+  log.push('fast');
+}
+
+setImmediate(handleHeavy);
+setImmediate(handleFast);
+setImmediate(function () { console.log(log.join(' -> ')); });
+```
+
+```text
+start heavy -> end heavy -> fast
+```
+
+`handleFast` (a second, unrelated request in a real server) cannot run until `handleHeavy`'s entire synchronous block finishes, even though it was queued before `handleHeavy` finished. The fix is to break CPU-bound work into chunks that yield to the event loop between them (`await new Promise(r => setImmediate(r))`), or move real CPU work to a `worker_thread` entirely. **Tool: none — only a human** (measured with `--cpu-prof` or `monitorEventLoopDelay`, covered in *Verification Tools*). See [Call Stack](/nodejs/en/event-loop-async/call-stack/).
+
+**12. Listener leak.** Registering a new listener on every request without ever removing it accumulates without bound.
+
+<NodeRunner client:visible code={listenerLeakCode} node expected={listenerLeakOut} />
+
+export const listenerLeakCode = `import { EventEmitter } from 'node:events';
+
+const emitter = new EventEmitter();
+
+process.on('warning', function (warning) {
+  console.log('warning name:', warning.name);
+});
+
+function handleRequest() {
+  emitter.on('data', function () {}); // BUG: a new listener added on every "request", never removed
+}
+
+for (let i = 0; i < 11; i++) handleRequest();
+
+console.log('listener count:', emitter.listenerCount('data'));
+`;
+
+export const listenerLeakOut = `listener count: 11
+warning name: MaxListenersExceededWarning`;
+
+Past the default limit of 10 listeners for one event name on one emitter, Node emits a `MaxListenersExceededWarning` — a hint, not a crash, so it is easy to miss in production log noise. The fix: register the listener once outside the per-request path, or call `.off()`/`.removeListener()` when the corresponding resource is torn down. **Tool: `--trace-warnings`** (prints where the listener was actually added) or catching the `warning` event directly in a test, as above. See [EventEmitter](/nodejs/en/core-apis/events/).
+
+**13. An `error` event with no listener.** `EventEmitter` treats an unhandled `'error'` event as fatal by design — it is the one event name that throws if nobody is listening.
+
+```js
+// @expect-throw
+import { EventEmitter } from 'node:events';
+
+const emitter = new EventEmitter();
+
+emitter.emit('error', new Error('boom')); // BUG: no 'error' listener registered
+```
+
+```text
+Error: boom
+    at ... (Emitted 'error' event at:)
+```
+
+The fix is always registering an `.on('error', ...)` handler for any emitter that can produce one — a socket, a stream, a child process, or your own class. **Tool: none — only a human** (running the code, as above, is the fastest way this surfaces; no lint rule flags a missing `error` listener statically). See [EventEmitter](/nodejs/en/core-apis/events/).
+
+**14. `.pipe()` with no error handling.** `readable.pipe(writable)` does not forward `'error'` events between the two streams — an error on either side needs its own listener.
+
+```js
+// @expect-throw
+import { Readable, Writable } from 'node:stream';
+
+const source = new Readable({
+  read() {
+    this.emit('error', new Error('source failed'));
+  }
+});
+
+const dest = new Writable({
+  write(chunk, enc, cb) { cb(); }
+});
+
+source.pipe(dest); // BUG: pipe() forwards data, not errors -- and neither stream has an 'error' listener
+```
+
+```text
+Error: source failed
+    at ... (Emitted 'error' event on Readable instance at:)
+```
+
+The fix is `stream.pipeline(source, dest, function (err) { if (err) console.error('pipeline failed:', err.message); })` from `node:stream`, which both forwards the error and cleans up (destroys) every stream in the chain. **Tool: none — only a human**, though `eslint-plugin-n`'s `n/no-callback-literal`-adjacent rules don't cover this; the *Streams & I/O* module's [pipe/pipeline lesson](/nodejs/en/streams/pipe-pipeline/) covers `pipeline()` in full.
+
+**15. String decoding across a chunk boundary.** Decoding each stream chunk independently with `.toString('utf8')` breaks any multi-byte character that happens to be split across two chunks.
+
+<NodeRunner client:visible code={chunkDecodeCode} node expected={chunkDecodeOut} />
+
+export const chunkDecodeCode = `const full = Buffer.from('สวัสดี', 'utf8'); // Thai text, deliberately split mid-character below
+const mid = 4;
+const chunk1 = full.subarray(0, mid);
+const chunk2 = full.subarray(mid);
+
+let naive = '';
+naive += chunk1.toString('utf8'); // BUG: each chunk decoded independently
+naive += chunk2.toString('utf8');
+console.log(naive);
+console.log('matches original:', naive === full.toString('utf8'));
+`;
+
+export const chunkDecodeOut = `ส���ัสดี
+matches original: false`;
+
+The multi-byte character that straddled the split becomes the Unicode replacement character (`�`) on both sides of the cut, and the round-trip no longer matches the original text. The fix is `node:string_decoder`'s `StringDecoder`, which buffers an incomplete multi-byte sequence until the next chunk completes it. **Tool: none — only a human** (this passes every naive test built on ASCII-only fixtures). See [Buffer](/nodejs/en/core-apis/buffer/).
+
+**16. `Buffer.concat` inside a loop.** Calling `Buffer.concat([acc, chunk])` on every incoming chunk copies the entire accumulated buffer again each time — quadratic work for what should be linear.
+
+```js
+const chunks = [Buffer.from('ab'), Buffer.from('cd'), Buffer.from('ef')];
+
+let naive = Buffer.alloc(0);
+for (const chunk of chunks) {
+  naive = Buffer.concat([naive, chunk]); // BUG: re-copies everything accumulated so far, on every chunk
+}
+
+const collected = [];
+for (const chunk of chunks) {
+  collected.push(chunk); // FIX: collect references, concat once at the end
+}
+const fixed = Buffer.concat(collected);
+
+console.log(naive.toString(), fixed.toString(), naive.equals(fixed));
+```
+
+```text
+abcdef abcdef true
+```
+
+Both produce the identical, correct result on this small input — which is exactly the trap: correctness looks fine at any scale, and only a profiler shows the quadratic copying cost widening as chunk count grows. **Tool: none — only a human**, surfaced with `--cpu-prof` under real traffic (see *Verification Tools*), never by a functional test. See [Buffer](/nodejs/en/core-apis/buffer/).
+
+### HTTP boundaries
+
+**7. `res.end()` called twice.** The second call throws `ERR_STREAM_WRITE_AFTER_END` — and if nothing listens for the `error` event that produces, it crashes the process before the client even gets a response.
+
+```js
+// @expect-throw
+import http from 'node:http';
+
+const server = http.createServer(function (req, res) {
+  res.end('first');
+  res.end('second'); // BUG: ERR_STREAM_WRITE_AFTER_END -- unhandled, this crashes the process
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port);
+});
+```
+
+```text
+Error [ERR_STREAM_WRITE_AFTER_END]: write after end
+    at ServerResponse.end (...)
+Emitted 'error' event on ServerResponse instance at:
+    at emitErrorNt (...)
+```
+
+The crash happens synchronously inside the handler, before the client's `fetch` ever receives a response — the first `res.end('first')` call never actually reaches the socket before the process dies. The fix is an early-return guard: `if (res.writableEnded) return;` before every `res.end()` call, centralized in one response helper (as the *Production Server* lesson does). **Tool: none — only a human**; no rule in `eslint-plugin-n` covers a double `res.end()` call, so running the handler with a duplicate-call test is the fastest way to see it. See [HTTP Server](/nodejs/en/http-networking/http-server/).
+
+**8. Setting a header after the response is sent.** `res.setHeader()` (and `res.writeHead()`) throw `ERR_HTTP_HEADERS_SENT` once the headers have already gone out over the wire.
+
+```js
+// @expect-throw
+import http from 'node:http';
+
+const server = http.createServer(function (req, res) {
+  res.end('ok');
+  res.setHeader('X-Late', 'true'); // BUG: headers (and the body) are already sent by res.end()
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  fetch('http://localhost:' + port);
+});
+```
+
+```text
+Error [ERR_HTTP_HEADERS_SENT]: Cannot set headers after they are sent to the client
+```
+
+The fix is ordering: set every header *before* calling `res.end()` or `res.write()`, never after. **Tool: none — only a human** (or `res.headersSent` checked defensively before the call). See [HTTP Server](/nodejs/en/http-networking/http-server/).
+
+**9. No request body size limit.** Buffering `req` chunks with no cap lets a client (or an attacker) grow server memory without bound.
+
+<NodeRunner client:visible code={bodyLimitCode} node expected={bodyLimitOut} />
+
+export const bodyLimitCode = `import http from 'node:http';
+
+const MAX_BODY = 1024;
+
+const server = http.createServer(function (req, res) {
+  let received = 0;
+  const chunks = [];
+  req.on('data', function (chunk) {
+    received += chunk.length;
+    if (received > MAX_BODY) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'payload too large' }));
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', function () {
+    if (res.writableEnded) return;
+    const body = Buffer.concat(chunks);
+    res.end('received ' + body.length + ' bytes');
+  });
+});
+
+server.listen(0, function () {
+  const port = server.address().port;
+  const bigBody = 'x'.repeat(2000); // over MAX_BODY
+  fetch('http://localhost:' + port, { method: 'POST', body: bigBody }).then(function (r) { return r.status; }).then(function (status) {
+    console.log('status:', status);
+    server.close();
+  });
+});
+`;
+
+export const bodyLimitOut = `status: 413`;
+
+Without the `received > MAX_BODY` guard (the actual bug), the same server accepts a body of any size at all. **Tool: none — only a human**; confirmed under load with `autocannon` sending oversized bodies (*Verification Tools*). See [JSON API](/nodejs/en/http-networking/json-api/).
+
+**10. `JSON.parse` with no `try`/`catch`.** Malformed input crashes the whole handler with a `SyntaxError` instead of returning a `400`.
+
+```js
+// @expect-throw
+function parseConfig(raw) {
+  return JSON.parse(raw); // BUG: no try/catch -- malformed input throws uncaught
+}
+
+console.log(parseConfig('{ this is not valid json'));
+```
+
+```text
+SyntaxError: Expected property name or '}' in JSON at position 2 (line 1 column 3)
+```
+
+The fix wraps the parse in `try`/`catch` and returns a `400` with a clear message on failure, exactly as the *JSON API* lesson's route does. **Tool: none — only a human** (or `node --test` with a malformed-input test case). See [JSON API](/nodejs/en/http-networking/json-api/).
+
+**11. `fetch` without checking `.ok`, and no timeout.** `fetch` only rejects on a network failure — an HTTP `4xx`/`5xx` response still resolves normally, and with no explicit timeout a hung server hangs the caller forever.
+
+```js
+// @expect-throw
+import http from 'node:http';
+
+const server = http.createServer(function (req, res) {
+  res.writeHead(500, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: 'internal error' }));
+});
+
+server.listen(0, async function () {
+  const port = server.address().port;
+  const res = await fetch('http://localhost:' + port); // BUG: never checks res.ok
+  const body = await res.json();
+  console.log('user name:', body.name.toUpperCase()); // body.name is undefined on the error payload
+  server.close();
+});
+```
+
+```text
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+    at Server.<anonymous> (...)
+```
+
+The 500 response body (`{ error: 'internal error' }`) has no `name` field at all, and the code never noticed the status was an error before trusting the shape of the body. The fix checks `res.ok` (or the specific status) before trusting the body's shape, and passes `signal: AbortSignal.timeout(5000)` so a hung server does not hang the caller forever. **Tool: none — only a human**; no lint rule statically proves a `fetch` response was validated. See [Requests](/nodejs/en/http-networking/requests/).
+
+**17. `process.env.PORT` compared as a string.** Every value in `process.env` is a `string` (or absent) — comparing two of them with `<`/`>` does lexicographic, not numeric, comparison.
+
+<NodeRunner client:visible code={envStringCode} node expected={envStringOut} />
+
+export const envStringCode = `process.env.PORT = '9000';
+process.env.MIN_PORT = '10000';
+
+if (process.env.PORT > process.env.MIN_PORT) { // BUG: string comparison -- '9' > '1' lexicographically
+  console.log('port is above the minimum');
+} else {
+  console.log('port is not above the minimum');
+}
+`;
+
+export const envStringOut = `port is above the minimum`;
+
+`9000` is numerically well below `10000`, but `'9000' > '10000'` compares character by character and `'9' > '1'` is `true`. The fix is `Number(process.env.PORT) > Number(process.env.MIN_PORT)`. **Tool: none — only a human** (or `eslint-plugin-n`'s `n/no-process-env` style rules, which flag reading `process.env` at all but not this specific comparison bug). See [process.env](/nodejs/en/core-apis/process-env/).
+
+### Modules & packages
+
+**19. Mixing `require`/`import`, or `__dirname` in an ES module.** `__dirname` and `__filename` are CommonJS-only globals — an ES module has no `__dirname` at all.
+
+```js
+// @expect-throw
+console.log(__dirname); // BUG: __dirname does not exist in ES module scope
+```
+
+```text
+ReferenceError: __dirname is not defined in ES module scope
+```
+
+The fix is `import.meta.dirname` (stable since Node 21.2 / 20.11), which does the same job without needing `path.dirname(fileURLToPath(import.meta.url))` at all. **Tool: none — only a human** (the error message itself is clear once you hit it, but nothing catches it before you run the file). See [Modules](/nodejs/en/js-essentials/modules/).
+
+**20. `^0.x` version ranges, no lockfile, `npm install` in a Dockerfile.** For a `0.x` package, npm's caret (`^`) only allows patch bumps — but a missing lockfile, or `npm install` instead of `npm ci` inside a Docker build, still lets a build resolve different transitive versions on different days.
+
+```json
+{
+  "dependencies": {
+    "some-lib": "^0.4.2"
+  }
+}
+```
+
+```dockerfile
+# BUG: npm install can update the lockfile and resolve fresh versions on every build
+RUN npm install --omit=dev
+```
+
+The fix is committing `package-lock.json` and using `npm ci --omit=dev` in the Dockerfile, which installs *exactly* what the lockfile says and fails loudly if `package.json` and the lockfile disagree — deterministic across every machine and every build. **Tool: none — only a human** for the Dockerfile line; `npm audit` and `npm ci`'s own strict-mismatch failure catch related drift. See [Dependencies](/nodejs/en/modules-npm/dependencies/).
+
+**21. Wrong `exports` field order in `package.json`.** Node resolves the *first* matching condition in an `exports` map — a generic condition listed before a more specific one (like `types`) shadows it entirely.
+
+```json
+{
+  "exports": {
+    ".": {
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}
+```
+
+`"default"` listed first means it always wins — `"types"` below it is dead configuration that a type checker will never actually use. The fix is ordering `"types"` first, matching the rule "most specific condition first": `{ "types": "./dist/index.d.ts", "default": "./dist/index.js" }`. **Tool: none — only a human**, though `npm pack --dry-run` combined with actually importing the packed tarball from a TypeScript project surfaces it fast. See [package.json](/nodejs/en/modules-npm/package-json/).
+
+### Errors & process
+
+**18. `process.exit()` in the middle of pending work.** `process.exit()` terminates immediately — it does not wait for the microtask queue to drain, so anything still pending is simply dropped.
+
+<NodeRunner client:visible code={exitMidFlushCode} node expected={exitMidFlushOut} />
+
+export const exitMidFlushCode = `process.on('exit', function (code) {
+  console.log('exit handler ran with code', code);
+});
+
+Promise.resolve().then(function () {
+  console.log('this microtask never runs'); // BUG: process.exit() below drops this
+});
+
+console.log('before exit');
+process.exit(0);
+console.log('this line never runs either');
+`;
+
+export const exitMidFlushOut = `before exit
+exit handler ran with code 0`;
+
+The queued `.then` callback never fires, and the line after `process.exit()` never runs either — only synchronous `'exit'` listeners get a chance to run. The fix is almost always to *not* call `process.exit()` at all: let `main()` return, and let Node exit naturally once nothing is left to do, or call `process.exitCode = 0` and return instead of exiting immediately. **Tool: none — only a human** (a test that checks all expected side effects ran will fail, but no static tool flags this). See [process.env](/nodejs/en/core-apis/process-env/).
+
+**23. `console.log` instead of structured logging.** Free-text, multi-argument `console.log` calls are fine to read once in a terminal, but nothing downstream (a log aggregator, a grep, an alert rule) can reliably parse them.
+
+```js
+function logRequest(method, path, status) {
+  console.log('request', method, path, 'returned', status); // BUG: free-text, not machine-parseable
+}
+
+logRequest('GET', '/health', 200);
+```
+
+```text
+request GET /health returned 200
+```
+
+The fix, from the *Production Server* lesson, is one JSON object per line: `console.log(JSON.stringify({ event: 'request', method: method, path: path, status: status }))` — same information, but every field is now a stable, queryable key. **Tool: none — only a human** (or a log pipeline that starts failing to parse lines once someone's free-text message happens to contain a comma or a newline). See [Debugging](/nodejs/en/testing-tooling/debugging/).
+
+**24. `child_process.exec`/`eval`/`new Function` with untrusted input.** `exec()` runs its argument through a real shell — any shell metacharacter (`;`, `&&`, `` ` ``) in unsanitized input runs as a separate command. `eval`/`new Function` on untrusted input is the same problem in pure JavaScript.
+
+<NodeRunner client:visible code={execInjectionCode} node expected={execInjectionOut} />
+
+export const execInjectionCode = `import { execSync } from 'node:child_process';
+
+function listFiles(userInput) {
+  return execSync('echo start && echo ' + userInput).toString(); // BUG: string-built shell command
+}
+
+console.log(listFiles('hi; echo INJECTED')); // "input" that is actually a second command
+`;
+
+export const execInjectionOut = `start
+hi
+INJECTED
+`;
+
+The `;` in the "input" ends the first command and starts a second one that was never intended to run — with real user input this is arbitrary command execution. The fix is `execFileSync('echo', ['start', userInput])` — passing arguments as an array runs the program directly, with no shell involved, so metacharacters in `userInput` stay inert data. **Tool: none — only a human** (a dependency-scanning tool like `npm audit` finds known-vulnerable packages, not injection bugs in your own code); see [Security Model](/nodejs/en/runtime-internals/security-model/).
+
+### Testing & tooling
+
+**22. A test with no assertion, a mock applied to a stale reference, or a timer test that hangs.** All three make a test suite report green while proving almost nothing.
+
+```js
+import { test } from 'node:test';
+
+function add(a, b) {
+  return a - b; // a real, planted bug
+}
+
+test('adds two numbers', function () {
+  add(2, 3); // BUG: the result is never checked with an assertion
+});
+```
+
+Real output (`node:test`'s default reporter, run directly with no `--test` flag; the exact per-test timing varies run to run, everything else does not):
+
+```text
+✔ adds two numbers (0.4ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+The test passes even though `add(2, 3)` returns `-1`. Adding the missing assertion (`assert.equal(add(2, 3), 5)`) turns this same suite red immediately — the bug in `add` was always there, just never checked.
+
+A subtler version of the same theme: mocking a function *after* another part of the code already captured a direct reference to the original.
+
+```js
+// @expect-throw
+import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+const mailer = { send: function (to) { console.log('REALLY sending to', to); return true; } };
+const sendFn = mailer.send; // BUG: captured before the test can replace it
+
+function notify(to) {
+  return sendFn(to); // always calls the original, no matter what gets mocked on mailer later
+}
+
+test('notify does not really send mail', function () {
+  const sendMock = mock.method(mailer, 'send', function () { return 'mocked'; });
+  const result = notify('a@example.com');
+  assert.equal(sendMock.mock.calls.length, 1); // fails: the mock was never actually called
+});
+```
+
+```text
+REALLY sending to a@example.com
+✖ notify does not really send mail (1.196083ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  0 !== 1
+```
+
+`mock.method` replaces the `send` property on `mailer`, but `sendFn` already holds the *original* function object from before the mock was installed — calling `sendFn(to)` bypasses the mock entirely, and the real `mailer.send` runs for real (visible right there in the captured stdout). The fix is calling through the object at the call site (`mailer.send(to)`), never through a reference captured earlier.
+
+A third shape of the same problem, described rather than run here since it would genuinely hang for its full real duration: a test that starts a real `setTimeout(callback, 30000)` and awaits its result without ever installing `mock.timers` or manually advancing them — `node --test`'s default per-test timeout eventually fails it, but only after actually waiting, slowing the whole suite down for no reason. The fix is `context.mock.timers.enable({ apis: ['setTimeout'] })` plus an explicit `context.mock.timers.tick(30000)`, covered in the *Verification Tools* lesson.
+
+**Tool: `node --test`** catches all three, but only once a real assertion is actually written and the mock is applied at the right layer — the tool cannot invent the missing check for you. See [Built-in Test Runner](/nodejs/en/testing-tooling/node-test/).
+
+## Mental Model
+
+Every pattern above shares the same shape: code that is *syntactically fine* and *behaviorally wrong on some input the demo didn't happen to use*. None of them are exotic — they are the default shape an AI assistant reaches for when a prompt does not specifically ask for the safer version, because the unsafe version is shorter, more common in training data, and usually still "looks right" in a quick read.
+
+## Trade-offs
+
+| Approach to this catalog | Benefit | Cost |
+|---|---|---|
+| Memorizing all 24 by name | Fast pattern-matching during review | A 25th pattern this catalog doesn't cover still needs the reading habits from the *index* lesson |
+| Running every diff through the tool ladder first | Catches a small handful of these (3 of 24) mechanically, for free | Gives false confidence that a clean run means a clean diff — the large majority of this catalog is "none — only a human" |
+| Reading every diff line by line regardless of tool output | Catches everything, including patterns not yet in any catalog | Does not scale to large diffs without the reading habits from the *index* lesson to prioritize where to look first |
+
+## Common Misconceptions
+
+- **"If it were really a bug, a tool would catch it."** 21 of this catalog's 24 patterns are marked "none — only a human" for a reason: no installed tool in this course's ladder checks for them.
+- **"AI-generated bugs are exotic edge cases."** Every pattern here is a well-known, decades-old Node.js/JavaScript footgun — AI just produces it fluently and often, not because it invented anything new.
+- **"A crash is worse than a silent wrong value."** Pattern 1 (forgotten `await`) never crashes and produces `undefined` silently — that is arguably more dangerous than pattern 3's loud, unmissable crash, because nothing forces anyone to notice.
+
+## Reading AI-generated code
+
+When a reviewer opens an AI-generated diff against this catalog, the fastest first pass is mechanical:
+
+1. Grep for the literal strings this catalog's patterns key on: `forEach(async`, `.then(` with no matching `.catch`, `readFileSync`, `res.end(` more than once per function, `JSON.parse(` with no surrounding `try`, `exec(`, `eval(`, `new Function(`, `catch {}`.
+2. For every hit, find which of the 24 patterns above it matches, and check whether the fix shown for that pattern is already present.
+3. Anything left over — the patterns marked "none — only a human" that grep cannot key on directly (a floating promise that is not `forEach`-shaped, a listener leak in a class method, a `Promise.all` with no visible bound) — needs an actual read using the *index* lesson's four habits.
+
+<SpotTheBug code={`import http from 'node:http';
+
+const server = http.createServer(function (req, res) {
+  let body = '';
+  req.on('data', function (chunk) { body += chunk; }); // BUG 1: no size limit (pattern 9)
+  req.on('end', async function () {
+    const data = JSON.parse(body); // BUG 2: no try/catch (pattern 10)
+    const saved = await save(data); // BUG 3: floating promise if save() ever rejects before this line is reached
+    res.end(JSON.stringify(saved));
+    res.end(); // BUG 4: res.end() called twice (pattern 7)
+  });
+});
+
+async function save(data) {
+  if (!data.name) throw new Error('name is required');
+  return data;
+}`}>
+Four of this catalog's patterns stacked in eleven lines: no body size limit (9), an unguarded `JSON.parse` (10), and a double `res.end()` (7) that will crash the process the moment `save()` succeeds, since the second call always throws `ERR_STREAM_WRITE_AFTER_END` with no listener for it. And if `data.name` is missing, `save()` rejects *inside* an `async` event handler with nothing catching it — an unhandled rejection (3) that crashes the process before the double-`res.end()` bug even gets a chance to run. Reading this file with the *index* lesson's habits (follow the boundaries, follow the lifetime of `res`, count what would be the catch blocks if there were any) finds all four before a single request is sent.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Only 3 of this catalog's 24 patterns are actually caught by a tool in this course's ladder — `eslint-plugin-promise`, `--trace-warnings`, `node --test`. Every other one runs clean through `node --test`, `--trace-warnings`, `eslint-plugin-n`/`eslint-plugin-promise`, and `npm audit` alike, and is only found by a human actually reading the event loop, the lifetimes, the boundaries, and the suppressions.
+</Callout>
+
+export const catalogQuiz = [
+  {
+    q: 'Which of these 24 patterns produces no crash and no warning at all, only a silently wrong value?',
+    options: [
+      'Double res.end()',
+      'Forgotten await (pattern 1) -- the caller gets a Promise object instead of the resolved value, with no error',
+      'An error event with no listener',
+      'JSON.parse with no try/catch on malformed input',
+    ],
+    answer: 1,
+    explain: 'A missing await does not throw -- the code just receives an unresolved Promise where it expected a value, and reading a property off it (like .name) returns undefined instead of raising any error.',
+  },
+  {
+    q: 'Why does eslint-plugin-promise\'s catch-or-return rule catch pattern 3 (a floating promise that later rejects) but not pattern 2 (forEach(async ...))?',
+    options: [
+      'It does not catch either of them',
+      'catch-or-return flags a promise-returning expression statement with no .catch/.then attached at all -- forEach(async fn) is a call to forEach, not directly a floating promise expression, so the rule has nothing to flag at that call site',
+      'forEach(async ...) is banned syntax in modern JavaScript',
+      'Both patterns are caught by the same rule identically',
+    ],
+    answer: 1,
+    explain: 'The rule looks at the immediate expression statement. saveRecord(record); is exactly that shape. ids.forEach(async fn) is a call to Array.prototype.forEach -- the floating promises are created and discarded inside forEach\'s own internals, one level removed from anything the rule inspects directly.',
+  },
+  {
+    q: 'A server accepts a `Promise.all(items.map(fetchOne))` call for a list of 10 items in testing and a list of 50,000 items in production. What is the concrete risk that only shows up in production?',
+    options: [
+      'Promise.all always throws for arrays longer than 1,000 items',
+      'All 50,000 calls fire concurrently at once, which can exhaust sockets, memory, or trip a downstream rate limit -- something 10 concurrent calls never would',
+      'Promise.all silently drops items past index 999',
+      'There is no difference -- Promise.all behaves identically regardless of array size',
+    ],
+    answer: 1,
+    explain: 'Promise.all starts every promise in the array immediately with no concurrency limit built in. Ten concurrent calls is invisible; fifty thousand is a real resource exhaustion risk that a small-scale test will never surface.',
+  },
+  {
+    q: 'Inside an fs.readFile callback, why does `setImmediate(fn)` reliably run before `setTimeout(fn, 0)`, even though the timeout was scheduled with a 0ms delay?',
+    options: [
+      'setImmediate always runs synchronously, before the callback even returns',
+      'Within an I/O callback, the check phase (where setImmediate callbacks run) is guaranteed to execute before the next timers phase, regardless of scheduling order or the requested timeout delay',
+      'setTimeout(fn, 0) is deprecated and never actually fires',
+      'This ordering is undefined and varies randomly between runs',
+    ],
+    answer: 1,
+    explain: 'The libuv event loop phases run in a fixed order each iteration: timers, then (eventually) poll, then check (setImmediate). When scheduled from inside an I/O callback (during the poll phase), the check phase always comes next, before the loop returns to timers again.',
+  },
+  {
+    q: 'Why does `res.end()` called a second time crash the process by default, instead of just being a harmless no-op?',
+    options: [
+      'Node.js ignores every call to res.end() after the first automatically',
+      'The second call throws ERR_STREAM_WRITE_AFTER_END, which is emitted as an "error" event on the response stream -- and an unhandled "error" event is fatal by design in Node.js',
+      'res.end() can only be called once per process, ever',
+      'It only crashes if the response body is longer than 64KB',
+    ],
+    answer: 1,
+    explain: 'A stream that has already ended cannot be written to again -- attempting it raises ERR_STREAM_WRITE_AFTER_END as an "error" event, and EventEmitter treats an "error" event with zero listeners as fatal, throwing it as an uncaught exception.',
+  },
+  {
+    q: 'Why does `naive === full.toString(\'utf8\')` come back false in the chunk-decoding pattern, when both chunks together contain exactly the original bytes?',
+    options: [
+      'Buffer.subarray silently drops bytes',
+      'Decoding each chunk to a string independently can split a multi-byte UTF-8 character across the boundary, turning the split character into the replacement character (U+FFFD) on both sides of the cut',
+      'JavaScript strings cannot represent Thai characters',
+      'toString(\'utf8\') only works on the first chunk of a stream',
+    ],
+    answer: 1,
+    explain: 'The bytes are intact across the two chunks -- the bug is decoding them separately. A multi-byte UTF-8 character split mid-sequence is invalid on either side alone, so each incomplete half decodes to the replacement character instead of waiting for the rest of the bytes.',
+  },
+  {
+    q: 'In the exec-injection pattern, why does execFileSync(\'echo\', [\'start\', userInput]) treat `hi; echo INJECTED` as inert data, when execSync(\'echo start && echo \' + userInput) treats the same string as two commands?',
+    options: [
+      'execFileSync automatically deletes shell metacharacters from its arguments',
+      'execFileSync runs the named program directly with the given arguments, with no shell involved to interpret ; or && at all -- execSync always goes through a real shell, which does interpret them',
+      'Both functions behave identically -- the difference is coincidental',
+      'userInput is validated automatically by execFileSync',
+    ],
+    answer: 1,
+    explain: 'execSync (like exec) hands its whole string to a shell, which is exactly the program that knows what ; and && mean. execFileSync calls the target executable directly with an argument array -- there is no shell in the loop to reinterpret any of the arguments as separate commands.',
+  },
+  {
+    q: 'A test suite reports 100% passing after a reviewer\'s AI assistant "wrote tests" for a buggy add(a, b) function that returns a - b. What is the most likely explanation, based on pattern 22?',
+    options: [
+      'The test suite cannot have run at all',
+      'At least one test calls add() without ever asserting on its return value, so the test passes regardless of what add() actually returns',
+      'node --test always passes regardless of assertions',
+      'add(a, b) must actually be correct if the tests pass',
+    ],
+    answer: 1,
+    explain: 'A test with no assertion at all (or one that mocks the wrong reference, so the real, buggy code path never gets exercised) reports a pass no matter what the code under test actually does -- passing tests only prove something when they contain real, reachable assertions.',
+  },
+];
+
+<Quiz client:visible id="reading-node/ai-bug-catalog" questions={catalogQuiz} />
+
+<ProgressTracker client:visible id="reading-node/ai-bug-catalog" />

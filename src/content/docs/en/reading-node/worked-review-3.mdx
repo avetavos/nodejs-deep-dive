@@ -1,0 +1,250 @@
+---
+title: 'Worked review 3: a job runner'
+description: 'A full review of a small AI-style job runner built on EventEmitter and promises — four planted bugs, a real crash from an unhandled rejection, and a clean fixed version using Promise.allSettled.'
+sidebar:
+  order: 7
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+
+A small job runner: four jobs, each emitting `progress` events on a shared `EventEmitter` as they go, one of them deliberately designed to fail. This is the kind of "background job" scaffolding an AI assistant produces readily — and it has four bugs from the *AI bug catalog* planted across about 35 lines: a listener leak, a `forEach(async ...)`, an unhandled rejection, and a `process.exit()` that does not wait for anything.
+
+## The program
+
+<NodeRunner client:visible code={wr3BuggyCode} node expected={wr3BuggyOut} />
+
+export const wr3BuggyCode = `// @expect-throw
+import { EventEmitter } from 'node:events';
+
+const bus = new EventEmitter();
+
+async function runJob(id) {
+  bus.on('progress', function (jobId, pct) { // BUG 1: a fresh listener per job, never removed
+    if (jobId === id) console.log('job', id, 'at', pct + '%');
+  });
+
+  bus.emit('progress', id, 0);
+  await new Promise(function (r) { setTimeout(r, 5); });
+
+  if (id === 3) {
+    throw new Error('job 3 failed');
+  }
+
+  bus.emit('progress', id, 50);
+  await new Promise(function (r) { setTimeout(r, 5); });
+  bus.emit('progress', id, 100);
+  return id;
+}
+
+async function runAll(ids) {
+  ids.forEach(async function (id) { // BUG 2: forEach(async) -- does not wait
+    const result = await runJob(id); // BUG 3: no catch -- job 3's rejection is unhandled
+    console.log('finished job', result);
+  });
+  console.log('all jobs queued');
+}
+
+runAll([1, 2, 3, 4]);
+console.log('progress listener count:', bus.listenerCount('progress'));
+
+setTimeout(function () {
+  console.log('shutting down');
+  process.exit(0); // BUG 4: exits before all jobs have actually finished
+}, 20);
+`;
+
+export const wr3BuggyOut = `job 1 at 0%
+job 2 at 0%
+job 3 at 0%
+job 4 at 0%
+all jobs queued
+progress listener count: 4
+job 1 at 50%
+job 2 at 50%`;
+
+Job 4 never reaches its `50%` line, `finished job` never prints for anyone, and `shutting down` never prints either — the process crashes before any of that.
+
+**Real output (stderr, after the lines above):**
+
+```text
+Error: job 3 failed
+    at runJob (...)
+    at runNextTicks (node:internal/process/task_queues:64:5)
+    at listOnTimeout (node:internal/timers:567:9)
+```
+
+## Find the bugs before reading on
+
+Four planted bugs — one lifetime, one async-iteration mistake, one unhandled failure, one abrupt exit. Try to name all four before opening the answers below.
+
+<details>
+<summary>Bug 1 — `bus.on('progress', ...)` called inside `runJob`, once per call</summary>
+
+**Symptom:** every call to `runJob` registers a brand-new listener on the shared `bus`, and none of them are ever removed.
+
+**Evidence:** the real output's own `progress listener count: 4` line — after only 4 jobs, the emitter already has 4 listeners for the same event, each one still checking `if (jobId === id)` and doing nothing for every event that isn't "theirs." A long-running job queue processing thousands of jobs would accumulate thousands of dead listeners the same way.
+
+**Fix:** register one listener a single time, outside `runJob` entirely, and let it handle every job's progress events — it needs no per-job filtering once it is not living inside a per-job closure.
+
+</details>
+
+<details>
+<summary>Bug 2 — `ids.forEach(async function (id) { ... })`</summary>
+
+**Symptom:** `forEach` never waits for its callback's returned promise — `runAll` moves on to `console.log('all jobs queued')` immediately, before a single job has made any real progress.
+
+**Evidence:** `all jobs queued` prints right after the four `0%` lines and before any `50%` line — proof that `runAll` considered its work "done" the instant it *started* four jobs, not when they finished.
+
+**Fix:** `await Promise.all(ids.map(runJob))` (concurrent, but actually awaited) or a `for...of` loop with `await runJob(id)` inside it (sequential).
+
+</details>
+
+<details>
+<summary>Bug 3 — `const result = await runJob(id);` with no `try`/`catch`</summary>
+
+**Symptom:** job 3 is designed to `throw`, which makes `runJob(3)`'s promise reject — and nothing in the `forEach` callback catches it.
+
+**Evidence:** the real crash. Since bug 2 already made this an un-awaited callback from `runAll`'s point of view, the rejection has no path to any `catch` anywhere in the program, so it becomes an unhandled rejection and crashes the whole process — taking jobs 1, 2, and 4 down with it, mid-flight.
+
+**Fix:** `Promise.allSettled` instead of `Promise.all`, so one job's failure is reported as a `{ status: 'rejected', reason }` entry instead of aborting everything else.
+
+</details>
+
+<details>
+<summary>Bug 4 — `process.exit(0)` inside a `setTimeout`</summary>
+
+**Symptom:** even setting bugs 1–3 aside, this line assumes 20ms is "enough time" for every job to finish — a guess, not a guarantee — and calls `process.exit()` regardless of whether that guess was right.
+
+**Evidence:** in this run, bug 3 crashes the process before bug 4 even gets a chance to run — but had jobs 1–4 all been fixed to succeed, a slow job (a real database call, a large file) could easily still be in flight when this arbitrary timer fires, silently truncating its work.
+
+**Fix:** delete the `setTimeout`/`process.exit()` entirely, and let Node exit naturally once `runAll`'s returned promise actually settles and there is nothing left to do.
+
+</details>
+
+## The fixed version
+
+<NodeRunner client:visible code={wr3FixedCode} node expected={wr3FixedOut} />
+
+export const wr3FixedCode = `import { EventEmitter } from 'node:events';
+
+const bus = new EventEmitter();
+
+bus.on('progress', function (jobId, pct) { // FIX 1: one shared listener, registered once
+  console.log('job', jobId, 'at', pct + '%');
+});
+
+async function runJob(id) {
+  bus.emit('progress', id, 0);
+  await new Promise(function (r) { setTimeout(r, 5); });
+
+  if (id === 3) {
+    throw new Error('job 3 failed');
+  }
+
+  bus.emit('progress', id, 50);
+  await new Promise(function (r) { setTimeout(r, 5); });
+  bus.emit('progress', id, 100);
+  return id;
+}
+
+async function runAll(ids) {
+  const results = await Promise.allSettled(ids.map(runJob)); // FIX 2 + FIX 3: wait for all, and one failure does not crash the rest
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === 'fulfilled') {
+      console.log('finished job', result.value);
+    } else {
+      console.log('job', ids[i], 'failed:', result.reason.message);
+    }
+  }
+}
+
+await runAll([1, 2, 3, 4]);
+console.log('progress listener count:', bus.listenerCount('progress'));
+console.log('all jobs settled, exiting naturally'); // FIX 4: no process.exit() -- Node exits once nothing is left to do
+`;
+
+export const wr3FixedOut = `job 1 at 0%
+job 2 at 0%
+job 3 at 0%
+job 4 at 0%
+job 1 at 50%
+job 2 at 50%
+job 4 at 50%
+job 1 at 100%
+job 2 at 100%
+job 4 at 100%
+finished job 1
+finished job 2
+job 3 failed: job 3 failed
+finished job 4
+progress listener count: 1
+all jobs settled, exiting naturally`;
+
+All four jobs actually run to completion (or a reported failure) this time: jobs 1, 2, and 4 finish successfully, job 3's failure is reported without taking anything else down with it, the listener count stays at a constant `1` no matter how many jobs run, and the process exits on its own once there is genuinely nothing left to do.
+
+## What the tools caught
+
+`npx eslint` on the buggy version: **zero problems.** A per-job listener registration, a `forEach(async ...)`, and a `process.exit()` inside a `setTimeout` are all outside what `eslint-plugin-n`/`eslint-plugin-promise` check for in this course's ladder.
+
+`node --trace-warnings` on the buggy version: nothing printed before the crash — the listener count here (4) never actually reaches the default `MaxListenersExceededWarning` threshold of 10, so this specific run produces no warning at all, even though the leak is real and would eventually cross that threshold with more jobs.
+
+Running the file caught bug 3 immediately (the crash) and, indirectly, bug 2 (`all jobs queued` printing suspiciously early) and bug 1 (the listener count line, added specifically to make an otherwise invisible leak visible). Bug 4 never even got a chance to run in this trace, since the crash from bug 3 happened first — a reminder that one loud bug can hide others sitting quietly behind it.
+
+<Callout title="The one-line takeaway">
+A job runner that "looks concurrent" — progress events, a `forEach` over jobs, a shutdown timer — hid a listener leak, a `forEach` that never actually waited, an unhandled rejection ready to take down every other job, and a `process.exit()` racing an arbitrary guess at "long enough"; fixing all four took one shared listener, `Promise.allSettled`, and deleting the timer entirely.
+</Callout>
+
+export const quizWorkedReview3 = [
+  {
+    q: 'The real output shows "progress listener count: 4" right after only 4 jobs have started. What would this number be after a real queue processed 10,000 jobs with this same bug?',
+    options: [
+      'Still 4 -- listener count is capped automatically',
+      'Roughly 10,000 -- one new listener is added per call to runJob, and none are ever removed',
+      '0 -- listeners are automatically cleaned up when a job finishes',
+      '10 -- Node caps listeners at the default MaxListenersExceededWarning threshold',
+    ],
+    answer: 1,
+    explain: 'Bug 1 registers a fresh closure-based listener inside runJob on every single call, with nothing ever calling .off() or .removeListener(). The count grows one-to-one with the number of jobs ever started, unbounded.',
+  },
+  {
+    q: 'Why does "all jobs queued" print before any job reaches its 50% progress line, even though runAll is declared async and does have an await inside its forEach callback?',
+    options: [
+      'console.log calls are always deferred until the next tick',
+      'The await is inside the forEach callback, not inside runAll itself -- forEach does not wait for that callback\'s promise, so runAll\'s own next line (the console.log) runs immediately after forEach returns, regardless of what the callback is doing',
+      'This is a bug in Node.js itself',
+      'forEach only supports synchronous callbacks, so the await is silently ignored',
+    ],
+    answer: 1,
+    explain: 'An await only pauses the function it is directly written in. Array.prototype.forEach has no concept of waiting for a callback\'s returned promise at all -- it fires every callback and moves on, so the code after the forEach call runs immediately, not after the jobs finish.',
+  },
+  {
+    q: 'In the buggy version, why does job 3\'s thrown error crash the entire process instead of just failing job 3?',
+    options: [
+      'Throwing inside an async function always crashes the whole process in Node.js',
+      'Bug 2 already made runJob(3)\'s call an un-awaited callback from runAll\'s perspective; combined with bug 3 (no try/catch or .catch() anywhere), the rejection has no handler anywhere in the program and becomes an unhandled rejection',
+      'job 3 is a reserved job ID that always crashes',
+      'EventEmitter automatically crashes the process whenever any listener throws',
+    ],
+    answer: 1,
+    explain: 'The two bugs compound: bug 2 means nothing is actually waiting on runJob(3)\'s promise at the point it rejects, and bug 3 means nothing ever attaches a .catch to it either. With zero handlers anywhere, Node\'s default behavior for an unhandled rejection is to crash.',
+  },
+  {
+    q: 'Why does the fixed version use Promise.allSettled instead of Promise.all?',
+    options: [
+      'Promise.allSettled runs faster than Promise.all',
+      'Promise.all rejects as soon as any one promise rejects, discarding the other results -- Promise.allSettled waits for every promise to finish and reports each one\'s outcome individually, so job 3\'s failure does not prevent jobs 1, 2, and 4 from being reported as finished',
+      'Promise.all does not support more than 3 promises at once',
+      'They behave identically -- the choice does not matter here',
+    ],
+    answer: 1,
+    explain: 'Promise.all is "fail-fast": the first rejection short-circuits the whole call. Promise.allSettled always waits for every input promise and gives back a per-promise fulfilled/rejected result, which is exactly what a job runner needs when one job failing should not erase the results of every other job.',
+  },
+];
+
+<Quiz client:visible id="reading-node/worked-review-3" questions={quizWorkedReview3} />
+
+<ProgressTracker client:visible id="reading-node/worked-review-3" />

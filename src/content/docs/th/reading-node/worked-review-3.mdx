@@ -1,0 +1,250 @@
+---
+title: 'รีวิวจริงที่ 3: job runner'
+description: 'รีวิวเต็มของ job runner สไตล์ AI ตัวเล็ก ๆ ที่สร้างบน EventEmitter และ promise — bug ที่ปลูกไว้สี่ตัว, crash จริงจาก unhandled rejection, และเวอร์ชันที่แก้แล้วซึ่งใช้ Promise.allSettled'
+sidebar:
+  order: 7
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+
+job runner เล็ก ๆ: สี่ jobs แต่ละตัว emit event `progress` บน `EventEmitter` ที่ใช้ร่วมกันขณะทำงาน โดยตัวหนึ่งถูกออกแบบให้ล้มเหลวโดยเจตนา นี่คือโครงแบบ "background job" ที่ AI assistant ผลิตออกมาได้ง่าย ๆ — และมี bug สี่ตัวจาก *AI bug catalog* ปลูกไว้ในโค้ดประมาณ 35 บรรทัด: listener leak, `forEach(async ...)`, unhandled rejection, และ `process.exit()` ที่ไม่รออะไรเลย
+
+## โปรแกรม
+
+<NodeRunner client:visible code={wr3BuggyCode} node expected={wr3BuggyOut} />
+
+export const wr3BuggyCode = `// @expect-throw
+import { EventEmitter } from 'node:events';
+
+const bus = new EventEmitter();
+
+async function runJob(id) {
+  bus.on('progress', function (jobId, pct) { // BUG 1: a fresh listener per job, never removed
+    if (jobId === id) console.log('job', id, 'at', pct + '%');
+  });
+
+  bus.emit('progress', id, 0);
+  await new Promise(function (r) { setTimeout(r, 5); });
+
+  if (id === 3) {
+    throw new Error('job 3 failed');
+  }
+
+  bus.emit('progress', id, 50);
+  await new Promise(function (r) { setTimeout(r, 5); });
+  bus.emit('progress', id, 100);
+  return id;
+}
+
+async function runAll(ids) {
+  ids.forEach(async function (id) { // BUG 2: forEach(async) -- does not wait
+    const result = await runJob(id); // BUG 3: no catch -- job 3's rejection is unhandled
+    console.log('finished job', result);
+  });
+  console.log('all jobs queued');
+}
+
+runAll([1, 2, 3, 4]);
+console.log('progress listener count:', bus.listenerCount('progress'));
+
+setTimeout(function () {
+  console.log('shutting down');
+  process.exit(0); // BUG 4: exits before all jobs have actually finished
+}, 20);
+`;
+
+export const wr3BuggyOut = `job 1 at 0%
+job 2 at 0%
+job 3 at 0%
+job 4 at 0%
+all jobs queued
+progress listener count: 4
+job 1 at 50%
+job 2 at 50%`;
+
+job 4 ไม่เคยไปถึงบรรทัด 50% ของมัน `finished job` ไม่เคย print ให้ใครเลย และ `shutting down` ก็ไม่เคย print เช่นกัน — โปรเซส crash ก่อนสิ่งเหล่านั้นทั้งหมด
+
+**ผลลัพธ์จริง (stderr ตามหลังบรรทัดข้างบน):**
+
+```text
+Error: job 3 failed
+    at runJob (...)
+    at runNextTicks (node:internal/process/task_queues:64:5)
+    at listOnTimeout (node:internal/timers:567:9)
+```
+
+## ลองหา bug ก่อนอ่านต่อ
+
+bug ที่ปลูกไว้สี่ตัว — หนึ่งอายุของทรัพยากร, หนึ่งความผิดพลาดในการวนลูป async, หนึ่งความล้มเหลวที่ไม่ถูกจัดการ, หนึ่งการ exit แบบทันที ลองเดาทั้งสี่ตัวก่อนเปิดคำตอบด้านล่าง
+
+<details>
+<summary>Bug 1 — `bus.on('progress', ...)` ถูกเรียกข้างใน `runJob` ทุกครั้งที่เรียก</summary>
+
+**อาการ:** ทุกการเรียก `runJob` ลงทะเบียน listener ใหม่บน `bus` ที่ใช้ร่วมกัน และไม่มีตัวไหนถูกลบออกเลย
+
+**หลักฐาน:** บรรทัด `progress listener count: 4` ในผลลัพธ์จริงเอง — หลังจากแค่ 4 jobs emitter ก็มี listener 4 ตัวสำหรับ event เดียวกันแล้ว แต่ละตัวยังคงเช็ก `if (jobId === id)` แล้วไม่ทำอะไรเลยสำหรับทุก event ที่ไม่ใช่ "ของตัวเอง" job queue ที่รันยาวนานประมวลผลหลายพัน job จะสะสม listener ที่ตายแล้วนับพันตัวในแบบเดียวกัน
+
+**วิธีแก้:** ลงทะเบียน listener ตัวเดียวครั้งเดียวนอก `runJob` ไปเลย แล้วให้มันจัดการ progress event ของทุก job — ไม่ต้องกรองต่อ job อีกต่อไปเมื่อมันไม่ได้อยู่ข้างใน closure ต่อ job แล้ว
+
+</details>
+
+<details>
+<summary>Bug 2 — `ids.forEach(async function (id) { ... })`</summary>
+
+**อาการ:** `forEach` ไม่เคยรอ promise ที่ callback ของมันคืนกลับมาเลย — `runAll` เดินหน้าไปที่ `console.log('all jobs queued')` ทันที ก่อนที่ job สักตัวจะมีความคืบหน้าจริงเลย
+
+**หลักฐาน:** `all jobs queued` print ทันทีหลังบรรทัด `0%` ทั้งสี่บรรทัด และก่อนบรรทัด `50%` ใด ๆ — พิสูจน์ว่า `runAll` ถือว่างานของมัน "เสร็จแล้ว" ทันทีที่มัน*เริ่ม*สี่ job ไม่ใช่ตอนที่มันเสร็จจริง
+
+**วิธีแก้:** `await Promise.all(ids.map(runJob))` (พร้อมกัน แต่ await จริง) หรือ loop `for...of` ที่มี `await runJob(id)` ข้างใน (ทีละตัว)
+
+</details>
+
+<details>
+<summary>Bug 3 — `const result = await runJob(id);` ที่ไม่มี `try`/`catch`</summary>
+
+**อาการ:** job 3 ถูกออกแบบให้ `throw` ซึ่งทำให้ promise ของ `runJob(3)` reject — และไม่มีอะไรใน callback ของ `forEach` ดักมันไว้เลย
+
+**หลักฐาน:** crash จริง เนื่องจาก bug 2 ทำให้นี่กลายเป็น callback ที่ไม่ได้ await จากมุมมองของ `runAll` ไปแล้ว รวมกับ bug 3 (ไม่มี try/catch หรือ .catch() ที่ไหนเลย) rejection จึงไม่มีทางไปถึง handler ไหนในโปรแกรมเลย กลายเป็น unhandled rejection และ crash ทั้งโปรเซส ดึง job 1, 2, และ 4 ล้มไปด้วยกลางทาง
+
+**วิธีแก้:** `Promise.allSettled` แทน `Promise.all` เพื่อให้ความล้มเหลวของ job หนึ่งถูกรายงานเป็นรายการ `{ status: 'rejected', reason }` แทนที่จะทำให้ทุกอย่างที่เหลือหยุดไปด้วย
+
+</details>
+
+<details>
+<summary>Bug 4 — `process.exit(0)` ข้างใน `setTimeout`</summary>
+
+**อาการ:** แม้จะไม่นับ bug 1–3 บรรทัดนี้ก็สมมติว่า 20ms คือ "เวลาที่พอ" สำหรับทุก job ให้เสร็จ — เป็นการเดา ไม่ใช่การรับประกัน — และเรียก `process.exit()` ไม่ว่าการเดานั้นจะถูกหรือไม่
+
+**หลักฐาน:** ใน run นี้ bug 3 ทำให้โปรเซส crash ก่อนที่ bug 4 จะมีโอกาสได้ทำงานด้วยซ้ำ — แต่ถ้า job 1–4 ถูกแก้ให้สำเร็จทั้งหมด job ที่ช้า (database call จริง, ไฟล์ขนาดใหญ่) ก็ยังอาจกำลังทำงานอยู่ตอนที่ timer โดยพลการนี้ทำงาน ตัดงานของมันทิ้งอย่างเงียบ ๆ
+
+**วิธีแก้:** ลบ `setTimeout`/`process.exit()` ทิ้งไปเลย แล้วปล่อยให้ Node จบตามธรรมชาติเมื่อ promise ที่ `runAll` คืนกลับมา settle จริง ๆ และไม่มีอะไรเหลือให้ทำ
+
+</details>
+
+## เวอร์ชันที่แก้แล้ว
+
+<NodeRunner client:visible code={wr3FixedCode} node expected={wr3FixedOut} />
+
+export const wr3FixedCode = `import { EventEmitter } from 'node:events';
+
+const bus = new EventEmitter();
+
+bus.on('progress', function (jobId, pct) { // FIX 1: one shared listener, registered once
+  console.log('job', jobId, 'at', pct + '%');
+});
+
+async function runJob(id) {
+  bus.emit('progress', id, 0);
+  await new Promise(function (r) { setTimeout(r, 5); });
+
+  if (id === 3) {
+    throw new Error('job 3 failed');
+  }
+
+  bus.emit('progress', id, 50);
+  await new Promise(function (r) { setTimeout(r, 5); });
+  bus.emit('progress', id, 100);
+  return id;
+}
+
+async function runAll(ids) {
+  const results = await Promise.allSettled(ids.map(runJob)); // FIX 2 + FIX 3: wait for all, and one failure does not crash the rest
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === 'fulfilled') {
+      console.log('finished job', result.value);
+    } else {
+      console.log('job', ids[i], 'failed:', result.reason.message);
+    }
+  }
+}
+
+await runAll([1, 2, 3, 4]);
+console.log('progress listener count:', bus.listenerCount('progress'));
+console.log('all jobs settled, exiting naturally'); // FIX 4: no process.exit() -- Node exits once nothing is left to do
+`;
+
+export const wr3FixedOut = `job 1 at 0%
+job 2 at 0%
+job 3 at 0%
+job 4 at 0%
+job 1 at 50%
+job 2 at 50%
+job 4 at 50%
+job 1 at 100%
+job 2 at 100%
+job 4 at 100%
+finished job 1
+finished job 2
+job 3 failed: job 3 failed
+finished job 4
+progress listener count: 1
+all jobs settled, exiting naturally`;
+
+ทั้งสี่ job รันจนเสร็จจริง (หรือรายงานความล้มเหลว) ในครั้งนี้: job 1, 2, และ 4 เสร็จสมบูรณ์ ความล้มเหลวของ job 3 ถูกรายงานโดยไม่ดึงอะไรอื่นล้มไปด้วย จำนวน listener คงที่อยู่ที่ `1` ไม่ว่าจะรันกี่ job ก็ตาม และโปรเซสจบตัวเองเมื่อไม่มีอะไรเหลือให้ทำจริง ๆ
+
+## เครื่องมือจับอะไรได้บ้าง
+
+`npx eslint` บนเวอร์ชันที่มี bug: **ไม่มีปัญหาเลย** การลงทะเบียน listener ต่อ job, `forEach(async ...)`, และ `process.exit()` ข้างใน `setTimeout` ล้วนอยู่นอกเหนือสิ่งที่ `eslint-plugin-n`/`eslint-plugin-promise` ตรวจสอบใน ladder ของคอร์สนี้
+
+`node --trace-warnings` บนเวอร์ชันที่มี bug: ไม่มีอะไร print ก่อนการ crash เลย — จำนวน listener ในที่นี้ (4) ไม่เคยไปถึง threshold ดีฟอลต์ของ `MaxListenersExceededWarning` ที่ 10 เลย ดังนั้น run นี้เฉพาะจึงไม่มี warning เลย แม้ leak จะมีอยู่จริงและจะข้าม threshold นั้นในที่สุดถ้ามี job มากกว่านี้
+
+การรันไฟล์จับ bug 3 ได้ทันที (การ crash) และทางอ้อมก็จับ bug 2 ได้ด้วย (`all jobs queued` print เร็วอย่างน่าสงสัย) และ bug 1 (บรรทัด listener count ที่เพิ่มเข้ามาเพื่อทำให้ leak ที่มองไม่เห็นให้เห็นได้โดยเฉพาะ) bug 4 ไม่เคยได้โอกาสทำงานเลยใน trace นี้ เพราะ crash จาก bug 3 เกิดก่อน — เป็นเครื่องเตือนว่า bug ที่ดังตัวหนึ่งสามารถซ่อนตัวอื่นที่แอบอยู่เงียบ ๆ ข้างหลังมันได้
+
+<Callout title="สรุปหนึ่งบรรทัด">
+job runner ที่ "ดูเหมือนทำงานพร้อมกัน" — progress event, `forEach` วน job, timer สำหรับปิดระบบ — ซ่อน listener leak, `forEach` ที่ไม่เคยรอจริง, unhandled rejection ที่พร้อมจะดึง job อื่นล้มไปด้วย, และ `process.exit()` ที่แข่งกับการเดาโดยพลการว่า "นานพอ" — การแก้ทั้งสี่ตัวใช้แค่ listener ที่ใช้ร่วมกันตัวเดียว, `Promise.allSettled`, และการลบ timer ทิ้งไปเลย
+</Callout>
+
+export const quizWorkedReview3 = [
+  {
+    q: 'ผลลัพธ์จริงแสดง "progress listener count: 4" ทันทีหลังจากมีแค่ 4 job เริ่มทำงาน ตัวเลขนี้จะเป็นเท่าไรถ้า queue จริงประมวลผล 10,000 job ด้วย bug ตัวเดียวกันนี้?',
+    options: [
+      'ยังคง 4 -- จำนวน listener ถูกจำกัดอัตโนมัติ',
+      'ประมาณ 10,000 -- listener ใหม่หนึ่งตัวถูกเพิ่มต่อการเรียก runJob หนึ่งครั้ง และไม่มีตัวไหนถูกลบออกเลย',
+      '0 -- listener ถูกเก็บกวาดอัตโนมัติเมื่อ job เสร็จ',
+      '10 -- Node จำกัด listener ไว้ที่ threshold ดีฟอลต์ของ MaxListenersExceededWarning',
+    ],
+    answer: 1,
+    explain: 'Bug 1 ลงทะเบียน listener แบบ closure ใหม่ข้างใน runJob ทุกครั้งที่เรียก โดยไม่มีอะไรเรียก .off() หรือ .removeListener() เลย จำนวนจะโตแบบหนึ่งต่อหนึ่งตามจำนวน job ที่เคยเริ่มไว้ ไม่มีขอบเขต',
+  },
+  {
+    q: 'ทำไม "all jobs queued" ถึง print ก่อนที่ job ใดจะไปถึงบรรทัด progress 50% ทั้งที่ runAll ถูกประกาศเป็น async และมี await อยู่ข้างใน callback ของ forEach จริง?',
+    options: [
+      'console.log ถูกเลื่อนออกไปที่ tick ถัดไปเสมอ',
+      'await อยู่ข้างใน callback ของ forEach ไม่ใช่ข้างใน runAll เอง -- forEach ไม่รอ promise ของ callback นั้นเลย ดังนั้นบรรทัดถัดไปของ runAll เอง (console.log) จึงรันทันทีหลัง forEach return โดยไม่สนว่า callback กำลังทำอะไรอยู่',
+      'นี่เป็น bug ใน Node.js เอง',
+      'forEach รองรับแค่ callback แบบ synchronous เท่านั้น จึง await ถูกเพิกเฉยอย่างเงียบ ๆ',
+    ],
+    answer: 1,
+    explain: 'await จะหยุดแค่ฟังก์ชันที่มันถูกเขียนอยู่โดยตรงเท่านั้น Array.prototype.forEach ไม่มีแนวคิดเรื่องการรอ promise ที่ callback คืนกลับมาเลย -- มันยิงทุก callback แล้วเดินหน้าต่อ ดังนั้นโค้ดหลังการเรียก forEach จึงรันทันที ไม่ใช่หลังจาก job เสร็จ',
+  },
+  {
+    q: 'ในเวอร์ชันที่มี bug ทำไม error ที่ job 3 throw ถึง crash ทั้งโปรเซสแทนที่จะแค่ทำให้ job 3 ล้มเหลว?',
+    options: [
+      'การ throw ข้างใน async function จะ crash ทั้งโปรเซสเสมอใน Node.js',
+      'bug 2 ทำให้การเรียก runJob(3) กลายเป็น callback ที่ไม่ได้ await จากมุมมองของ runAll ไปแล้ว รวมกับ bug 3 (ไม่มี try/catch หรือ .catch() ที่ไหนเลย) rejection จึงไม่มี handler ที่ไหนในโปรแกรมเลยและกลายเป็น unhandled rejection',
+      'job 3 เป็น job ID ที่สงวนไว้ซึ่ง crash เสมอ',
+      'EventEmitter crash โปรเซสอัตโนมัติทุกครั้งที่ listener ตัวไหน throw',
+    ],
+    answer: 1,
+    explain: 'bug ทั้งสองประกอบกัน: bug 2 แปลว่าไม่มีอะไรรอ promise ของ runJob(3) จริง ๆ ตอนที่มัน reject และ bug 3 แปลว่าไม่มีอะไรแนบ .catch ให้มันเลย เมื่อไม่มี handler เลยสักที่ พฤติกรรมดีฟอลต์ของ Node สำหรับ unhandled rejection คือ crash',
+  },
+  {
+    q: 'ทำไมเวอร์ชันที่แก้แล้วถึงใช้ Promise.allSettled แทน Promise.all?',
+    options: [
+      'Promise.allSettled รันเร็วกว่า Promise.all',
+      'Promise.all reject ทันทีที่ promise ตัวไหนตัวหนึ่ง reject ทิ้งผลลัพธ์ตัวอื่นไปด้วย -- Promise.allSettled รอทุก promise เสร็จแล้วรายงานผลลัพธ์ของแต่ละตัวแยกกัน ทำให้ความล้มเหลวของ job 3 ไม่ทำให้ job 1, 2, และ 4 ถูกตัดออกจากการรายงานว่าเสร็จแล้ว',
+      'Promise.all ไม่รองรับ promise มากกว่า 3 ตัวพร้อมกัน',
+      'ทั้งสองทำงานเหมือนกันทุกประการ -- ตัวเลือกไม่มีผลตรงนี้',
+    ],
+    answer: 1,
+    explain: 'Promise.all เป็นแบบ "fail-fast": การ reject ครั้งแรกตัดจบการเรียกทั้งหมดทันที Promise.allSettled รอทุก promise ที่ส่งเข้ามาเสมอและให้ผลลัพธ์ fulfilled/rejected รายตัวกลับมา ซึ่งเป็นสิ่งที่ job runner ต้องการพอดีเมื่อ job หนึ่งล้มเหลวไม่ควรลบผลลัพธ์ของ job อื่นทั้งหมดทิ้งไป',
+  },
+];
+
+<Quiz client:visible id="reading-node/worked-review-3" questions={quizWorkedReview3} />
+
+<ProgressTracker client:visible id="reading-node/worked-review-3" />

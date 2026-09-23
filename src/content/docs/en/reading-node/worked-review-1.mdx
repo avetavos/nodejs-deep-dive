@@ -1,0 +1,304 @@
+---
+title: 'Worked review 1: an HTTP JSON API'
+description: 'A full review of a small AI-style items API — four planted bugs, a real crash, and a clean fixed version that runs correctly.'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+
+This is the first of four full reviews. Each one gives a complete, AI-style program, asks you to find the planted bugs using the habits from this module's first four lessons, then shows the real tools' real output and a fixed version that actually runs correctly. This one is a small JSON API for creating and listing "items" — a health check, a list route, and a create route, with four bugs from the *AI bug catalog* planted across about 60 lines.
+
+## The program
+
+<NodeRunner client:visible code={wr1BuggyCode} node expected={wr1BuggyOut} />
+
+export const wr1BuggyCode = `// @expect-throw
+import http from 'node:http';
+
+let nextId = 1;
+const items = [];
+
+function sendJson(res, status, body) {
+  const json = JSON.stringify(body);
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(json);
+}
+
+const server = http.createServer(function (req, res) {
+  if (req.method === 'GET' && req.url === '/health') {
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/items') {
+    sendJson(res, 200, items);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/items') {
+    let body = '';
+    req.on('data', function (chunk) {
+      body += chunk; // BUG 1: no size limit on the accumulated body at all
+    });
+    req.on('end', function () {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch (err) {
+        sendJson(res, 400, { error: 'malformed JSON' });
+        sendJson(res, 500, { error: 'this line should never run' }); // BUG 2: sendJson already called res.end() above
+        return;
+      }
+      const item = { id: nextId++, name: parsed.name };
+      items.push(item);
+      sendJson(res, 201, item);
+    });
+    return;
+  }
+
+  sendJson(res, 404, { error: 'not found' });
+});
+// BUG 3: no server.on('error', ...) and no res.on('error', ...) anywhere in this file
+
+process.env.PORT = '9000';
+process.env.MIN_ALLOWED_PORT = '10000';
+const PORT = process.env.PORT || '3000'; // BUG 4: stays a string
+if (PORT > process.env.MIN_ALLOWED_PORT) {
+  console.log('port looks fine relative to the minimum');
+} else {
+  console.log('warning: port is below the configured minimum');
+}
+
+server.listen(Number(PORT), async function () {
+  const base = 'http://localhost:' + PORT;
+  await fetch(base + '/health').then(function (r) { return r.json(); }).then(function (j) { console.log('health:', JSON.stringify(j)); });
+  await fetch(base + '/items', { method: 'POST', body: JSON.stringify({ name: 'widget' }) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { console.log('created:', JSON.stringify(j)); });
+  await fetch(base + '/items', { method: 'POST', body: '{ not valid json' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { console.log('malformed response:', JSON.stringify(j)); });
+});
+`;
+
+export const wr1BuggyOut = `port looks fine relative to the minimum
+health: {"ok":true}
+created: {"id":1,"name":"widget"}`;
+
+The demo prints three lines, then crashes before a fourth — no `malformed response:` line ever appears.
+
+**Real output (stderr, after the three lines above):**
+
+```text
+Error [ERR_HTTP_HEADERS_SENT]: Cannot write headers after they are sent to the client
+    at ServerResponse.writeHead (node:_http_server:356:11)
+    at sendJson (...)
+    at IncomingMessage.<anonymous> (...)
+```
+
+## Find the bugs before reading on
+
+Four planted bugs — one boundary, one lifetime, one missing listener, one type. Try to name all four before opening the answers below.
+
+<details>
+<summary>Bug 1 — `body += chunk;` with no size check</summary>
+
+**Symptom:** the `POST /items` handler accumulates the entire request body into one string with no upper bound at all.
+
+**Evidence:** nothing in this demo run actually exercises a huge body, which is exactly the danger — the bug is invisible on every normal-sized request and only costs memory the day a client (or an attacker) sends gigabytes.
+
+**Fix:** track the accumulated byte count and reject (`413`, then `req.destroy()`) once it passes a `MAX_BODY` limit, exactly as the *JSON API* lesson's route does.
+
+</details>
+
+<details>
+<summary>Bug 2 — `sendJson(res, 500, ...)` right after `sendJson(res, 400, ...)`</summary>
+
+**Symptom:** on a malformed-JSON request, the catch block calls `sendJson` twice — and `sendJson` always calls `res.writeHead()` then `res.end()`.
+
+**Evidence:** the real crash above — `ERR_HTTP_HEADERS_SENT`, thrown from the *second* `sendJson` call's `res.writeHead()`, since headers were already sent by the first call moments earlier.
+
+**Fix:** every response-sending helper needs a guard against running twice: `if (res.writableEnded) return;` at the top of `sendJson`, and a `return` right after the first `sendJson` call in the catch block (which this file already has — the second call is simply dead code that should never have been written).
+
+</details>
+
+<details>
+<summary>Bug 3 — no `error` listener anywhere</summary>
+
+**Symptom:** neither the `server` nor any individual `res` has an `.on('error', ...)` handler.
+
+**Evidence:** this is *why* bug 2 crashes the whole process instead of just failing one request — `ERR_HTTP_HEADERS_SENT` is emitted as an `'error'` event on the response stream, and with zero listeners for it, Node treats it as fatal.
+
+**Fix:** `res.on('error', function (err) { console.error(...); })` inside the request handler, and `server.on('error', function (err) { console.error(...); })` at the top level, so a single bad response degrades to a logged error instead of taking down every other in-flight request too.
+
+</details>
+
+<details>
+<summary>Bug 4 — `PORT > process.env.MIN_ALLOWED_PORT`</summary>
+
+**Symptom:** the printed message is backwards: `'9000' > '10000'` is compared as a `string` (both sides are strings), so it compares lexicographically — `'9' > '1'` is `true` — and the code prints "port looks fine" for a port that is actually *below* the configured minimum.
+
+**Evidence:** the first line of real output above — `port looks fine relative to the minimum` — is the wrong branch; `9000 < 10000` should have printed the warning instead.
+
+**Fix:** `Number(process.env.PORT) > Number(process.env.MIN_ALLOWED_PORT)`.
+
+</details>
+
+## The fixed version
+
+<NodeRunner client:visible code={wr1FixedCode} node expected={wr1FixedOut} />
+
+export const wr1FixedCode = `import http from 'node:http';
+
+const MAX_BODY = 1024 * 1024; // 1 MiB
+let nextId = 1;
+const items = [];
+
+function sendJson(res, status, body) {
+  if (res.writableEnded) return; // FIX 2: guard against sending twice
+  const json = JSON.stringify(body);
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(json);
+}
+
+const server = http.createServer(function (req, res) {
+  res.on('error', function (err) { console.error('response error:', err.code); }); // FIX 3
+
+  if (req.method === 'GET' && req.url === '/health') {
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/items') {
+    sendJson(res, 200, items);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/items') {
+    let received = 0;
+    const chunks = [];
+    req.on('data', function (chunk) {
+      received += chunk.length;
+      if (received > MAX_BODY) { // FIX 1: enforce a body size limit
+        sendJson(res, 413, { error: 'payload too large' });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', function () {
+      if (res.writableEnded) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch (err) {
+        sendJson(res, 400, { error: 'malformed JSON' });
+        return;
+      }
+      const item = { id: nextId++, name: parsed.name };
+      items.push(item);
+      sendJson(res, 201, item);
+    });
+    return;
+  }
+
+  sendJson(res, 404, { error: 'not found' });
+});
+
+server.on('error', function (err) { console.error('server error:', err.code); }); // FIX 3
+
+process.env.PORT = '9000';
+process.env.MIN_ALLOWED_PORT = '10000';
+const PORT = Number(process.env.PORT || '3000'); // FIX 4: convert to a real number
+if (PORT > Number(process.env.MIN_ALLOWED_PORT)) {
+  console.log('port looks fine relative to the minimum');
+} else {
+  console.log('warning: port is below the configured minimum');
+}
+
+server.listen(PORT, async function () {
+  const base = 'http://localhost:' + PORT;
+  await fetch(base + '/health').then(function (r) { return r.json(); }).then(function (j) { console.log('health:', JSON.stringify(j)); });
+  await fetch(base + '/items', { method: 'POST', body: JSON.stringify({ name: 'widget' }) })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { console.log('created:', JSON.stringify(j)); });
+  await fetch(base + '/items', { method: 'POST', body: '{ not valid json' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) { console.log('malformed response:', JSON.stringify(j)); });
+  server.close();
+});
+`;
+
+export const wr1FixedOut = `warning: port is below the configured minimum
+health: {"ok":true}
+created: {"id":1,"name":"widget"}
+malformed response: {"error":"malformed JSON"}`;
+
+All four requests now complete: the port warning is correct, the health check and the valid create both work, and the malformed request gets a clean `400` instead of crashing the process.
+
+## What the tools caught
+
+`npx eslint` (flat config with `eslint-plugin-n` + `eslint-plugin-promise`) on the buggy version: **zero problems.** None of the four bugs have a matching rule — a missing body limit, a double response-send, a missing error listener, and a string/string comparison are all outside what this course's installed rules check for.
+
+`node --trace-warnings` on the buggy version: no warning at all — this file crashes with an uncaught exception, not a warning, so `--trace-warnings` has nothing to add here (that flag is for bug 12 in the catalog, listener leaks, not this one).
+
+Running the file is what actually caught three of the four bugs (2, 3, and 4, all visible in the real output above); bug 1 (the missing body limit) produced no visible symptom in this run at all — it takes an oversized request, not just a malformed one, to observe it, exactly like pattern 9 in the *AI bug catalog*.
+
+<Callout title="The one-line takeaway">
+Zero eslint problems and a demo that "mostly works" here hid three compounding bugs (an unguarded double response-send, no error listener to contain it, and a backwards port check) and left a fourth (no body limit) invisible until a larger request — only reading the boundaries and the response lifetime found them.
+</Callout>
+
+export const quizWorkedReview1 = [
+  {
+    q: 'The buggy version crashes with ERR_HTTP_HEADERS_SENT, not ERR_STREAM_WRITE_AFTER_END like the equivalent pattern in the AI bug catalog. Why the different error?',
+    options: [
+      'This is a completely different bug from the catalog\'s double res.end() pattern',
+      'sendJson calls res.writeHead() before res.end() -- the second call fails at the writeHead() step (headers already sent) rather than reaching end() at all',
+      'ERR_HTTP_HEADERS_SENT only happens on GET requests',
+      'The error type is random and varies between runs',
+    ],
+    answer: 1,
+    explain: 'Both errors come from the same underlying problem (responding twice), but which one you see depends on exactly which method is called second. Here, writeHead() runs first in the second sendJson call and is what actually throws, since headers cannot be set a second time.',
+  },
+  {
+    q: 'Why does bug 3 (no error listener) matter even though the file never explicitly triggers an "error" event on purpose?',
+    options: [
+      'It does not matter -- bug 3 has no real effect in this file',
+      'Bug 2\'s double-send raises an error as an "error" event on the response stream -- with zero listeners for it, that error becomes an uncaught exception that crashes the whole process instead of just failing the one request',
+      'Missing error listeners only matter for WebSocket connections',
+      'The error listener would have prevented bug 2 from happening at all',
+    ],
+    answer: 1,
+    explain: 'Bug 3 does not cause a crash by itself -- it removes the safety net that would have turned bug 2\'s error into a contained, logged failure instead of a process-ending uncaught exception.',
+  },
+  {
+    q: 'What does the real output\'s first line, "port looks fine relative to the minimum," actually prove about bug 4?',
+    options: [
+      'That the port comparison is correct',
+      'That \'9000\' > \'10000\' evaluates to true under string (lexicographic) comparison, even though 9000 is numerically well below 10000 -- proving the comparison is running on strings, not numbers',
+      'That process.env.PORT was never actually set',
+      'That the server failed to start',
+    ],
+    answer: 1,
+    explain: 'This is the smoking gun for bug 4: the printed message is the wrong branch for the real numeric relationship between 9000 and 10000, which only happens if the comparison operators are working on strings.',
+  },
+  {
+    q: 'Why did eslint report zero problems on a file with four real, planted bugs?',
+    options: [
+      'The eslint config used in this course\'s ladder was misconfigured',
+      'None of these four bugs (missing body limit, double response-send, missing error listener, string/string comparison) match any rule in eslint-plugin-n or eslint-plugin-promise -- they require reading the code\'s actual behavior, not just its syntax',
+      'eslint cannot analyze files that use fetch()',
+      'The bugs were not actually present in the file eslint checked',
+    ],
+    answer: 1,
+    explain: 'This matches the pattern-to-rung table from the Verification Tools lesson directly: all four of these bug types are marked "none -- only a human," meaning no installed linter rule targets them.',
+  },
+];
+
+<Quiz client:visible id="reading-node/worked-review-1" questions={quizWorkedReview1} />
+
+<ProgressTracker client:visible id="reading-node/worked-review-1" />
