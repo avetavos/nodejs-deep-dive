@@ -5,9 +5,12 @@ sidebar:
   order: 4
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 `package.json` แยก dependency ออกเป็นหลายส่วนตามจุดประสงค์การใช้งาน การเข้าใจความแตกต่างช่วยให้ production bundle มีขนาดเล็กลง ป้องกัน peer conflict และทำให้ CI builds มีความน่าเชื่อถือ
 
@@ -83,6 +86,32 @@ npm สร้าง `package-lock.json` เมื่อรัน `npm install` �
 }
 ```
 
+Lockfile entry แต่ละอันมีฟิลด์ `integrity` ด้วย — hash แบบ base64 ของ byte ของ tarball จริงที่ npm resolve มา นี่คือสิ่งที่ทำให้ `npm ci` เป็น security boundary ไม่ใช่แค่ version pin: การ re-download ที่ได้ byte ต่างออกไป (registry ที่ถูก compromise, การส่งที่เสียหาย, mirror ที่ถูกแก้ไข) จะ fail การตรวจ hash แทนที่จะติดตั้งไปอย่างเงียบๆ
+
+export const integrityCode = `
+const crypto = require('node:crypto');
+
+function integrityOf(content) {
+  return 'sha512-' + crypto.createHash('sha512').update(content).digest('base64');
+}
+
+// A lockfile entry pins the exact integrity hash npm recorded at install time.
+const lockedIntegrity = integrityOf('demo-package@1.0.0 tarball bytes');
+
+// A later "npm ci" re-downloads the tarball and re-hashes it before trusting it.
+const redownloaded = integrityOf('demo-package@1.0.0 tarball bytes');
+console.log('matches lockfile:', redownloaded === lockedIntegrity);
+
+// A tampered or corrupted tarball hashes differently — npm ci fails closed.
+const tampered = integrityOf('demo-package@1.0.0 tarball bytes (modified)');
+console.log('tampered matches lockfile:', tampered === lockedIntegrity);
+`;
+
+export const integrityOut = `matches lockfile: true
+tampered matches lockfile: false`;
+
+<NodeRunner client:visible code={integrityCode} node expected={integrityOut} />
+
 ## npm install เทียบกับ npm ci
 
 ```bash
@@ -100,6 +129,198 @@ npm ci
 `package-lock.json` ควร commit เข้า version control เสมอ — ไม่ใช่แค่ `package.json` เพียงอย่างเดียว lockfile รับประกันว่า CI, Docker build และเครื่องของเพื่อนร่วมทีมทุกคนได้รับ dependency tree ที่เหมือนกันทุกประการ ใช้ `npm ci` แทน `npm install` ใน automated environment เพื่อให้ build fail อย่างชัดเจนเมื่อ lockfile ไม่ sync
 </Callout>
 
+คำกล่าวอ้าง "fail อย่างชัดเจน" ของ `npm ci` ไม่ใช่ทฤษฎี — นี่คือ transcript จริง โปรเจกต์หนึ่งติดตั้ง lockfile แล้ว `package.json` drift ออกไป (เพิ่ม dependency ด้วยมือโดยไม่ได้รัน `npm install` ใหม่):
+
+```bash
+npm ci
+```
+
+```text
+npm error code EUSAGE
+npm error
+npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.
+npm error
+npm error Missing: is-odd@3.0.1 from lock file
+npm error Missing: is-number@6.0.0 from lock file
+```
+
+มันไม่พยายาม reconcile หรือติดตั้งบางส่วนเลย — มัน refuse ทั้งหมด นี่คือ failure mode ที่ควรจับ lockfile ที่ล้าสมัยได้ใน CI ก่อนที่ dependency tree ที่แย่จะไปถึง production
+
+### Anti-pattern ของ Dockerfile
+
+จุดที่ความแตกต่างนี้ถูกทำผิดบ่อยที่สุดคือ Dockerfile การใช้ `npm install` ใน image build ทำลายจุดประสงค์ทั้งหมดของ lockfile — image build แต่ละครั้งสามารถ resolve transitive version ต่างกันเล็กน้อย แม้จาก `package.json` เดียวกันเป๊ะ:
+
+```text
+# Anti-pattern: npm install in a Docker image
+FROM node:24-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm install --omit=dev
+COPY . .
+CMD ["node", "server.js"]
+```
+
+```text
+# Correct: npm ci pins the exact tree the lockfile recorded
+FROM node:24-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY . .
+CMD ["node", "server.js"]
+```
+
+`npm ci --omit=dev` ยังลบ `node_modules` ก่อนติดตั้งด้วย ดังนั้น layer เก่าจาก build ก่อนหน้าจึงไม่มีทาง leak package dev-only (หรือแย่กว่านั้นคือ version อื่นของ dependency จริง) เข้าไปใน production image ได้ `npm install` ใน Dockerfile คือบั๊กจริง ไม่ใช่แค่เรื่อง style: build สองครั้งจาก source tree เดียวกันเป๊ะ ห่างกันหลายวัน สามารถสร้าง image ที่ต่างกัน ไม่ reproducible ได้
+
+## `overrides`
+
+`overrides` บังคับ version ที่กำหนดสำหรับ dependency **ที่ไหนก็ตามที่มันปรากฏใน tree** รวมถึงที่ซ้อนอยู่ภายใน dependency ที่คุณไม่ได้ควบคุม — เครื่องมือสำหรับ transitive package ที่ถูก pin ไว้ที่ version เก่าที่มีช่องโหว่ ที่ maintainer ของมันเองยังไม่ bump
+
+```json
+{
+  "overrides": {
+    "minimatch": "^3.1.2"
+  }
+}
+```
+
+Before/after จริง capture มาจากโปรเจกต์ที่มี direct dependency ตัวเดียวที่ตัวมันเอง pin `minimatch` เก่าที่มีช่องโหว่แบบตรงเป๊ะ:
+
+```bash
+npm ls minimatch
+```
+
+```text
+overrides-demo@1.0.0 /path/to/overrides-demo
+└─┬ outer-lib@1.0.0 -> ./outer
+  └── minimatch@3.0.4
+```
+
+```json
+{
+  "overrides": { "minimatch": "^3.1.2" }
+}
+```
+
+```bash
+npm install && npm ls minimatch
+```
+
+```text
+overrides-demo@1.0.0 /path/to/overrides-demo
+└─┬ outer-lib@1.0.0 -> ./outer
+  └── minimatch@3.1.5
+```
+
+`minimatch` transitive ย้ายจาก `3.0.4` ไปเป็น `3.1.5` โดยไม่ต้องแตะ `outer-lib` เลย `overrides` บังคับ version ที่ขัดกับ peer requirement ของ dependency เองไม่ได้ — npm ยังตรวจ compatibility อยู่ — แต่มันคือเครื่องมือที่ถูกต้องสำหรับสถานการณ์แบบนี้เป๊ะ ที่การรอให้ maintainer ทุกคนตลอดสาย publish bump ไม่ใช่ตัวเลือก
+
+## `npm audit`
+
+`npm audit` ตรวจ dependency ที่ติดตั้งกับ npm security advisory database และรายงานช่องโหว่ที่รู้จัก พร้อม severity และวิธีแก้ที่แนะนำ ผลลัพธ์จริงบนโปรเจกต์ที่ pin `minimatch` เก่าไว้โดยตั้งใจ:
+
+```bash
+npm audit
+```
+
+```text
+# npm audit report
+
+minimatch  <=3.1.3
+Severity: high
+minimatch ReDoS vulnerability - https://github.com/advisories/GHSA-f8q6-p94x-37v3
+minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern - https://github.com/advisories/GHSA-3ppc-4f35-3m26
+minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments - https://github.com/advisories/GHSA-7r86-cg39-jmmj
+minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regular expressions - https://github.com/advisories/GHSA-23c5-xmqv-rm74
+fix available via `npm audit fix --force`
+Will install minimatch@3.1.5, which is outside the stated dependency range
+node_modules/minimatch
+
+1 high severity vulnerability
+```
+
+`npm audit fix` apply fix ที่ยังอยู่ใน semver range เดิม; `npm audit fix --force` จะติดตั้ง version ที่**นอก**ช่วงที่ประกาศไว้ (ตามที่ flag ไว้ข้างบน) เพื่อปิดช่องโหว่ ซึ่งอาจเป็น breaking change — ควร review เสมอก่อนรันมันแบบไม่มีคนดูใน CI
+
+## Workspaces
+
+Workspaces ให้ root `package.json` ตัวเดียวจัดการหลาย package ใน repository เดียว (monorepo) โดย symlink cross-package dependency เข้าไปใน `node_modules` ของแต่ละ package แทนที่จะ publish แล้วติดตั้งใหม่ทุกครั้งที่มีการเปลี่ยนแปลง
+
+```json
+{
+  "name": "my-monorepo",
+  "private": true,
+  "workspaces": ["packages/*"]
+}
+```
+
+<Mermaid code={dependencyGraphDiagram} title="Workspace สองแพ็คเกจ ที่ symlink แทนการ publish" />
+
+export const dependencyGraphDiagram = `flowchart TD
+  Root["root package.json (workspaces: packages/*)"] --> Core["packages/core (@ws-demo/core)"]
+  Root --> Cli["packages/cli (@ws-demo/cli)"]
+  Cli -->|"depends on ws-demo/core (workspace range: *)"| CoreLink["node_modules/@ws-demo/core -> symlink to packages/core"]
+  CoreLink -.->|"resolves to"| Core`;
+
+ผลลัพธ์จริงจาก workspace สอง package (`packages/core`, `packages/cli` ที่ `cli` depend อยู่บน `core`):
+
+```bash
+npm ls --all
+```
+
+```text
+ws-demo@ /path/to/ws-demo
+├─┬ @ws-demo/cli@1.0.0 -> ./packages/cli
+│ └── @ws-demo/core@1.0.0 deduped -> ./packages/core
+└── @ws-demo/core@1.0.0 -> ./packages/core
+```
+
+`-w`/`--workspace` scope คำสั่งไปยัง package เดียวโดยไม่ต้อง `cd` เข้าไป:
+
+```bash
+npm -w @ws-demo/core exec -- node -e "console.log(require('./index.js').add(2,3))"
+```
+
+```text
+5
+```
+
+ไม่มี tarball ไม่มีขั้นตอน publish ไม่มี version bump — `@ws-demo/cli` เห็นสิ่งที่อยู่บน disk ใน `packages/core` ตอนนี้เลยผ่าน symlink ซึ่งเป็นสิ่งที่ทำให้ workspaces เร็วสำหรับการ iterate หลาย package ไปพร้อมกัน
+
+## Mental Model
+
+ทุกคำสั่งจัดการ dependency ในบทนี้ตอบคำถามเดียวกัน: **"byte ที่แน่ชัดที่ฉันกำลังจะรันคืออะไร และฉันเชื่อที่มาของมันได้ไหม"** Lockfile ตอบคำถามนี้สำหรับการติดตั้งครั้งเดียว (integrity hash) `npm ci` ตอบสำหรับทั้ง environment (fail ถ้า lockfile กับ manifest ไม่ตรงกัน ล้าง `node_modules` ก่อนเสมอ) `overrides` ตอบเมื่อ transitive dependency ที่คุณไม่ได้ควบคุม ship สิ่งที่คุณต้องบังคับเปลี่ยนอยู่ดี `npm audit` ตอบเทียบกับ public vulnerability database ไม่มีอันไหนเกี่ยวกับ "ทำให้ dependency ทำงาน" — ทั้งหมดเกี่ยวกับการทำให้แน่ใจว่าสิ่งที่ติดตั้งจริงตรงกับสิ่งที่คุณเชื่อว่าติดตั้งไป
+
+## Trade-offs
+
+| ตัวเลือก | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| `npm ci` ใน CI/Docker | Reproducible, เร็ว (ไม่มีขั้นตอน resolve), fail ชัดเจนเมื่อ drift | ใช้เพิ่มหรืออัปเดต dependency ไม่ได้ — ยังต้อง `npm install` ในเครื่อง local ก่อน |
+| `overrides` สำหรับ transitive pin | แก้ dependency ที่มีช่องโหว่/พังที่ซ้อนอยู่โดยไม่ต้อง fork หรือรอ maintainer | ข้าม version ที่ maintainer เทสต์ไว้แล้ว — อาจสร้าง incompatibility ที่ override ไม่รู้ |
+| `npm audit fix --force` | ปิดช่องโหว่ที่ fix ปกติของ npm เข้าไม่ถึง | ติดตั้ง version นอกช่วงอัตโนมัติ — เป็นการเปลี่ยน behavior จริง ไม่ใช่แค่ patch |
+| Workspaces | Iterate ในเครื่องได้เร็วข้าม package, ไม่ต้อง publish-แล้วติดตั้งใหม่วนไป | เพิ่มความซับซ้อนของ tooling monorepo; บั๊กที่เกิดเฉพาะใน workspace อาจมองไม่เห็นจนกว่า package จะถูก publish แยกกันจริง |
+
+## Common Misconceptions
+
+- **"`npm ci` แค่เป็น `npm install` ที่เร็วกว่า"** มันเป็น contract ที่ต่างกัน: มัน refuse รันทั้งหมดถ้า `package.json` กับ lockfile ไม่ตรงกัน และมันลบ `node_modules` ก่อนเสมอ ความเร็วเป็นแค่ผลข้างเคียง ไม่ใช่จุดประสงค์
+- **"`overrides` มีผลแค่กับ direct dependency ของคุณเองเท่านั้น"** มันเข้าถึงทั้ง tree รวมถึง package ที่ซ้อนอยู่หลายชั้นที่คุณไม่เคยระบุใน `package.json` ของตัวเองเลย
+- **"`npm audit fix` กับ `npm audit fix --force` ทำสิ่งเดียวกัน แค่แรงกว่า"** เวอร์ชันธรรมดา apply fix เฉพาะที่อยู่ใน semver range เดิมของคุณ `--force` จะกระโดดไป version นอกช่วงที่ประกาศไว้ — เป็น upgrade จริง ที่มีโอกาส breaking change จริง
+
+## อ่านโค้ดที่ AI เขียน
+
+Dockerfile ที่ AI generate เอื้อมไปหา `npm install` บ่อยกว่า `npm ci` มาก เพราะ `npm install` คือคำสั่งที่ปรากฏในเกือบทุก tutorial และ README — `npm ci` เป็นความรู้เฉพาะ CI ที่โผล่ใน training data ทั่วไปน้อยกว่ามาก
+
+<SpotTheBug code={`FROM node:24-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm install
+COPY . .
+CMD ["node", "server.js"]`}>
+`npm install` ภายใน Docker image build สามารถ resolve dependency tree ต่างจากที่บันทึกไว้ใน `package-lock.json` ได้ แม้จะมาจาก `package.json` เดียวกันเป๊ะ — lockfile ถูก copy เข้ามาแต่ไม่เคยถูก enforce build สองครั้งของ commit เดียวกัน ห่างกันหลายวัน สามารถ ship transitive version ต่างกันอย่างเงียบๆ วิธีแก้คือ `RUN npm ci --omit=dev`: มันติดตั้งตรงตามที่ lockfile ระบุ, fail การ build ถ้า lockfile ไม่ sync, และข้าม `devDependencies` ที่ไม่มีที่ทางใน production image
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`npm install` resolve และ drift ได้; `npm ci` ติดตั้งตรงตามที่ lockfile บอกและ fail ชัดเจนถ้าไม่ตรง — ใช้ `npm ci` ทุกที่ที่ reproducibility สำคัญ (CI, Docker) และใช้ `overrides` กับ `npm audit` เมื่อ dependency ที่คุณไม่ได้ควบคุมต้องการ version bump ที่มันยังไม่ ship
+</Callout>
+
 export const dependenciesQuiz = [
   {
     q: 'ควรระบุ test framework อย่าง Vitest ไว้ในส่วนใดของ package.json?',
@@ -110,6 +331,7 @@ export const dependenciesQuiz = [
       'optionalDependencies',
     ],
     answer: 1,
+    explain: 'Test framework จำเป็นเฉพาะตอนพัฒนาและทดสอบ ไม่เคยต้องใช้ตอน runtime ใน production — นี่คือนิยามของ devDependencies',
   },
   {
     q: 'จุดประสงค์หลักของ peerDependencies คืออะไร?',
@@ -120,6 +342,7 @@ export const dependenciesQuiz = [
       'ระบุ package ที่ใช้เฉพาะใน test environment',
     ],
     answer: 1,
+    explain: 'peerDependencies มีไว้สำหรับ plugin และ framework integration ที่ต้องแชร์ dependency instance เดียวกับผู้ใช้ แทนที่จะ bundle copy ของตัวเองแยกต่างหาก',
   },
   {
     q: 'จะเกิดอะไรขึ้นเมื่อรัน npm ci แล้ว package.json ไม่ sync กับ package-lock.json?',
@@ -130,6 +353,29 @@ export const dependenciesQuiz = [
       'npm ci ถามให้เลือกว่าจะเชื่อไฟล์ไหน',
     ],
     answer: 2,
+    explain: 'npm ci เข้มงวดโดยตั้งใจ: มัน exit ด้วย EUSAGE และ refuse ติดตั้งอะไรเลยทันทีที่ package.json กับ package-lock.json ไม่ตรงกัน แทนที่จะพยายาม reconcile',
+  },
+  {
+    q: '```text\nFROM node:24-slim\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm install\nCOPY . .\n```\nDockerfile นี้ผิดตรงไหน ในเมื่อ package-lock.json ถูก copy เข้ามาแล้ว?',
+    options: [
+      'ไม่มีอะไรผิด — แค่ copy lockfile เข้ามาก็เพียงพอที่จะการันตี reproducible install',
+      '`npm install` ยังสามารถ resolve tree ต่างจากที่ lockfile บันทึกได้ แม้จะมี lockfile อยู่ — ควรเป็น `npm ci`',
+      'COPY package.json package-lock.json ./ เป็น syntax Dockerfile ที่ invalid',
+      'คำสั่ง WORKDIR ไม่จำเป็นและควรลบทิ้ง',
+    ],
+    answer: 1,
+    explain: 'การ copy lockfile เข้ามาไม่มีความหมายอะไรเลยถ้าคำสั่ง install ไม่ enforce มันจริงๆ `npm install` ถือว่า lockfile เป็นแค่จุดเริ่มต้นที่มันอาจอัปเดตได้ มีแค่ `npm ci` เท่านั้นที่ fail ชัดเจนถ้ามันไม่ตรงกับ package.json เป๊ะ ซึ่งเป็นสิ่งที่ reproducible image build ต้องการ',
+  },
+  {
+    q: 'โปรเจกต์หนึ่ง depend บน outer-lib ซึ่ง pin minimatch@3.0.4 เก่าที่มีช่องโหว่ไว้ตรงเป๊ะ (ไม่มี range) ฟิลด์ใดใน package.json ที่ให้คุณบังคับ minimatch ไปยัง version ที่ patch แล้วทุกที่ใน tree โดยไม่ต้อง fork หรือรอ maintainer ของ outer-lib?',
+    options: [
+      'peerDependencies',
+      'resolutions (เป็นฟิลด์เดียวที่ npm รู้จักสำหรับสิ่งนี้)',
+      'overrides',
+      'ทำไม่ได้เลยถ้าไม่แก้ outer-lib โดยตรง',
+    ],
+    answer: 2,
+    explain: '`overrides` บังคับ version ที่กำหนดสำหรับ dependency ที่ไหนก็ตามที่มันปรากฏใน tree รวมถึงที่ซ้อนอยู่ภายใน package ที่คุณไม่ได้ควบคุม — ตรงกับสถานการณ์นี้เป๊ะ',
   },
 ];
 

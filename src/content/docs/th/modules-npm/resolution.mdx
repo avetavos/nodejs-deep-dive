@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 เมื่อคุณเขียน `import 'express'` หรือ `require('express')` Node จะทำตามอัลกอริทึมการค้นหาที่กำหนดตายตัวเพื่อหาไฟล์จริงบนดิสก์ การเข้าใจอัลกอริทึมนี้ช่วยให้คุณ debug ข้อผิดพลาด missing-module เข้าใจว่าทำไม subpath imports ถึงใช้งานได้ และให้เหตุผลเกี่ยวกับวิธีที่ ESM กับ CJS package ทำงานร่วมกัน
 
@@ -25,6 +27,26 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 ```
 
 การค้นหาแบบนี้ทำให้ package ที่ซ้อนกันสามารถพกพาเวอร์ชัน dependency ของตัวเองได้โดยไม่ขัดแย้งกับ sibling
+
+## การค้นหาแบบ visual
+
+<Mermaid code={resolutionWalkDiagram} title="อัลกอริทึม resolution specifier ของ Node" />
+
+export const resolutionWalkDiagram = `flowchart TD
+  A["Specifier string"] --> B{"Starts with './' , '../' , or '/' ?"}
+  B -->|"yes (relative/absolute)"| C{"File extension?"}
+  C -->|".mjs"| D["Always ESM"]
+  C -->|".cjs"| E["Always CJS"]
+  C -->|".js or none"| F["Check nearest package.json 'type'"]
+  B -->|"no (bare specifier)"| G["Walk up node_modules/ from the importing file"]
+  G --> H{"Package found with 'exports' field?"}
+  H -->|"yes"| I["Match subpath against exports map, first matching condition wins"]
+  H -->|"no"| J["Fall back to 'main', then index.js"]
+  I --> K["Resolved file"]
+  J --> K
+  F --> K
+  D --> K
+  E --> K`;
 
 ## นามสกุลไฟล์
 
@@ -112,6 +134,108 @@ $ node -e "import('order-demo').then(m => console.log(m.via))"
 undefined   # "default" matched first, so import() got the CJS build instead
 ```
 
+## imports map และ self-reference
+
+`"exports"` ควบคุมสิ่งที่**ผู้ใช้ภายนอก**เข้าถึงได้; `"imports"` เป็น map เทียบเท่าสำหรับ alias ภายในของ package เอง เขียนด้วย `#` นำหน้าเสมอ เพื่อไม่ให้ชนกับ bare specifier จาก `node_modules` ได้เลย มันเป็นตัวแทนที่สะอาดกว่าสำหรับ relative path เปราะบางอย่าง `../../../shared/utils.js` ที่กระจายอยู่ทั่ว codebase
+
+Package ยังสามารถ**import ตัวเองด้วยชื่อของตัวเอง**ได้ด้วย สิ่งนี้ทำงานได้เพราะมี `"exports"` เท่านั้น — self-reference ใช้ไม่ได้กับ package ที่ไม่มี `"exports"` — และมันหมายความว่าโค้ดของ library สามารถ `import { helper } from 'my-lib'` ภายในตัวเอง โดยใช้ entry point สาธารณะตัวเดียวกันเป๊ะกับที่ผู้ใช้เข้าถึง แทนที่จะเข้าไปยุ่งกับ relative path ภายใน
+
+export const importsMapCode = `
+const fs = require('node:fs');
+const path = require('node:path');
+
+const dir = path.join(__dirname, 'node_modules', 'demo-imports');
+fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
+fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+  name: 'demo-imports',
+  version: '1.0.0',
+  type: 'module',
+  imports: { '#utils': './lib/utils.js' },
+  exports: { '.': './index.js' },
+}, null, 2));
+fs.writeFileSync(path.join(dir, 'lib', 'utils.js'), "export function shout(s) { return s.toUpperCase() + '!'; }\\n");
+fs.writeFileSync(path.join(dir, 'index.js'), [
+  "import { shout } from '#utils';",
+  "export function greet(name) { return shout('hello ' + name); }",
+  "// Self-reference: this file imports its OWN package by name, resolved through \\"exports\\"",
+  "import { greet as selfGreet } from 'demo-imports';",
+  "export function greetTwice(name) { return greet(name) + ' / ' + selfGreet(name); }",
+].join('\\n'));
+
+(async () => {
+  const mod = await import('demo-imports');
+  console.log(mod.greet('Dana'));
+  console.log(mod.greetTwice('Sam'));
+  fs.rmSync(path.join(__dirname, 'node_modules'), { recursive: true, force: true });
+})();
+`;
+
+export const importsMapOut = `HELLO DANA!
+HELLO SAM! / HELLO SAM!`;
+
+<NodeRunner client:visible code={importsMapCode} node expected={importsMapOut} />
+
+`#utils` ภายใน `index.js` ไม่แตะ `node_modules` lookup เลย — มัน resolve ตรงผ่าน `"imports"` map ของ package เอง self-reference import (`from 'demo-imports'`) ผ่าน `"exports"` map ตัวเดียวกันเป๊ะกับที่ผู้ใช้ภายนอกจะใช้ นั่นคือเหตุผลที่ `greet` กับ `selfGreet` ให้ผลลัพธ์เหมือนกัน: มันคือ function ที่ export ออกมาตัวเดียวกันจริงๆ
+
+## Dual-package hazard
+
+`"exports"` map ที่ชี้ `"require"` กับ `"import"` ไปที่**ไฟล์แยกกันสองไฟล์**เป็นรูปแบบทั่วไปสำหรับ ship ทั้ง CJS และ ESM build อันตราย: ถ้าสองไฟล์นั้นแต่ละไฟล์นิยาม class (หรือ stateful singleton ใดๆ) ของตัวเองแยกกัน แทนที่จะแชร์ source of truth เดียวกัน ผู้ใช้ที่เข้าถึง package ผ่านทั้งสอง condition จะได้ implementation ที่ไม่เกี่ยวข้องกันสองตัวที่แค่ดูเหมือนกัน
+
+export const dualHazardCode = `
+const fs = require('node:fs');
+const path = require('node:path');
+
+const dir = path.join(__dirname, 'node_modules', 'demo-dual');
+fs.mkdirSync(dir, { recursive: true });
+fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+  name: 'demo-dual',
+  version: '1.0.0',
+  exports: { '.': { require: './index.cjs', import: './index.mjs' } },
+}, null, 2));
+fs.writeFileSync(path.join(dir, 'index.cjs'), [
+  'class Money { constructor(cents) { this.cents = cents; } }',
+  'module.exports = { Money, make: (cents) => new Money(cents) };',
+].join('\\n'));
+fs.writeFileSync(path.join(dir, 'index.mjs'), [
+  'export class Money { constructor(cents) { this.cents = cents; } }',
+  'export function make(cents) { return new Money(cents); }',
+].join('\\n'));
+
+(async () => {
+  const { Money: CjsMoney, make: cjsMake } = require('demo-dual');
+  const cjsInstance = cjsMake(500);
+
+  const esmMod = await import('demo-dual'); // dynamic import() always uses the "import" condition
+  const esmInstance = esmMod.make(500);
+
+  console.log('cjsInstance instanceof CjsMoney:', cjsInstance instanceof CjsMoney);
+  console.log('cjsInstance instanceof esmMod.Money:', cjsInstance instanceof esmMod.Money);
+  console.log('esmInstance instanceof CjsMoney:', esmInstance instanceof CjsMoney);
+  console.log('esmInstance instanceof esmMod.Money:', esmInstance instanceof esmMod.Money);
+
+  fs.rmSync(path.join(__dirname, 'node_modules'), { recursive: true, force: true });
+})();
+`;
+
+export const dualHazardOut = `cjsInstance instanceof CjsMoney: true
+cjsInstance instanceof esmMod.Money: false
+esmInstance instanceof CjsMoney: false
+esmInstance instanceof esmMod.Money: true`;
+
+<NodeRunner client:visible code={dualHazardCode} node expected={dualHazardOut} />
+
+`require()` resolve ผ่าน `"require"` condition เสมอ และ `import()` resolve ผ่าน `"import"` condition เสมอ ไม่ว่าตัว *caller* เองจะใช้ระบบโมดูลแบบไหน — ส่วนนั้นไม่ใช่อันตราย อันตรายคือ `index.cjs` กับ `index.mjs` ต่างประกาศ class `Money` ของตัวเอง ส่วนหนึ่งของแอปที่ใช้ `require('demo-dual')` กับอีกส่วนที่ใช้ `import('demo-dual')` จะได้ instance ที่ fail ทุก `instanceof` check เมื่อเทียบกัน แม้ทั้งคู่จะอ้างว่าเป็น "`Money` ของ package เดียวกัน" นี่คือ failure mode เดียวกันเป๊ะกับที่บทเรียน [build and emit](https://deep-dive.avetavos.com/typescript/en/compiler-and-tooling/build-and-emit/) ของคอร์ส TypeScript ครอบคลุมจากฝั่ง compiler — การ emit output CJS กับ ESM ที่แยกกันจริงๆ จาก source file เดียว แทนที่จะให้ build เดียวที่ทั้งสอง condition ชี้ไปที่มัน คือสิ่งที่ป้องกันปัญหานี้
+
+## `NODE_PATH` — และทำไมไม่ควรใช้
+
+`NODE_PATH` เป็น environment variable ที่เพิ่ม directory พิเศษเข้าไปใน module search path ของ Node ทำให้ bare specifier resolve ออกไปนอก `node_modules` walk ปกติได้ มันยังใช้งานได้อยู่วันนี้ แต่มันมาก่อนอัลกอริทึม resolution ที่หน้านี้อธิบาย และสร้างปัญหาที่ `exports`/`imports` map ถูกออกแบบมาเพื่อหลีกเลี่ยง:
+
+- **มันไม่ใช่ส่วนหนึ่งของ identity ของไฟล์ที่ resolve ได้** codebase เดียวกันเป๊ะ resolve ต่างกันขึ้นอยู่กับ environment variable ที่ตั้งไว้นอกโปรเจกต์ — `git clone` และ `npm install` ไม่พอที่จะ reproduce วิธี import resolve อีกต่อไป
+- **มัน shadow การ resolve dependency จริงอย่างเงียบๆ** โมดูลที่พบผ่าน `NODE_PATH` ไม่ถูกบันทึกไว้ที่ไหนใน `package.json` หรือ lockfile เลย ไม่มีอะไรบันทึกว่า dependency นี้มีอยู่
+- **มันไม่ compose กับ `"exports"`** conditional exports, subpath restriction, และ self-reference ทั้งหมดสมมติว่าใช้ `node_modules` walk มาตรฐาน `NODE_PATH` ข้าม walk นั้นไปเลย
+
+ทางเลือกที่ portable กว่าสำหรับ "ฉันอยากได้ shortcut path ไปยัง internal module บางตัว" คือ `"imports"` map ที่กล่าวไปข้างต้น — มัน commit เข้า `package.json`, versioned ไปกับโค้ด และทำงานเหมือนกันทุก developer และทุก CI run โดยไม่ต้องตั้งค่า environment ใดๆ
+
 ## การรัน ESM แบบ inline ด้วย `--input-type`
 
 คุณสามารถ pipe ESM source โดยตรงไปยัง Node โดยไม่ต้องมีไฟล์บนดิสก์:
@@ -138,6 +262,48 @@ console.log('CPUs:', os.cpus().length);
 เนื่องจาก ESM imports ถูก resolve แบบ static (ก่อนที่โค้ดใดๆ จะทำงาน) bundler และ runtime สามารถทำ **tree-shaking** ได้ — กำจัด export ที่ไม่เคยถูก import ออก การเรียก CJS `require()` สามารถปรากฏภายใน conditional หรือ loop ทำให้การวิเคราะห์แบบ static เป็นไปไม่ได้และป้องกันการกำจัด dead-code
 </Callout>
 
+## Mental Model
+
+Resolution คือ**อัลกอริทึม lookup ที่รันใหม่ทุกครั้งสำหรับทุก specifier** ไม่ใช่ cache ของ "ของอยู่ตรงไหน" Node ไม่เคยถาม "ครั้งล่าสุดเจอ `express` ที่ไหน" — สำหรับ bare specifier มันเดินขึ้นจาก*ตำแหน่งของไฟล์ที่ import อยู่*ผ่านทุก `node_modules` ระหว่างทางไปจนถึง root และสำหรับ package ที่มี `"exports"` มันเดิน conditions object จากบนลงล่างแล้วเอาตัวแรกที่ match ไฟล์สองไฟล์ที่ห่างกัน 10 directory สามารถ resolve bare specifier เดียวกันไปที่เวอร์ชันที่ติดตั้งต่างกันโดยสิ้นเชิง และนั่นไม่ใช่บั๊ก — มันคือกลไกที่ทำให้ nested dependency หลีกเลี่ยง version conflict ได้
+
+## Trade-offs
+
+| ตัวเลือก | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| นิยาม `"exports"` ด้วย subpath ที่เข้มงวด | ล็อค public API; refactor internal ได้อิสระโดยไม่พัง consumer | อะไรที่ไม่อยู่ในรายการจะเข้าถึงไม่ได้ทันที — breaking change จริงสำหรับใครก็ตามที่พึ่ง internal path ที่ไม่มีเอกสาร |
+| Ship ทั้ง `"require"` และ `"import"` condition จากไฟล์แยกกัน | รองรับผู้ใช้ CJS และ ESM จาก package เดียว | Dual-package hazard: state หรือ class ที่แชร์กันแต่นิยามแยกในแต่ละไฟล์จะแยกออกจากกันข้าม module graph ทั้งสอง |
+| ใช้ `"imports"` / `#alias` สำหรับ internal path | Versioned, refactor-safe, ไม่มี relative-path ที่ยุ่งเหยิง | ต้องคอย sync map เพิ่มอีกหนึ่งตัวเมื่อไฟล์ย้ายที่ |
+| ใช้ `NODE_PATH` | ไม่ต้องแก้ `package.json` เลย | ไม่ reproducible ข้ามเครื่อง/CI; มองไม่เห็นสำหรับคนที่อ่าน dependency tree |
+
+## Common Misconceptions
+
+- **"Node เลือก condition ที่ 'ดีที่สุด' หรือ 'ตรงที่สุด' ใน exports map"** ไม่จริง มันไม่ได้จัดอันดับ condition เลย — มันเอา key **แรก** ที่มันรู้จัก ตามลำดับที่ object เขียนไว้ condition ที่ "ดูถูกกว่า" ที่อยู่ลำดับสองไม่มีโอกาสเลย
+- **"require และ import package เดียวกันให้ object เดียวกันเสมอ"** จริงก็ต่อเมื่อ `"exports"` map ชี้ทั้งสอง condition ไปที่ไฟล์เดียวกัน (หรือไฟล์เดียวกันที่ re-export) ถ้าชี้ไปที่ไฟล์แยกกันสองไฟล์ คุณจะได้ module instance ที่เป็นอิสระจากกันสองตัว — dual-package hazard
+- **"`NODE_PATH` เป็นแค่วิธีเก่าที่เทียบเท่าสำหรับเพิ่ม search path"** มันข้าม resolution model ของ `"exports"`/`"imports"` ทั้งหมด และมองไม่เห็นสำหรับอะไรก็ตามที่อ่าน `package.json` หรือ lockfile — มันไม่ใช่ตัวแทนที่เทียบเท่ากันได้ มันคือ escape hatch ที่มีต้นทุนด้าน reproducibility จริง
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI generate ที่ ship package พร้อมทั้ง CJS และ ESM build มักใช้ pattern class หรือ module-level state เดียวกันซ้ำในแต่ละ build โดยไม่สังเกตว่ามันคือไฟล์แยกกันโดยสิ้นเชิงในแง่ resolution บั๊กจะโผล่ก็ต่อเมื่อ dependency graph ของผู้ใช้โหลด package ผ่านทั้งสอง condition พร้อมกัน — มองไม่เห็นใน test ที่มี entry point เดียว
+
+<SpotTheBug code={`{
+  "name": "state-store",
+  "version": "1.0.0",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.cjs"
+    }
+  }
+}`}>
+`"types"` ต้องอยู่**แรกสุด**ใน conditions object ไม่ใช่ลำดับที่สาม resolver ของ Node เองข้าม `"types"` ไป (มันสำคัญเฉพาะกับ tooling ของ TypeScript) แต่ resolver ที่ไม่ special-case `"types"` — รวมถึง editor integration บางตัว — จะ match condition ไหนก็ตามที่มาก่อน ในที่นี้คือ `"import"` แล้วเสิร์ฟ declaration file ผิดหรือไม่มีเลยอย่างเงียบๆ `"default"` อยู่ท้ายสุดถูกต้องแล้ว (มันตั้งใจให้เป็น catch-all) แต่การแก้สำหรับ `"types"` คือย้ายมันไปเป็น key แรกสุด: `{ "types": "./dist/index.d.ts", "import": "./dist/index.mjs", "require": "./dist/index.cjs", "default": "./dist/index.cjs" }`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Node resolve ทั้ง bare specifier และ exports-map condition ด้วยกฎเดียวกัน — match ตัวแรกชนะ เดินใหม่จากตำแหน่งไฟล์ที่ import ทุกครั้ง — ดังนั้นลำดับ condition, "imports" alias, และ NODE_PATH ล้วนเปลี่ยนโค้ดที่รันจริง ไม่ใช่แค่หน้าตาของมัน
+</Callout>
+
 export const resolutionQuiz = [
   {
     q: 'เมื่อ Node ค้นหา bare specifier เช่น `"express"` จะมองที่ไหนก่อน?',
@@ -148,6 +314,7 @@ export const resolutionQuiz = [
       'โฟลเดอร์ที่มี Node.js binary อยู่',
     ],
     answer: 1,
+    explain: 'การ resolve bare specifier เดินขึ้นจาก directory ของไฟล์ที่ import เอง ตรวจสอบแต่ละโฟลเดอร์ node_modules/ ไปเรื่อยๆ — โฟลเดอร์ที่ใกล้ที่สุดชนะถ้ามันมี match',
   },
   {
     q: 'ทำไม ESM specifiers ต้องระบุนามสกุลไฟล์อย่างชัดเจน?',
@@ -158,6 +325,7 @@ export const resolutionQuiz = [
       'exports map ต้องการ full path',
     ],
     answer: 1,
+    explain: 'การ resolve ของ ESM เกิดขึ้นแบบ static ก่อนที่โค้ดใดๆ จะรัน จึงไม่มีขั้นตอน runtime ให้ลองนามสกุลหลายตัวแบบที่ CJS require() ทำได้',
   },
   {
     q: 'ข้อใดถูกต้องเกี่ยวกับการทำงานร่วมกันของ ESM/CJS?',
@@ -168,6 +336,29 @@ export const resolutionQuiz = [
       'ทั้งสองระบบทำงานร่วมกันได้อย่างสมบูรณ์ในทุกทิศทาง',
     ],
     answer: 2,
+    explain: 'กรณีเดียวที่ require() จัดการไม่ได้คือโมดูล ESM ที่มี top-level await เพราะ require() ต้อง return แบบ synchronous และรอการ evaluate แบบ async ไม่ได้',
+  },
+  {
+    q: '```json\n{\n  \"exports\": {\n    \".\": { \"import\": \"./esm.mjs\", \"default\": \"./cjs.cjs\" }\n  }\n}\n```\nผู้ใช้รัน `require(\'this-pkg\')` (ไม่มี condition "require" อยู่เลย) ไฟล์ไหนจะ resolve?',
+    options: [
+      './esm.mjs เพราะ "import" อยู่ลำดับแรก',
+      './cjs.cjs ผ่าน condition "default" — มันจับคู่กับวิธีโหลดใดๆ ที่ไม่ถูก condition ก่อนหน้าครอบคลุม',
+      'Resolution fail เพราะไม่มี key "require"',
+      'Node เลือกไฟล์ที่มีขนาดเล็กกว่าบน disk',
+    ],
+    answer: 1,
+    explain: '"default" เป็น catch-all condition ที่จับคู่ได้ไม่ว่าโมดูลจะถูกโหลดด้วยวิธีไหน เมื่อไม่มี key "require" การเรียก require() จะตกไปที่ "default" แล้วได้ไฟล์ CJS',
+  },
+  {
+    q: 'Exports map ของ package หนึ่งมี `"require"` ชี้ไปที่ index.cjs และ `"import"` ชี้ไปที่ index.mjs — ไฟล์แยกกันสองไฟล์ แต่ละไฟล์นิยาม `class Widget` ของตัวเอง จะเกิดอะไรขึ้นเมื่อส่วนหนึ่งของแอปใช้ `require()` และอีกส่วนใช้ `import()` กับ package เดียวกัน แล้วเทียบ Widget จากทั้งสองด้วย `instanceof`?',
+    options: [
+      'instanceof คืนค่า true เพราะ "เป็น package เดียวกัน"',
+      'instanceof คืนค่า false — สอง condition โหลดไฟล์อิสระกันสองไฟล์ที่มี class Widget อิสระกันสองตัว',
+      'Node throw ERR_DUAL_PACKAGE ตอนโหลดครั้งที่สอง',
+      'Node deduplicate อัตโนมัติและโหลดแค่หนึ่งในสองไฟล์',
+    ],
+    answer: 1,
+    explain: 'นี่คือ dual-package hazard: การชี้ "require" กับ "import" ไปที่ไฟล์แยกกันหมายถึง module instance ที่แยกกัน แม้ทั้งสองไฟล์จะดูเหมือนกันเป๊ะ class ที่ export ออกมาก็ไม่ใช่ object เดียวกัน ดังนั้น instanceof ข้ามกันจึงเป็น false',
   },
 ];
 

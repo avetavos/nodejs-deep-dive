@@ -5,9 +5,12 @@ sidebar:
   order: 5
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 Publishing a package makes it available on the npm registry so that anyone (or members of your organisation) can install it with `npm install`. The process involves three steps: preparing `package.json` with the right metadata, bumping the version, and running `npm publish`. Each step has guardrails that help you ship clean, predictable releases.
 
@@ -64,6 +67,69 @@ A package ready to publish typically carries these fields, on top of `name` and 
 
 `"files"` is an allowlist, not a denylist: only the paths listed here (plus a few files npm always includes, like `package.json` and `README`) end up in the tarball. This keeps source maps, test fixtures, and local config out of what consumers download.
 
+The demo below reimplements that allowlist logic directly with `fs`, against a fake package tree that includes a `.env` file and test/source folders never listed in `"files"`, to make the filtering mechanism concrete rather than asserted:
+
+export const filesFilterCode = `
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.join(__dirname, 'fake-pkg');
+fs.mkdirSync(path.join(root, 'dist', 'nested'), { recursive: true });
+fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+fs.mkdirSync(path.join(root, 'test'), { recursive: true });
+fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+  name: 'my-util-lib', version: '1.0.0', files: ['dist', 'README.md'],
+}, null, 2));
+fs.writeFileSync(path.join(root, 'README.md'), '# my-util-lib\\n');
+fs.writeFileSync(path.join(root, '.env'), 'SECRET=1\\n');
+fs.writeFileSync(path.join(root, 'dist', 'index.js'), 'module.exports = {};\\n');
+fs.writeFileSync(path.join(root, 'dist', 'nested', 'helper.js'), 'module.exports = {};\\n');
+fs.writeFileSync(path.join(root, 'src', 'index.ts'), 'export {};\\n');
+fs.writeFileSync(path.join(root, 'test', 'index.test.js'), '// test\\n');
+
+// npm always includes package.json and a README regardless of "files";
+// everything else must be listed in "files" (or its subdirectories) to ship.
+const ALWAYS_INCLUDED = new Set(['package.json', 'README.md']);
+
+function walk(dir, base) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walk(full, base));
+    else out.push(path.relative(base, full));
+  }
+  return out;
+}
+
+const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const allFiles = walk(root, root);
+const included = allFiles.filter((rel) => {
+  if (ALWAYS_INCLUDED.has(rel)) return true;
+  return pkg.files.some((allowed) => rel === allowed || rel.startsWith(allowed + path.sep));
+});
+
+console.log('Would ship in the tarball:');
+for (const f of included.sort()) console.log(' ', f.split(path.sep).join('/'));
+console.log('Excluded (not in "files"):');
+for (const f of allFiles.filter((f) => !included.includes(f)).sort()) console.log(' ', f.split(path.sep).join('/'));
+
+fs.rmSync(root, { recursive: true, force: true });
+`;
+
+export const filesFilterOut = `Would ship in the tarball:
+  README.md
+  dist/index.js
+  dist/nested/helper.js
+  package.json
+Excluded (not in "files"):
+  .env
+  src/index.ts
+  test/index.test.js`;
+
+<NodeRunner client:visible code={filesFilterCode} node expected={filesFilterOut} />
+
+`.env`, the TypeScript source, and the test file never touch consumers' machines. A real `npm pack --dry-run` on this exact layout confirms the same three files ship — this demo makes the *mechanism* explicit rather than asking you to trust the CLI output.
+
 ## The `bin` field
 
 ```json
@@ -75,6 +141,70 @@ A package ready to publish typically carries these fields, on top of `name` and 
 ```
 
 When the package is installed (locally or globally), npm creates a `my-util` executable in `node_modules/.bin/` (or the global bin directory) pointing at `./dist/cli.js`. That is what makes the command available to `npx my-util` and to `npm run` scripts in a consuming project without a global install.
+
+## `npx` vs `npm exec` vs `node --run`
+
+All three end up running "some code," which is exactly why generated snippets swap between them without noticing they are not equivalent:
+
+| Command | Runs | Falls back to installing from the registry? | Runs `pre`/`post` lifecycle scripts? |
+|---|---|---|---|
+| `npx <bin-name>` | A `bin` entry — local (`node_modules/.bin`) if present, otherwise a temporary registry install | Yes (prompts unless `--yes`/`-y`) | N/A — not a `package.json` script |
+| `npm exec -- <bin-name>` | The same `bin` lookup as `npx` (npm 7+ implements `npx` on top of `exec`) | Yes, same behavior as `npx` | N/A — not a `package.json` script |
+| `node --run <script-name>` | A named script in `package.json`'s `"scripts"` field, directly — no shell spawned | No — it only runs what's already in `"scripts"` | **No** — this is the sharpest difference from `npm run` |
+
+Real transcripts, all local and offline (a `bin` entry `say-hi` and a script `greet` both defined in the same package):
+
+```bash
+npx say-hi
+```
+
+```text
+hi from local bin
+```
+
+```bash
+npm exec -- say-hi
+```
+
+```text
+hi from local bin
+```
+
+```bash
+node --run greet
+```
+
+```text
+hi from local bin
+```
+
+All three print the same thing here — but add a `pregreet` lifecycle script and the difference becomes visible:
+
+```bash
+npm run greet
+```
+
+```text
+> run-demo@1.0.0 pregreet
+> echo PRE-HOOK-RAN
+
+PRE-HOOK-RAN
+
+> run-demo@1.0.0 greet
+> node cli.js
+
+hi from local bin
+```
+
+```bash
+node --run greet
+```
+
+```text
+hi from local bin
+```
+
+`node --run` skips `pregreet` entirely — it executes only the named script, with no lifecycle hook resolution and no shell in between, which is also why it starts faster than `npm run`. It is a substitute for `npm run <script>`, not for `npx`/`npm exec`: it cannot install anything, and it cannot run an arbitrary binary that isn't already a `package.json` script.
 
 ## Versioning with Semantic Versioning
 
@@ -101,7 +231,7 @@ Each command updates the `"version"` field in `package.json`, commits the change
 
 ## Testing before publish with `npm pack`
 
-`npm pack` bundles your package into a `.tgz` tarball exactly as npm would if you ran `npm publish` — but it stays local. This lets you inspect the final artifact before shipping it.
+`npm pack` bundles your package into a `.tgz` tarball exactly as npm would if you ran `npm publish` — but it stays local. This lets you inspect the final artifact before shipping it. `--dry-run` goes one step further: it lists the tarball contents without writing anything to disk, and needs no registry login.
 
 ```bash
 # Create a local tarball (e.g. myorg-my-util-lib-1.0.0.tgz)
@@ -113,6 +243,32 @@ tar -tzf myorg-my-util-lib-1.0.0.tgz
 # Install it locally in another project to smoke-test
 npm install ../my-util-lib/myorg-my-util-lib-1.0.0.tgz
 ```
+
+Real output of `npm pack --dry-run` against a package with `"files": ["dist", "README.md"]`, a `.env`, and an unrelated secrets file sitting alongside them:
+
+```bash
+npm pack --dry-run
+```
+
+```text
+npm notice
+npm notice 📦  @demo/my-util-lib@1.0.0
+npm notice Tarball Contents
+npm notice 14B README.md
+npm notice 21B dist/index.js
+npm notice 139B package.json
+npm notice Tarball Details
+npm notice name: @demo/my-util-lib
+npm notice version: 1.0.0
+npm notice filename: demo-my-util-lib-1.0.0.tgz
+npm notice package size: 284 B
+npm notice unpacked size: 174 B
+npm notice shasum: 59bc21d933556de397e4fa5056ea5a999750a8d3
+npm notice integrity: sha512-FBadVz2MkDnJl[...]jO8KfPJW6WRuw==
+npm notice total files: 3
+```
+
+`.env` and the secrets file are simply absent from the listing — exactly the filtering the `fs`-based demo above reimplements.
 
 <Callout title="Test with npm pack before publishing">
 Running `npm pack` is a free dry run. It respects the `"files"` allowlist, applies `.npmignore`, and produces the exact tarball that `npm publish` would upload. Inspect the output to confirm you are not accidentally shipping source maps, test fixtures, or secret config files — mistakes here are permanent because published versions cannot be overwritten.
@@ -135,6 +291,37 @@ npm publish --access public
 # Publish under a dist-tag other than "latest" (e.g. a beta)
 npm publish --tag beta
 ```
+
+<Mermaid code={publishPipelineDiagram} title="From version bump to a published tarball" />
+
+export const publishPipelineDiagram = `flowchart TD
+  A["npm version patch/minor/major"] --> B["prepublishOnly script runs (build, test, lint)"]
+  B --> C["npm pack --dry-run — inspect the tarball contents"]
+  C --> D{"Looks right?"}
+  D -->|"no"| E["Fix files/exports/scripts, repeat from npm pack"]
+  E --> C
+  D -->|"yes"| F["npm publish"]
+  F --> G{"2FA required for this account/package?"}
+  G -->|"yes"| H["Approve via authenticator or security key"]
+  G -->|"no"| I["Tarball uploaded to the registry"]
+  H --> I
+  I --> J["Provenance attestation attached (if --provenance)"]`;
+
+## Provenance, 2FA, and the pre-publish checklist
+
+A published version cannot be unpublished after 72 hours (npm's abuse-prevention window), so the guardrails belong **before** `npm publish` runs, not after:
+
+- **`prepublishOnly`** — a `package.json` script npm runs automatically right before packing, and *only* before a real `npm publish` (unlike `prepublish`, which historically also ran on plain `npm install`). Put your build and test steps here so a broken build cannot ship:
+  ```json
+  {
+    "scripts": {
+      "prepublishOnly": "npm test && npm run build"
+    }
+  }
+  ```
+- **`npm pack --dry-run`** — the free, local, no-login-required check from the previous section. Run it and actually read the file list before every publish.
+- **Two-factor authentication (2FA)** — `npm profile enable-2fa auth-and-writes` requires a one-time code (or a hardware security key) for both login and publish, so a leaked npm token alone is not enough to publish a malicious version under your name.
+- **Provenance (`npm publish --provenance`)** — from a supported CI environment (GitHub Actions, GitLab CI), this cryptographically attaches the exact source commit and build workflow that produced the tarball, publicly visible on the npm registry page. It answers "was this actually built from the public source repo" for anyone auditing a supply-chain incident.
 
 ## Scoped packages
 
@@ -159,6 +346,44 @@ npm publish --access public
 
 Private scoped packages require a paid npm account or a private registry.
 
+## Mental Model
+
+Everything in this lesson exists because **`npm publish` is closer to a one-way door than a save button**. A published tarball's exact bytes are permanent — you cannot edit or silently replace `1.0.0` after the fact — so every guardrail here (`"files"`, `prepublishOnly`, `npm pack --dry-run`, 2FA, provenance) exists to catch a mistake in the few seconds *before* that door closes, because nothing catches it after.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `prepublishOnly` running tests/build | A broken build cannot be published — the check runs automatically, no one has to remember it | Adds real time to every publish; a flaky test can block a legitimate release |
+| 2FA on publish | A stolen npm token alone cannot publish a malicious version | Every publish needs a second factor available — friction for automated release pipelines unless a granular token is set up |
+| `--provenance` | Public, verifiable link between a published tarball and the exact source commit/workflow that built it | Only works from a supported CI provider — cannot be added retroactively to already-published versions |
+| Strict `"files"` allowlist | Small, predictable tarballs; nothing accidentally shipped | Forgetting to add a genuinely needed file (a wasm binary, a font) breaks the package for consumers until the next version |
+
+## Common Misconceptions
+
+- **"I can just publish a patch to fix a mistake I shipped."** You can publish a *new* version, but the broken one stays on the registry forever (npm's unpublish window is 72 hours and has restrictions even within it) — anyone who already resolved that exact version keeps the mistake.
+- **"`npm pack` and `npm publish` might package different files."** They use the identical `"files"`/`.npmignore` logic — `npm pack --dry-run` is not an approximation, it is the literal tarball-building step, minus the upload.
+- **"2FA only protects my npm account login."** `enable-2fa auth-and-writes` additionally requires a second factor for the publish itself — a stolen or leaked auth token is not sufficient on its own to push a malicious version.
+
+## Reading AI-generated code
+
+Generated CI/CD publish scripts frequently omit `prepublishOnly` and go straight from a version bump to `npm publish`, because the tutorial-shaped examples most training data comes from are demonstrating "how to publish," not "how to publish safely."
+
+<SpotTheBug code={`{
+  "name": "my-cli-tool",
+  "version": "1.0.0",
+  "bin": { "my-cli": "./dist/cli.js" },
+  "devDependencies": {
+    "commander": "^12.0.0"
+  }
+}`}>
+`commander` is the argument-parsing library the CLI actually calls at runtime — every time `my-cli` runs, on every consumer's machine — so it belongs in `"dependencies"`, not `"devDependencies"`. Because npm skips `devDependencies` on a production install (`npm install --omit=dev`, or whenever a consumer installs this as a real dependency rather than cloning the repo), any consumer who installs this CLI normally gets `Cannot find module 'commander'` the moment they run it. The fix is moving it: `"dependencies": { "commander": "^12.0.0" }`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A publish is effectively permanent, so every check in this lesson — `"files"`, `npm pack --dry-run`, `prepublishOnly`, 2FA, provenance — is designed to fail before `npm publish` uploads anything, because nothing meaningfully fixes a mistake after.
+</Callout>
+
 export const publishingQuiz = [
   {
     q: 'What does the `"files"` field in package.json control?',
@@ -169,6 +394,7 @@ export const publishingQuiz = [
       'The peer dependencies consumers must install',
     ],
     answer: 1,
+    explain: '"files" is an allowlist of paths that end up in the published tarball — everything else is left out, aside from a small set npm always includes like package.json and README.',
   },
   {
     q: 'You run `npm version minor` on a package at version 2.3.1. What is the new version?',
@@ -179,6 +405,7 @@ export const publishingQuiz = [
       '2.3.1-minor',
     ],
     answer: 1,
+    explain: 'A minor bump increments the middle number and resets patch to 0: 2.3.1 becomes 2.4.0.',
   },
   {
     q: 'Why must scoped packages use `npm publish --access public` to be installable by the public?',
@@ -189,6 +416,29 @@ export const publishingQuiz = [
       'Unscoped packages cannot be published without the flag',
     ],
     answer: 1,
+    explain: 'The @scope/name format defaults to restricted visibility on the registry; --access public is the explicit opt-in to make it installable by anyone.',
+  },
+  {
+    q: '```json\n{\n  \"name\": \"my-cli-tool\",\n  \"bin\": { \"my-cli\": \"./dist/cli.js\" },\n  \"devDependencies\": {\n    \"commander\": \"^12.0.0\"\n  }\n}\n```\nA consumer installs this CLI as a normal dependency (`npm install --omit=dev` semantics apply). What happens when they run `my-cli`?',
+    options: [
+      'It works normally — devDependencies are still available to a package\'s own bin scripts',
+      'It throws Cannot find module \'commander\', because devDependencies are not installed for a package\'s consumers',
+      'npm automatically moves commander to dependencies at publish time',
+      'It works, but only the first time the CLI is run',
+    ],
+    answer: 1,
+    explain: 'commander is required at runtime by the CLI itself, so it belongs in "dependencies". Because devDependencies are skipped on a production-style install, a consumer running this CLI normally never gets commander installed at all.',
+  },
+  {
+    q: 'A Dockerfile-adjacent publish pipeline runs `npm version patch` then immediately `npm publish`, skipping `npm pack --dry-run` and `prepublishOnly`. What real protection does this lose?',
+    options: [
+      'None — npm publish already performs every check pack --dry-run and prepublishOnly would',
+      'The chance to catch a broken build or an accidentally-included secret file before the (effectively permanent) upload',
+      'It only affects the published version number, not the file contents',
+      'npm refuses to publish without prepublishOnly defined, so this pipeline would already fail',
+    ],
+    answer: 1,
+    explain: 'prepublishOnly is what runs your build/tests automatically before a publish, and npm pack --dry-run is the only free look at the exact tarball contents before they become permanent. Skipping both means the first place a mistake gets caught is after the (effectively unfixable) publish.',
   },
 ];
 

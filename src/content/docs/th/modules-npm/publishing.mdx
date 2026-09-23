@@ -5,9 +5,12 @@ sidebar:
   order: 5
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 การเผยแพร่ package ทำให้มันพร้อมใช้งานบน npm registry เพื่อให้ใครก็ตาม (หรือสมาชิกในองค์กรของคุณ) ติดตั้งได้ด้วย `npm install` กระบวนการนี้มีสามขั้นตอน: เตรียม `package.json` ด้วย metadata ที่ถูกต้อง, bump เวอร์ชัน, และรัน `npm publish` แต่ละขั้นตอนมี guardrail ที่ช่วยให้คุณ ship release ที่สะอาดและคาดเดาได้
 
@@ -64,6 +67,69 @@ package ที่พร้อม publish มักมีฟิลด์เหล
 
 `"files"` เป็น allowlist ไม่ใช่ denylist: มีเพียง path ที่ระบุไว้ที่นี่ (บวกกับไฟล์บางอย่างที่ npm รวมให้เสมอ เช่น `package.json` และ `README`) เท่านั้นที่จะอยู่ใน tarball วิธีนี้ทำให้ source map, test fixture, และ config เฉพาะเครื่องไม่หลุดไปกับสิ่งที่ผู้ใช้ดาวน์โหลด
 
+Demo ด้านล่าง reimplement logic ของ allowlist นั้นตรงๆ ด้วย `fs` กับ fake package tree ที่มีไฟล์ `.env` และโฟลเดอร์ test/source ที่ไม่เคยอยู่ใน `"files"` เลย เพื่อให้กลไกการกรองเป็นรูปธรรม แทนที่จะแค่กล่าวอ้าง:
+
+export const filesFilterCode = `
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.join(__dirname, 'fake-pkg');
+fs.mkdirSync(path.join(root, 'dist', 'nested'), { recursive: true });
+fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+fs.mkdirSync(path.join(root, 'test'), { recursive: true });
+fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
+  name: 'my-util-lib', version: '1.0.0', files: ['dist', 'README.md'],
+}, null, 2));
+fs.writeFileSync(path.join(root, 'README.md'), '# my-util-lib\\n');
+fs.writeFileSync(path.join(root, '.env'), 'SECRET=1\\n');
+fs.writeFileSync(path.join(root, 'dist', 'index.js'), 'module.exports = {};\\n');
+fs.writeFileSync(path.join(root, 'dist', 'nested', 'helper.js'), 'module.exports = {};\\n');
+fs.writeFileSync(path.join(root, 'src', 'index.ts'), 'export {};\\n');
+fs.writeFileSync(path.join(root, 'test', 'index.test.js'), '// test\\n');
+
+// npm always includes package.json and a README regardless of "files";
+// everything else must be listed in "files" (or its subdirectories) to ship.
+const ALWAYS_INCLUDED = new Set(['package.json', 'README.md']);
+
+function walk(dir, base) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walk(full, base));
+    else out.push(path.relative(base, full));
+  }
+  return out;
+}
+
+const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const allFiles = walk(root, root);
+const included = allFiles.filter((rel) => {
+  if (ALWAYS_INCLUDED.has(rel)) return true;
+  return pkg.files.some((allowed) => rel === allowed || rel.startsWith(allowed + path.sep));
+});
+
+console.log('Would ship in the tarball:');
+for (const f of included.sort()) console.log(' ', f.split(path.sep).join('/'));
+console.log('Excluded (not in "files"):');
+for (const f of allFiles.filter((f) => !included.includes(f)).sort()) console.log(' ', f.split(path.sep).join('/'));
+
+fs.rmSync(root, { recursive: true, force: true });
+`;
+
+export const filesFilterOut = `Would ship in the tarball:
+  README.md
+  dist/index.js
+  dist/nested/helper.js
+  package.json
+Excluded (not in "files"):
+  .env
+  src/index.ts
+  test/index.test.js`;
+
+<NodeRunner client:visible code={filesFilterCode} node expected={filesFilterOut} />
+
+`.env`, source TypeScript, และไฟล์ test ไม่ไปแตะเครื่องของผู้ใช้เลย `npm pack --dry-run` จริงบน layout เดียวกันเป๊ะนี้ยืนยันว่าไฟล์สามอย่างเดียวกันนี้ ship ออกไป — demo นี้ทำให้ *กลไก* ชัดเจนแทนที่จะขอให้คุณเชื่อ CLI output เฉยๆ
+
 ## ฟิลด์ `bin`
 
 ```json
@@ -75,6 +141,70 @@ package ที่พร้อม publish มักมีฟิลด์เหล
 ```
 
 เมื่อ package ถูกติดตั้ง (แบบ local หรือ global) npm จะสร้าง executable ชื่อ `my-util` ใน `node_modules/.bin/` (หรือ global bin directory) ที่ชี้ไปยัง `./dist/cli.js` นี่คือสิ่งที่ทำให้คำสั่งนี้ใช้งานได้ผ่าน `npx my-util` และผ่าน script ใน `npm run` ของโปรเจกต์ที่ใช้งาน โดยไม่ต้องติดตั้งแบบ global
+
+## `npx` เทียบกับ `npm exec` เทียบกับ `node --run`
+
+ทั้งสามอย่างจบลงที่การ "รันโค้ดบางอย่าง" ซึ่งเป็นเหตุผลว่าทำไม snippet ที่ AI generate ถึงสลับใช้กันโดยไม่สังเกตว่าพวกมันไม่เท่ากัน:
+
+| คำสั่ง | รันอะไร | Fallback ไปติดตั้งจาก registry ไหม? | รัน lifecycle script `pre`/`post` ไหม? |
+|---|---|---|---|
+| `npx <bin-name>` | `bin` entry — local (`node_modules/.bin`) ถ้ามี ไม่งั้นติดตั้งชั่วคราวจาก registry | ใช่ (prompt เว้นแต่มี `--yes`/`-y`) | N/A — ไม่ใช่ script ใน package.json |
+| `npm exec -- <bin-name>` | `bin` lookup แบบเดียวกับ `npx` (npm 7+ implement `npx` บนฐาน `exec`) | ใช่ พฤติกรรมเดียวกับ `npx` | N/A — ไม่ใช่ script ใน package.json |
+| `node --run <script-name>` | script ที่ตั้งชื่อไว้ในฟิลด์ `"scripts"` ของ package.json โดยตรง — ไม่ spawn shell | ไม่ — มันรันแค่สิ่งที่อยู่ใน `"scripts"` แล้ว | **ไม่** — นี่คือความต่างที่ชัดที่สุดจาก `npm run` |
+
+Transcript จริง ทั้งหมด local และ offline (`bin` entry ชื่อ `say-hi` กับ script `greet` ที่นิยามไว้ใน package เดียวกัน):
+
+```bash
+npx say-hi
+```
+
+```text
+hi from local bin
+```
+
+```bash
+npm exec -- say-hi
+```
+
+```text
+hi from local bin
+```
+
+```bash
+node --run greet
+```
+
+```text
+hi from local bin
+```
+
+ทั้งสามพิมพ์เหมือนกันตรงนี้ — แต่เพิ่ม lifecycle script `pregreet` เข้าไปแล้วความต่างจะเห็นชัด:
+
+```bash
+npm run greet
+```
+
+```text
+> run-demo@1.0.0 pregreet
+> echo PRE-HOOK-RAN
+
+PRE-HOOK-RAN
+
+> run-demo@1.0.0 greet
+> node cli.js
+
+hi from local bin
+```
+
+```bash
+node --run greet
+```
+
+```text
+hi from local bin
+```
+
+`node --run` ข้าม `pregreet` ไปเลย — มันรันแค่ script ที่ระบุชื่อ ไม่มีการ resolve lifecycle hook และไม่มี shell คั่นกลาง ซึ่งเป็นเหตุผลที่มันเริ่มเร็วกว่า `npm run` ด้วย มันเป็นตัวแทนของ `npm run <script>` ไม่ใช่ของ `npx`/`npm exec`: มันติดตั้งอะไรไม่ได้เลย และรัน binary ที่ไม่ใช่ script ใน package.json อยู่แล้วไม่ได้
 
 ## การกำหนดเวอร์ชันด้วย Semantic Versioning
 
@@ -101,7 +231,7 @@ npm version major
 
 ## ทดสอบก่อน publish ด้วย `npm pack`
 
-`npm pack` รวม package ของคุณเป็น tarball `.tgz` เหมือนกับที่ npm จะทำถ้าคุณรัน `npm publish` — แต่มันอยู่แค่ local เท่านั้น วิธีนี้ให้คุณตรวจสอบ artifact สุดท้ายก่อน ship จริง
+`npm pack` รวม package ของคุณเป็น tarball `.tgz` เหมือนกับที่ npm จะทำถ้าคุณรัน `npm publish` — แต่มันอยู่แค่ local เท่านั้น วิธีนี้ให้คุณตรวจสอบ artifact สุดท้ายก่อน ship จริง `--dry-run` ไปไกลกว่านั้นอีกขั้น: มันแสดงรายการเนื้อหา tarball โดยไม่เขียนอะไรลง disk เลย และไม่ต้อง login registry เลยด้วย
 
 ```bash
 # Create a local tarball (e.g. myorg-my-util-lib-1.0.0.tgz)
@@ -113,6 +243,32 @@ tar -tzf myorg-my-util-lib-1.0.0.tgz
 # Install it locally in another project to smoke-test
 npm install ../my-util-lib/myorg-my-util-lib-1.0.0.tgz
 ```
+
+ผลลัพธ์จริงของ `npm pack --dry-run` บน package ที่มี `"files": ["dist", "README.md"]`, ไฟล์ `.env`, และไฟล์ secret ที่ไม่เกี่ยวข้องอยู่ข้างๆ กัน:
+
+```bash
+npm pack --dry-run
+```
+
+```text
+npm notice
+npm notice 📦  @demo/my-util-lib@1.0.0
+npm notice Tarball Contents
+npm notice 14B README.md
+npm notice 21B dist/index.js
+npm notice 139B package.json
+npm notice Tarball Details
+npm notice name: @demo/my-util-lib
+npm notice version: 1.0.0
+npm notice filename: demo-my-util-lib-1.0.0.tgz
+npm notice package size: 284 B
+npm notice unpacked size: 174 B
+npm notice shasum: 59bc21d933556de397e4fa5056ea5a999750a8d3
+npm notice integrity: sha512-FBadVz2MkDnJl[...]jO8KfPJW6WRuw==
+npm notice total files: 3
+```
+
+`.env` และไฟล์ secret หายไปจากรายการเลย — เป็นการกรองแบบเดียวกันเป๊ะกับที่ demo แบบ `fs` ด้านบน reimplement
 
 <Callout title="ทดสอบด้วย npm pack ก่อน publish เสมอ">
 การรัน `npm pack` คือ dry run ที่ไม่มีค่าใช้จ่าย มัน respect `"files"` allowlist, ใช้ `.npmignore`, และสร้าง tarball ที่ตรงกับสิ่งที่ `npm publish` จะอัปโหลดจริงทุกประการ ตรวจสอบผลลัพธ์เพื่อยืนยันว่าคุณไม่ได้ ship source map, test fixture, หรือไฟล์ config ลับไปโดยไม่ตั้งใจ — ความผิดพลาดตรงนี้แก้ไม่ได้เพราะเวอร์ชันที่ publish แล้วเขียนทับไม่ได้
@@ -135,6 +291,37 @@ npm publish --access public
 # Publish under a dist-tag other than "latest" (e.g. a beta)
 npm publish --tag beta
 ```
+
+<Mermaid code={publishPipelineDiagram} title="จากการ bump เวอร์ชันไปจนถึง tarball ที่ publish แล้ว" />
+
+export const publishPipelineDiagram = `flowchart TD
+  A["npm version patch/minor/major"] --> B["prepublishOnly script runs (build, test, lint)"]
+  B --> C["npm pack --dry-run — inspect the tarball contents"]
+  C --> D{"Looks right?"}
+  D -->|"no"| E["Fix files/exports/scripts, repeat from npm pack"]
+  E --> C
+  D -->|"yes"| F["npm publish"]
+  F --> G{"2FA required for this account/package?"}
+  G -->|"yes"| H["Approve via authenticator or security key"]
+  G -->|"no"| I["Tarball uploaded to the registry"]
+  H --> I
+  I --> J["Provenance attestation attached (if --provenance)"]`;
+
+## Provenance, 2FA, และ pre-publish checklist
+
+Version ที่ publish แล้วยกเลิกไม่ได้หลังผ่านไป 72 ชั่วโมง (หน้าต่างป้องกันการละเมิดของ npm) ดังนั้น guardrail ต้องอยู่**ก่อน** `npm publish` รัน ไม่ใช่หลังจากนั้น:
+
+- **`prepublishOnly`** — script ใน `package.json` ที่ npm รันอัตโนมัติก่อน pack เลย และรัน*เฉพาะ*ก่อน `npm publish` จริง (ต่างจาก `prepublish` ที่ในอดีตยังรันตอน `npm install` ธรรมดาด้วย) ใส่ build และ test step ไว้ตรงนี้เพื่อไม่ให้ build ที่พังหลุดไป ship ได้:
+  ```json
+  {
+    "scripts": {
+      "prepublishOnly": "npm test && npm run build"
+    }
+  }
+  ```
+- **`npm pack --dry-run`** — การตรวจฟรี local ไม่ต้อง login จากหัวข้อก่อนหน้า รันมันแล้วอ่านรายการไฟล์จริงๆ ก่อน publish ทุกครั้ง
+- **Two-factor authentication (2FA)** — `npm profile enable-2fa auth-and-writes` ต้องการ one-time code (หรือ hardware security key) ทั้งตอน login และตอน publish ดังนั้น npm token ที่หลุดไปอย่างเดียวไม่พอที่จะ publish version อันตรายภายใต้ชื่อคุณ
+- **Provenance (`npm publish --provenance`)** — จาก CI environment ที่รองรับ (GitHub Actions, GitLab CI) มันแนบ commit และ build workflow ที่แน่นอนที่สร้าง tarball นั้นแบบ cryptographic เข้าไปด้วย มองเห็นได้บนหน้า npm registry สาธารณะ มันตอบคำถาม "สิ่งนี้ถูก build จาก source repo สาธารณะจริงไหม" สำหรับใครก็ตามที่ตรวจสอบ supply-chain incident
 
 ## Scoped packages
 
@@ -159,6 +346,44 @@ npm publish --access public
 
 Private scoped packages ต้องใช้ npm account แบบเสียเงิน หรือ private registry
 
+## Mental Model
+
+ทุกอย่างในบทนี้มีอยู่เพราะ **`npm publish` ใกล้เคียงกับ door ทางเดียวมากกว่าปุ่ม save** byte ที่แน่นอนของ tarball ที่ publish แล้วคือถาวร — คุณแก้หรือแทนที่ `1.0.0` แบบเงียบๆ ทีหลังไม่ได้ ดังนั้น guardrail ทุกตัวในบทนี้ (`"files"`, `prepublishOnly`, `npm pack --dry-run`, 2FA, provenance) มีอยู่เพื่อจับความผิดพลาดในไม่กี่วินาที*ก่อน*ที่ door นั้นจะปิด เพราะไม่มีอะไรจับมันได้หลังจากนั้น
+
+## Trade-offs
+
+| ตัวเลือก | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| `prepublishOnly` รัน test/build | build ที่พัง publish ไม่ได้ — check รันอัตโนมัติ ไม่ต้องมีใครจำ | เพิ่มเวลาจริงให้ทุก publish; test ที่ flaky อาจ block release ที่ถูกต้อง |
+| 2FA ตอน publish | npm token ที่ถูกขโมยอย่างเดียว publish version อันตรายไม่ได้ | ทุก publish ต้องมี second factor พร้อมใช้ — เพิ่ม friction ให้ automated release pipeline เว้นแต่ตั้ง granular token ไว้ |
+| `--provenance` | ลิงก์สาธารณะที่ verify ได้ระหว่าง tarball ที่ publish กับ source commit/workflow ที่แน่นอนที่ build มัน | ใช้ได้เฉพาะจาก CI provider ที่รองรับ — เพิ่มย้อนหลังให้ version ที่ publish ไปแล้วไม่ได้ |
+| `"files"` allowlist ที่เข้มงวด | Tarball เล็กและคาดเดาได้ ไม่มีอะไรหลุดไปโดยไม่ตั้งใจ | ลืมเพิ่มไฟล์ที่จำเป็นจริงๆ (wasm binary, font) ทำให้ package พังสำหรับผู้ใช้จนกว่าจะมี version ถัดไป |
+
+## Common Misconceptions
+
+- **"ฉัน publish patch แก้ความผิดพลาดที่ ship ไปได้"** คุณ publish version *ใหม่* ได้ แต่ version ที่พังยังอยู่บน registry ตลอดไป (หน้าต่าง unpublish ของ npm คือ 72 ชั่วโมงและมีข้อจำกัดแม้ในช่วงนั้น) — ใครก็ตามที่ resolve version นั้นไปแล้วยังคงเก็บความผิดพลาดนั้นไว้
+- **"`npm pack` กับ `npm publish` อาจ package ไฟล์ต่างกัน"** ทั้งคู่ใช้ logic `"files"`/`.npmignore` เดียวกันเป๊ะ — `npm pack --dry-run` ไม่ใช่การประมาณ มันคือขั้นตอน build-tarball จริงๆ ลบแค่การอัปโหลดออก
+- **"2FA ป้องกันแค่ login npm account ของฉัน"** `enable-2fa auth-and-writes` ต้องการ second factor เพิ่มเติมสำหรับการ publish เองด้วย — auth token ที่ถูกขโมยหรือรั่วไหลอย่างเดียวไม่พอที่จะ push version อันตราย
+
+## อ่านโค้ดที่ AI เขียน
+
+Publish script ของ CI/CD ที่ AI generate มักละ `prepublishOnly` ไปเลย แล้วไปตรงจากการ bump version สู่ `npm publish` เพราะตัวอย่างในรูปแบบ tutorial ที่ training data ส่วนใหญ่มาจากนั้นสาธิตแค่ "วิธี publish" ไม่ใช่ "วิธี publish อย่างปลอดภัย"
+
+<SpotTheBug code={`{
+  "name": "my-cli-tool",
+  "version": "1.0.0",
+  "bin": { "my-cli": "./dist/cli.js" },
+  "devDependencies": {
+    "commander": "^12.0.0"
+  }
+}`}>
+`commander` คือ library parse argument ที่ CLI เรียกใช้จริงตอน runtime — ทุกครั้งที่ `my-cli` รัน บนเครื่องของผู้ใช้ทุกคน — มันจึงควรอยู่ใน `"dependencies"` ไม่ใช่ `"devDependencies"` เพราะ npm ข้าม `devDependencies` ตอน production install (`npm install --omit=dev` หรือเมื่อผู้ใช้ install นี้เป็น dependency จริงแทนที่จะ clone repo) ผู้ใช้ที่ install CLI นี้ตามปกติจะเจอ `Cannot find module 'commander'` ทันทีที่รัน วิธีแก้คือย้ายมัน: `"dependencies": { "commander": "^12.0.0" }`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+การ publish แทบจะถาวร ดังนั้นทุก check ในบทนี้ — `"files"`, `npm pack --dry-run`, `prepublishOnly`, 2FA, provenance — ถูกออกแบบมาให้ fail ก่อนที่ `npm publish` จะอัปโหลดอะไร เพราะไม่มีอะไรแก้ความผิดพลาดได้จริงๆ หลังจากนั้น
+</Callout>
+
 export const publishingQuiz = [
   {
     q: 'ฟิลด์ "files" ใน package.json ควบคุมอะไร?',
@@ -169,6 +394,7 @@ export const publishingQuiz = [
       'peer dependencies ที่ผู้ใช้ต้องติดตั้ง',
     ],
     answer: 1,
+    explain: '"files" คือ allowlist ของ path ที่ลงเอยใน published tarball — อย่างอื่นทั้งหมดถูกตัดออก ยกเว้นชุดเล็กๆ ที่ npm รวมให้เสมอเช่น package.json และ README',
   },
   {
     q: 'คุณรัน npm version minor กับ package เวอร์ชัน 2.3.1 เวอร์ชันใหม่คือเท่าใด?',
@@ -179,6 +405,7 @@ export const publishingQuiz = [
       '2.3.1-minor',
     ],
     answer: 1,
+    explain: 'Minor bump เพิ่มเลขกลางและ reset patch เป็น 0: 2.3.1 กลายเป็น 2.4.0',
   },
   {
     q: 'ทำไม scoped packages ถึงต้องใช้ npm publish --access public เพื่อให้สาธารณชนติดตั้งได้?',
@@ -189,6 +416,29 @@ export const publishingQuiz = [
       'Unscoped packages ไม่สามารถ publish ได้โดยไม่มี flag นี้',
     ],
     answer: 1,
+    explain: 'รูปแบบ @scope/name ค่าเริ่มต้นเป็น restricted visibility บน registry; --access public คือการ opt-in อย่างชัดเจนเพื่อให้ใครก็ตามติดตั้งได้',
+  },
+  {
+    q: '```json\n{\n  \"name\": \"my-cli-tool\",\n  \"bin\": { \"my-cli\": \"./dist/cli.js\" },\n  \"devDependencies\": {\n    \"commander\": \"^12.0.0\"\n  }\n}\n```\nผู้ใช้ install CLI นี้เป็น dependency ปกติ (semantics ของ `npm install --omit=dev` ใช้ได้) จะเกิดอะไรขึ้นเมื่อพวกเขารัน `my-cli`?',
+    options: [
+      'ทำงานปกติ — devDependencies ยังใช้ได้กับ bin script ของ package ตัวเอง',
+      'Throw Cannot find module \'commander\' เพราะ devDependencies ไม่ถูกติดตั้งให้ผู้ใช้ของ package',
+      'npm ย้าย commander ไปที่ dependencies อัตโนมัติตอน publish',
+      'ทำงานได้ แต่แค่ครั้งแรกที่รัน CLI เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'commander ถูกใช้ตอน runtime โดยตัว CLI เอง จึงควรอยู่ใน "dependencies" เพราะ devDependencies ถูกข้ามตอน install แบบ production ผู้ใช้ที่รัน CLI นี้ตามปกติจะไม่มี commander ติดตั้งเลย',
+  },
+  {
+    q: 'Publish pipeline ใกล้ Dockerfile ตัวหนึ่งรัน `npm version patch` แล้วตามด้วย `npm publish` ทันที ข้าม `npm pack --dry-run` กับ `prepublishOnly` ไปเลย สิ่งนี้เสียการป้องกันจริงอะไรไป?',
+    options: [
+      'ไม่มีเลย — npm publish ทำ check ทุกอย่างที่ pack --dry-run กับ prepublishOnly จะทำอยู่แล้ว',
+      'โอกาสจับ build ที่พังหรือไฟล์ secret ที่หลุดเข้ามาก่อนการอัปโหลด (ที่แทบจะถาวร)',
+      'มันมีผลแค่กับเลข version ที่ publish ไม่ใช่เนื้อหาไฟล์',
+      'npm ปฏิเสธ publish โดยไม่มี prepublishOnly ระบุไว้ pipeline นี้จึง fail อยู่แล้ว',
+    ],
+    answer: 1,
+    explain: 'prepublishOnly คือสิ่งที่รัน build/test ของคุณอัตโนมัติก่อน publish และ npm pack --dry-run คือการดูฟรีครั้งเดียวที่เนื้อหา tarball จริงก่อนที่มันจะกลายเป็นถาวร ข้ามทั้งสองอย่างหมายความว่าจุดแรกที่ความผิดพลาดถูกจับได้คือหลัง publish (ที่แก้ไม่ได้จริงๆ)',
   },
 ];
 

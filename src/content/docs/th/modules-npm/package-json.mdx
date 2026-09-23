@@ -5,9 +5,11 @@ sidebar:
   order: 2
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Manifest ของโปรเจกต์
 
@@ -57,6 +59,41 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ฟิลด์ `exports` มีความสำคัญกว่า `main` ใน Node.js สมัยใหม่ มันให้คุณเปิด subpath ได้หลายเส้นทาง และส่งไฟล์ต่างกันให้ผู้ใช้ ESM กับ CJS จาก package เดียวกัน
 
+### `exports` ชนะ `main` — พิสูจน์ ไม่ใช่แค่กล่าวอ้าง
+
+Demo ด้านล่างสร้าง fake package จริงใน `node_modules/` ให้ `main` ชี้ไปไฟล์หนึ่งและ `exports` ชี้ไปอีกไฟล์หนึ่ง แล้วให้ Node resolve มัน:
+
+export const mainVsExportsCode = `
+const fs = require('node:fs');
+const path = require('node:path');
+const { createRequire } = require('node:module');
+
+const dir = path.join(__dirname, 'node_modules', 'demo-pkg');
+fs.mkdirSync(dir, { recursive: true });
+fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+  name: 'demo-pkg',
+  version: '1.0.0',
+  main: './legacy.cjs',
+  exports: './modern.cjs',
+}, null, 2));
+fs.writeFileSync(path.join(dir, 'legacy.cjs'), "module.exports = { via: 'main' };\\n");
+fs.writeFileSync(path.join(dir, 'modern.cjs'), "module.exports = { via: 'exports' };\\n");
+
+const requireLocal = createRequire(__filename);
+const resolved = requireLocal.resolve('demo-pkg');
+console.log('require.resolve picked:', path.relative(__dirname, resolved));
+console.log('via:', requireLocal('demo-pkg').via);
+
+fs.rmSync(path.join(__dirname, 'node_modules'), { recursive: true, force: true });
+`;
+
+export const mainVsExportsOut = `require.resolve picked: node_modules/demo-pkg/modern.cjs
+via: exports`;
+
+<NodeRunner client:visible code={mainVsExportsCode} node expected={mainVsExportsOut} />
+
+ทั้งสองฟิลด์ valid ทางเทคนิค — ไม่มี warning เรื่อง mismatch เลย — แต่ `exports` ชนะทุกครั้งที่มันมีอยู่ นี่คือ failure mode เดียวกับบั๊ก "`main` ยังชี้ไปที่ `src/index.ts`": การอัปเดต `package.json` ที่ AI สร้างเพิ่ม `exports` map สมัยใหม่แต่ลืมอัปเดต `main` ให้ชี้ไปที่อะไรที่ ship ได้ด้วย และในทางกลับกัน
+
 ## Semver ranges
 
 npm ใช้ [Semantic Versioning](https://semver.org) สำหรับ dependency range ไวยากรณ์ range ใน `package.json` ควบคุมว่าเวอร์ชันไหนที่ `npm install` ถือว่า compatible
@@ -82,6 +119,35 @@ npm ใช้ [Semantic Versioning](https://semver.org) สำหรับ depen
 ```
 
 ในทางปฏิบัติ `^` คือตัวเลือกที่ใช้บ่อยที่สุดสำหรับ dependencies: มันทำให้คุณได้ release ล่าสุดที่ compatible อยู่เสมอ พร้อมป้องกัน breaking change ที่มาจาก major version ใหม่
+
+### `^0.x` คือกับดัก: caret หมายถึง patch-only เมื่อต่ำกว่า 1.0.0
+
+npm semver spec ถือว่า major version `0.x` เป็น unstable โดยตัวมันเอง ดังนั้น `^` บนเวอร์ชัน `0.x` จะอนุญาตเฉพาะ **patch** bump เท่านั้น — ไม่ใช่ minor นี่คือสิ่งตรงข้ามกับที่คนส่วนใหญ่คิดว่า `^` หมายถึง และพลาดดูง่ายเมื่อกวาดตาดู `package.json` ที่ผสม `^1.x` กับ `^0.x`
+
+`npx semver` พิสูจน์ได้ — ป้อน range กับรายการเวอร์ชัน มันจะพิมพ์เฉพาะตัวที่ range อนุญาต:
+
+```bash
+# ^0.3.1 on a *pre-1.0* package: only 0.3.x patches pass, 0.4.0 does NOT
+npx semver -r "^0.3.1" 0.3.1 0.3.9 0.4.0
+```
+
+```text
+0.3.1
+0.3.9
+```
+
+เทียบกับ `^1.2.3` ที่ caret ตัวเดียวกันอนุญาต minor ถัดไป:
+
+```bash
+npx semver -r "^1.2.3" 1.2.3 1.9.9 2.0.0
+```
+
+```text
+1.2.3
+1.9.9
+```
+
+`0.4.0` ถูกกรองออกจากรายการแรกอย่างเงียบๆ — `npm install` บน `"^0.3.1"` จะไม่มีวันขยับไปที่ `0.4.0` แม้ว่ามันจะดูเหมือน minor bump ปกติ ถ้า package ที่คุณ depend อยู่ยังอยู่ที่ `0.x` ให้ถือว่าทุก release เป็น breaking change ที่เป็นไปได้ โดยไม่สนใจว่า caret ใน `package.json` ของคุณสื่ออะไร
 
 ## การสร้าง package.json ด้วย npm init
 
@@ -118,6 +184,105 @@ npm init -y
 การเพิ่ม `"type": "module"` ใน `package.json` เปลี่ยนทั้ง package ให้เป็น ESM: ไฟล์ `.js` ทุกไฟล์ใน package ถือเป็น ES module จากนั้นคุณใช้ top-level `import`/`export` ได้โดยไม่ต้องเปลี่ยนนามสกุลเป็น `.mjs` หากต้องการไฟล์ CJS เพียงไฟล์เดียวใน ESM package ให้ตั้งนามสกุล `.cjs` แล้ว Node จะถือว่าเป็น CommonJS โดยไม่สนใจฟิลด์ `"type"`
 </Callout>
 
+## `sideEffects` และ tree-shaking
+
+Bundler (webpack, esbuild, Rollup, Vite) สามารถตัด export ที่ไม่ได้ใช้ออกจาก bundle สุดท้ายได้ — แต่ต้องพิสูจน์ได้ว่าการ import โมดูลหนึ่งแล้วไม่ใช้ export ของมันเลยไม่มีผลข้างเคียงที่สังเกตได้ โมดูลที่รันโค้ดตอน import เพื่อ side effect ล้วนๆ (register polyfill, patch global, inject CSS) จะทำลายการพิสูจน์นั้น เว้นแต่จะบอก bundler อย่างชัดเจน
+
+```json
+{
+  "name": "my-library",
+  "sideEffects": false
+}
+```
+
+`"sideEffects": false` คือคำสัญญาต่อทุก bundler ว่า "ทุกไฟล์ใน package นี้ตัดทิ้งได้อย่างปลอดภัยถ้าไม่มีอะไร import จากมัน" ถ้าคำสัญญานั้นเป็นเท็จ — แม้แค่ไฟล์เดียว — bundler สามารถลบโค้ดที่ผู้ใช้พึ่งพาอยู่จริงอย่างเงียบๆ (เช่น polyfill ที่รันตอน import) ทำให้เกิดบั๊กที่โผล่เฉพาะใน production build ที่ bundle แล้ว ไม่เคยเกิดตอน development หรือรันตรงๆ ด้วย Node รูปแบบที่ปลอดภัยและแม่นยำกว่าคือระบุไฟล์ที่ไม่ side-effect-free ตรงๆ:
+
+```json
+{
+  "sideEffects": ["./src/polyfills.js", "*.css"]
+}
+```
+
+Node เองไม่อ่าน `"sideEffects"` เลย — มันเป็น signal เฉพาะสำหรับ bundler เท่านั้น ตั้งค่าผิดไม่มีทางทำให้ `node app.js` พัง มันจะพังเฉพาะ bundled build เท่านั้น ซึ่งเป็นเหตุผลว่าทำไมบั๊กนี้ ship ออกไปโดยไม่มีใครสังเกตได้ง่าย
+
+## `engines`, `.nvmrc`, และ `engine-strict`
+
+`"engines"` ประกาศว่า package รองรับ Node (และ npm) เวอร์ชันไหนบ้าง ด้วยตัวมันเองมันเป็นแค่เอกสาร — npm พิมพ์ warning เมื่อไม่ตรง แต่ยังติดตั้งต่อ:
+
+```json
+{
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+```
+
+สองอย่างนี้ทำให้มัน enforced แทนที่จะเป็นแค่ advisory:
+
+- **`.nvmrc`** — ไฟล์ text ธรรมดา (มีแค่ version string เช่น `24.13.0`) ที่ `nvm use` อ่านเพื่อสลับ Node เวอร์ชันที่ active มันมีผลแค่กับ shell ของ developer เท่านั้น ไม่มีผลต่อ `npm install` หรือ CI เว้นแต่ script จะรัน `nvm use` เอง
+- **`engine-strict=true` ใน `.npmrc`** — เปลี่ยน warning ของ `"engines"` ให้เป็น install failure จริง
+
+```bash
+# .npmrc
+engine-strict=true
+```
+
+เมื่อมีทั้งสองอย่าง การติดตั้งบน Node เวอร์ชันที่ไม่ compatible จะ fail อย่างชัดเจนแทนที่จะติดตั้งต่อแล้วพังตอน runtime:
+
+```bash
+# package.json: "engines": { "node": ">=99.0.0" }  (deliberately impossible)
+# .npmrc: engine-strict=true
+npm install
+```
+
+```text
+npm error code EBADENGINE
+npm error engine Unsupported engine
+npm error engine Not compatible with your version of node/npm: engines-demo@1.0.0
+npm error notsup Not compatible with your version of node/npm: engines-demo@1.0.0
+npm error notsup Required: {"node":">=99.0.0"}
+npm error notsup Actual:   {"node":"v24.13.0","npm":"11.18.0"}
+```
+
+ถ้าไม่มี `engine-strict` mismatch เดียวกันเป๊ะจะพิมพ์แค่ warning แล้วติดตั้งต่อ — ความล้มเหลวจะโผล่มาทีหลัง เป็น runtime error ที่งงๆ บนอะไรก็ตามที่ syntax หรือ API ของ engine ใหม่ต้องการ
+
+## Mental Model
+
+ฟิลด์ใน `package.json` แบ่งเป็นสองประเภทที่ต่างกันมาก: บางฟิลด์**ถูกอ่านโดย Node หรือ npm ตอน install/run time** (`type`, `exports`, `main`, `engines` เมื่อมี `engine-strict`, `overrides`) และบังคับผลลัพธ์บางอย่างจริง; บางฟิลด์**ถูกอ่านโดย tooling ภายนอกเท่านั้น** (`sideEffects` โดย bundler, `browser` โดย bundler, `scripts` ส่วนใหญ่โดยอะไรก็ตามที่คุณพิมพ์หลัง `npm run`) แค่อ่านชื่อฟิลด์ไม่พอที่จะรู้ว่าตั้งผิดจะทำให้ `node app.js` พัง จะพังแค่ bundled build หรือไม่พังเลยจนกว่าคนจะอ่านผิด
+
+## Trade-offs
+
+| ตัวเลือก | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| ใช้ `^` range ทุกที่ | ได้ bug-fix และ feature update อัตโนมัติโดยไม่ต้องแตะ `package.json` | บน dependency ที่เป็น `0.x`, `^` แคบลงเหลือ patch-only อย่างเงียบๆ — อ่านผิดง่ายว่า "เหมือน `^` ทั่วไป" |
+| ใช้ `~` range | ควบคุมแน่นกว่า, การเปลี่ยนแปลง behavior ที่ไม่คาดคิดน้อยกว่า | พลาด bug fix ที่มาใน minor release; ต้อง `npm update` มือมากกว่า |
+| `"sideEffects": false` | Bundle เล็กลงจาก tree-shaking ที่ก้าวร้าวขึ้น | ผิดถ้า package มีไฟล์ side-effecting แม้แค่ไฟล์เดียว — บั๊กโผล่เฉพาะใน bundled build |
+| `engine-strict=true` | Install fail ชัดเจนบน Node เวอร์ชันที่ไม่ compatible แทนที่จะพังตอน runtime | เพิ่ม friction ให้คนที่ใช้ Node เวอร์ชัน "ผิด" รวมถึง CI image ที่ต้อง bump ตามกัน |
+
+## Common Misconceptions
+
+- **"`^` หมายถึง minor และ patch bump ปลอดภัยเสมอ"** ปลอดภัยแค่เหนือ `1.0.0` เท่านั้น บนเวอร์ชัน `0.x`, `^` อนุญาตแค่ patch bump — npm ถือว่าทั้งสาย `0.x` เป็น unstable โดยนิยาม
+- **"`sideEffects: false` เป็นแค่ hint ที่ bundler อาจใช้"** มันเป็นคำสัญญาที่หนักแน่น bundler ที่เชื่อมันจะลบไฟล์ที่มันคิดว่าไม่ได้ใช้ แม้ไฟล์นั้นจะรัน side effect ที่จำเป็นอยู่ตอน import จริงๆ
+- **"`engines` block การติดตั้งบน Node เวอร์ชันที่ไม่ compatible โดยค่าเริ่มต้น"** โดยค่าเริ่มต้นมันเป็นแค่ advisory — warning ไม่ใช่ failure มันจะกลายเป็น hard failure ก็ต่อเมื่อมี `engine-strict=true` ใน `.npmrc`
+
+## อ่านโค้ดที่ AI เขียน
+
+Training data ปฏิบัติกับ range `^0.x` เหมือนกับ `^1.x` ทุกประการ — special case สำหรับเวอร์ชัน pre-1.0 เป็นช่องว่างจริงในสัญชาตญาณ semver ของคนส่วนใหญ่ (และของโมเดลส่วนใหญ่) ไม่ใช่ typo มันโผล่ใน diff ของ `package.json` ที่ AI generate เป็น range ที่ดูปกติทุกประการแต่ผิดอย่างเงียบๆ
+
+<SpotTheBug code={`{
+  "name": "my-cli-tool",
+  "version": "1.0.0",
+  "dependencies": {
+    "fast-json-schema": "^0.3.1"
+  }
+}`}>
+สิ่งนี้ดูเหมือน caret range ปกติ แต่ `fast-json-schema` ยังอยู่ที่ major `0.x` สำหรับ dependency ที่เป็น `0.x`, `^` อนุญาตแค่ **patch** bump (`0.3.x`) — มันจะไม่มีวันขยับไปที่ `0.4.0` แม้ว่ามันจะดูเหมือน minor update ปกติ ถ้าเจตนาคือ "0.3.x หรือ 0.4.x ก็ใช้ได้" range ที่ถูกต้องคือ `~0.3.1 || ~0.4.0` หรือ pin เวอร์ชันตรงๆ แล้ว bump เองอย่างตั้งใจ เพราะ package ที่ยังไม่ถึง 1.0 ไม่ได้สัญญาความ compatible ข้าม minor version เลย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ฟิลด์ `package.json` แบ่งเป็นฟิลด์ที่ Node/npm enforce จริง (`exports` ชนะ `main`, `engine-strict` ทำให้ `engines` เป็น hard failure) กับฟิลด์ที่ tooling ภายนอกอ่านเท่านั้น (`sideEffects` สำหรับ bundler) — และ `^` บนเวอร์ชัน `0.x` หมายถึง patch-only ไม่ใช่ "minor และ patch" เหมือนที่อื่น
+</Callout>
+
 export const packageJsonQuiz = [
   {
     q: 'ฟิลด์ใดใน package.json ที่แนะนำให้ใช้แทน "main" ใน Node.js เวอร์ชันใหม่ สำหรับการควบคุมสิ่งที่ package เปิดเผย?',
@@ -128,6 +293,7 @@ export const packageJsonQuiz = [
       '"entry"',
     ],
     answer: 2,
+    explain: '`"exports"` คือ entry-point map สมัยใหม่; มันชนะ `"main"` ทุกครั้งที่มีทั้งคู่ และเป็นฟิลด์เดียวที่จำกัดได้ว่า subpath ไหนบ้างที่ผู้ใช้ import ได้',
   },
   {
     q: 'คุณต้องการอนุญาตเฉพาะการอัปเดต patch-level ของ dependency โดยไม่ให้มี minor หรือ major bump ควรใช้ semver range prefix ใด?',
@@ -138,6 +304,7 @@ export const packageJsonQuiz = [
       '=',
     ],
     answer: 1,
+    explain: '`~1.2.3` อนุญาตเฉพาะ patch release `1.2.x` เท่านั้น ในขณะที่ `^1.2.3` จะอนุญาต minor bump อย่าง `1.9.0` เพิ่มด้วย',
   },
   {
     q: '"npm init -y" ทำอะไร?',
@@ -148,6 +315,29 @@ export const packageJsonQuiz = [
       'เผยแพร่ package ไปยัง npm registry',
     ],
     answer: 2,
+    explain: 'Flag `-y` (หรือ `--yes`) ข้ามทุก prompt และเขียน package.json แบบ minimal ด้วยค่า default ของ npm ทันที',
+  },
+  {
+    q: '```json\n{\n  \"name\": \"demo-pkg\",\n  \"main\": \"./legacy.cjs\",\n  \"exports\": \"./modern.cjs\"\n}\n```\nผู้ใช้รัน `require(\'demo-pkg\')` การ import จะ resolve ไปที่ไฟล์ไหนจริงๆ?',
+    options: [
+      './legacy.cjs เพราะ "main" ถูกตรวจก่อน',
+      './modern.cjs เพราะ "exports" ชนะ "main" เสมอเมื่อมีทั้งคู่',
+      'Node throw เพราะมีทั้งสองฟิลด์พร้อมกันถือว่า invalid',
+      'ไฟล์ไหนก็ได้ที่ถูกแก้ไขล่าสุดบน disk',
+    ],
+    answer: 1,
+    explain: '`"exports"` เป็น authoritative ทุกครั้งที่มันมีอยู่ — `"main"` ถูกใช้เป็น fallback เฉพาะ package ที่ไม่มี `"exports"` เลยเท่านั้น ในที่นี้มันคือ dead code ที่ถูกเพิกเฉยอย่างเงียบๆ',
+  },
+  {
+    q: 'Dependency ตัวหนึ่งยังอยู่ที่เวอร์ชัน 0.x range ใน package.json คือ `"^0.3.1"` npm ถือว่าเวอร์ชันไหนต่อไปนี้ compatible สำหรับ `npm install`?',
+    options: [
+      '0.3.9 และ 0.4.0 — caret อนุญาต minor และ patch bump เหมือน range อื่นๆ',
+      'เฉพาะ 0.3.9 — caret บนเวอร์ชัน 0.x อนุญาตแค่ patch bump ไม่ใช่ minor bump ไปที่ 0.4.0',
+      'เฉพาะเวอร์ชันที่มากกว่าหรือเท่ากับ 1.0.0',
+      'เวอร์ชันใดก็ได้ เพราะ range 0.x ถือเป็น wildcard',
+    ],
+    answer: 1,
+    explain: 'ต่ำกว่า 1.0.0 npm ถือว่าเลข 0 นำหน้าเป็น unstable โดยตัวมันเอง: `^0.3.1` ทำงานเหมือน `~0.3.1` และอนุญาตแค่ patch release `0.3.x` เท่านั้น ไม่มีวัน bump ไปที่ `0.4.0`',
   },
 ];
 

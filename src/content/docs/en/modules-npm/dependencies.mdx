@@ -5,9 +5,12 @@ sidebar:
   order: 4
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 npm separates concerns by dependency type. Rather than dumping every package into a single bucket, `package.json` distinguishes between packages your application needs at runtime, tools you only need during development, and packages that the consumer of your library must supply themselves. Getting these categories right keeps production installs lean and avoids dependency conflicts downstream.
 
@@ -81,6 +84,32 @@ A minimal lockfile entry looks like:
 
 Always commit `package-lock.json` to version control. Without it, `npm install` may resolve to newer patch or minor versions, silently breaking reproducible builds.
 
+Every lockfile entry also carries an `integrity` field — a base64-encoded hash of the exact tarball bytes npm resolved. This is what makes `npm ci` a security boundary, not just a version pin: a re-download that produces different bytes (a compromised registry, a corrupted transfer, a tampered mirror) fails the hash check instead of silently installing.
+
+export const integrityCode = `
+const crypto = require('node:crypto');
+
+function integrityOf(content) {
+  return 'sha512-' + crypto.createHash('sha512').update(content).digest('base64');
+}
+
+// A lockfile entry pins the exact integrity hash npm recorded at install time.
+const lockedIntegrity = integrityOf('demo-package@1.0.0 tarball bytes');
+
+// A later "npm ci" re-downloads the tarball and re-hashes it before trusting it.
+const redownloaded = integrityOf('demo-package@1.0.0 tarball bytes');
+console.log('matches lockfile:', redownloaded === lockedIntegrity);
+
+// A tampered or corrupted tarball hashes differently — npm ci fails closed.
+const tampered = integrityOf('demo-package@1.0.0 tarball bytes (modified)');
+console.log('tampered matches lockfile:', tampered === lockedIntegrity);
+`;
+
+export const integrityOut = `matches lockfile: true
+tampered matches lockfile: false`;
+
+<NodeRunner client:visible code={integrityCode} node expected={integrityOut} />
+
 ## `npm install` vs `npm ci`
 
 These two commands serve different purposes:
@@ -105,6 +134,198 @@ npm ci
 `package-lock.json` is the source of truth for reproducible installs. Committing it ensures every environment — developer laptops, staging, production — installs the exact same tree. In CI pipelines use `npm ci` instead of `npm install`: it validates that the lockfile matches `package.json` and fails loudly if they diverge, catching accidental drift before it reaches production.
 </Callout>
 
+`npm ci`'s "fails loudly" claim is not hypothetical — this is a real transcript. A project installs a lockfile, then `package.json` drifts (a dependency added by hand without re-running `npm install`):
+
+```bash
+npm ci
+```
+
+```text
+npm error code EUSAGE
+npm error
+npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.
+npm error
+npm error Missing: is-odd@3.0.1 from lock file
+npm error Missing: is-number@6.0.0 from lock file
+```
+
+It does not attempt to reconcile or partially install — it refuses outright. This is exactly the failure mode that should catch a stale lockfile in CI before a bad dependency tree ever reaches production.
+
+### The Dockerfile anti-pattern
+
+The single most common place this distinction is gotten wrong is a Dockerfile. Using `npm install` in an image build defeats the entire point of a lockfile — every image build can resolve slightly different transitive versions, even from an identical `package.json`:
+
+```text
+# Anti-pattern: npm install in a Docker image
+FROM node:24-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm install --omit=dev
+COPY . .
+CMD ["node", "server.js"]
+```
+
+```text
+# Correct: npm ci pins the exact tree the lockfile recorded
+FROM node:24-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY . .
+CMD ["node", "server.js"]
+```
+
+`npm ci --omit=dev` also deletes `node_modules` before installing, so a stale layer from a previous build can never leak dev-only packages (or worse, a different version of a real dependency) into the production image. `npm install` in a Dockerfile is a genuine bug, not a style preference: two builds from the identical source tree, days apart, can produce different, unreproducible images.
+
+## `overrides`
+
+`overrides` forces a specific version for a dependency **anywhere it appears in the tree**, including nested inside a dependency you do not control — the tool for a transitive package pinned to a vulnerable exact version that its own maintainer has not bumped.
+
+```json
+{
+  "overrides": {
+    "minimatch": "^3.1.2"
+  }
+}
+```
+
+Real before/after, captured from a project whose only direct dependency is a package that itself pins an old, vulnerable `minimatch` exactly:
+
+```bash
+npm ls minimatch
+```
+
+```text
+overrides-demo@1.0.0 /path/to/overrides-demo
+└─┬ outer-lib@1.0.0 -> ./outer
+  └── minimatch@3.0.4
+```
+
+```json
+{
+  "overrides": { "minimatch": "^3.1.2" }
+}
+```
+
+```bash
+npm install && npm ls minimatch
+```
+
+```text
+overrides-demo@1.0.0 /path/to/overrides-demo
+└─┬ outer-lib@1.0.0 -> ./outer
+  └── minimatch@3.1.5
+```
+
+The transitive `minimatch` moved from `3.0.4` to `3.1.5` without touching `outer-lib` at all. `overrides` cannot force a version that violates the dependency's own peer requirements — npm still checks compatibility — but it is the correct tool for exactly this situation, where waiting for every maintainer up the chain to publish a bump is not an option.
+
+## `npm audit`
+
+`npm audit` checks installed dependencies against the npm security advisory database and reports known vulnerabilities, with severity and a suggested fix. Real output on a project deliberately pinned to an old `minimatch`:
+
+```bash
+npm audit
+```
+
+```text
+# npm audit report
+
+minimatch  <=3.1.3
+Severity: high
+minimatch ReDoS vulnerability - https://github.com/advisories/GHSA-f8q6-p94x-37v3
+minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern - https://github.com/advisories/GHSA-3ppc-4f35-3m26
+minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments - https://github.com/advisories/GHSA-7r86-cg39-jmmj
+minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regular expressions - https://github.com/advisories/GHSA-23c5-xmqv-rm74
+fix available via `npm audit fix --force`
+Will install minimatch@3.1.5, which is outside the stated dependency range
+node_modules/minimatch
+
+1 high severity vulnerability
+```
+
+`npm audit fix` applies fixes that stay within existing semver ranges; `npm audit fix --force` will install versions **outside** the declared range (as flagged above) to close the gap, which can be a breaking change — always review before running it in CI unattended.
+
+## Workspaces
+
+Workspaces let one root `package.json` manage multiple packages in a single repository (a monorepo), symlinking cross-package dependencies into each package's `node_modules` instead of publishing and reinstalling them on every change.
+
+```json
+{
+  "name": "my-monorepo",
+  "private": true,
+  "workspaces": ["packages/*"]
+}
+```
+
+<Mermaid code={dependencyGraphDiagram} title="A two-package workspace, symlinked instead of published" />
+
+export const dependencyGraphDiagram = `flowchart TD
+  Root["root package.json (workspaces: packages/*)"] --> Core["packages/core (@ws-demo/core)"]
+  Root --> Cli["packages/cli (@ws-demo/cli)"]
+  Cli -->|"depends on ws-demo/core (workspace range: *)"| CoreLink["node_modules/@ws-demo/core -> symlink to packages/core"]
+  CoreLink -.->|"resolves to"| Core`;
+
+Real output from a two-package workspace (`packages/core`, `packages/cli`, where `cli` depends on `core`):
+
+```bash
+npm ls --all
+```
+
+```text
+ws-demo@ /path/to/ws-demo
+├─┬ @ws-demo/cli@1.0.0 -> ./packages/cli
+│ └── @ws-demo/core@1.0.0 deduped -> ./packages/core
+└── @ws-demo/core@1.0.0 -> ./packages/core
+```
+
+`-w`/`--workspace` scopes a command to one package without `cd`-ing into it:
+
+```bash
+npm -w @ws-demo/core exec -- node -e "console.log(require('./index.js').add(2,3))"
+```
+
+```text
+5
+```
+
+No tarball, no publish step, no version bump — `@ws-demo/cli` sees whatever is currently on disk in `packages/core` through the symlink, which is exactly what makes workspaces fast for iterating on multiple packages together.
+
+## Mental Model
+
+Every dependency-management command in this lesson answers one question: **"what exact bytes am I about to run, and can I trust where they came from?"** A lockfile answers it for one install (integrity hashes). `npm ci` answers it for a whole environment (fail if the lockfile and manifest disagree, wipe `node_modules` first). `overrides` answers it when a transitive dependency you don't control ships something you need to force anyway. `npm audit` answers it against a public vulnerability database. None of these are about "making dependencies work" — they are all about making sure what actually got installed matches what you believe was installed.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `npm ci` in CI/Docker | Reproducible, fast (no resolution step), fails loudly on drift | Cannot be used to add or update a dependency — that still requires `npm install` locally first |
+| `overrides` for a transitive pin | Fixes a vulnerable/broken nested dependency without forking or waiting on a maintainer | Bypasses the maintainer's own tested version — can introduce incompatibility the override doesn't know about |
+| `npm audit fix --force` | Closes vulnerabilities npm's default fix cannot reach | Installs out-of-range versions automatically — a real behavior change, not just a patch |
+| Workspaces | Fast local iteration across packages, no publish-and-reinstall loop | Adds monorepo tooling complexity; a workspace-only bug can be invisible until the packages are actually published separately |
+
+## Common Misconceptions
+
+- **"`npm ci` is just a faster `npm install`."** It is a different contract: it refuses to run at all if `package.json` and the lockfile disagree, and it always deletes `node_modules` first. Speed is a side effect, not the point.
+- **"`overrides` only affects your own direct dependencies."** It reaches into the entire tree, including packages nested many levels deep that you never listed in your own `package.json`.
+- **"`npm audit fix` and `npm audit fix --force` do the same thing, just with more force."** The plain version only applies fixes within your existing semver ranges. `--force` will jump to a version outside your declared range — a real upgrade, with real potential for breaking changes.
+
+## Reading AI-generated code
+
+Generated Dockerfiles reach for `npm install` far more often than `npm ci`, because `npm install` is the command that appears in almost every tutorial and README — `npm ci` is CI-specific knowledge that shows up far less in generic training data.
+
+<SpotTheBug code={`FROM node:24-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm install
+COPY . .
+CMD ["node", "server.js"]`}>
+`npm install` inside a Docker image build can resolve a different dependency tree than the one recorded in `package-lock.json`, even from the identical `package.json` — the lockfile is present but never enforced. Two builds of the same commit, days apart, can silently ship different transitive versions. The fix is `RUN npm ci --omit=dev`: it installs exactly what the lockfile specifies, fails the build if the lockfile is out of sync, and skips `devDependencies` that have no place in a production image.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`npm install` resolves and can drift; `npm ci` installs exactly what the lockfile says and fails loudly otherwise — use `npm ci` anywhere reproducibility matters (CI, Docker), and reach for `overrides` and `npm audit` when a dependency you don't control needs a version bump it hasn't shipped yet.
+</Callout>
+
 export const dependenciesQuiz = [
   {
     q: 'Which section of package.json should a test framework like Vitest be listed under?',
@@ -115,6 +336,7 @@ export const dependenciesQuiz = [
       'optionalDependencies',
     ],
     answer: 1,
+    explain: 'Test frameworks are needed only while developing and testing, never at runtime in production — the definition of devDependencies.',
   },
   {
     q: 'What is the main purpose of peerDependencies?',
@@ -125,6 +347,7 @@ export const dependenciesQuiz = [
       'To list packages used only in test environments',
     ],
     answer: 1,
+    explain: 'peerDependencies exist for plugins and framework integrations that must share a single instance of a dependency with the consumer, rather than bundling their own separate copy.',
   },
   {
     q: 'What happens when you run `npm ci` and package.json is out of sync with package-lock.json?',
@@ -135,6 +358,29 @@ export const dependenciesQuiz = [
       'npm ci prompts you to choose which file to trust',
     ],
     answer: 2,
+    explain: 'npm ci is intentionally strict: it exits with EUSAGE and refuses to install anything the moment package.json and package-lock.json disagree, rather than trying to reconcile them.',
+  },
+  {
+    q: '```text\nFROM node:24-slim\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm install\nCOPY . .\n```\nWhat is wrong with this Dockerfile, given that package-lock.json is already being copied in?',
+    options: [
+      'Nothing — copying the lockfile in is enough to guarantee a reproducible install',
+      '`npm install` can still resolve a different tree than the lockfile records, even with the lockfile present — it should be `npm ci`',
+      'COPY package.json package-lock.json ./ is invalid Dockerfile syntax',
+      'The WORKDIR instruction is unnecessary and should be removed',
+    ],
+    answer: 1,
+    explain: 'Copying the lockfile in does nothing unless the install command actually enforces it. `npm install` treats the lockfile as a starting point it may update; only `npm ci` fails loudly if it does not match package.json exactly, which is what a reproducible image build requires.',
+  },
+  {
+    q: 'A project depends on outer-lib, which pins an old, vulnerable minimatch@3.0.4 exactly (no range). Which package.json field lets you force minimatch to a patched version everywhere in the tree, without forking or waiting on outer-lib\'s maintainer?',
+    options: [
+      'peerDependencies',
+      'resolutions (this is the only field npm recognises for this)',
+      'overrides',
+      'You cannot do this without modifying outer-lib directly',
+    ],
+    answer: 2,
+    explain: '`overrides` forces a specific version for a dependency anywhere it appears in the tree, including nested inside a package you do not control — exactly this situation.',
   },
 ];
 

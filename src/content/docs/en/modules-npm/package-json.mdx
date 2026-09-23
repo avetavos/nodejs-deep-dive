@@ -5,9 +5,11 @@ sidebar:
   order: 2
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The project manifest
 
@@ -57,6 +59,41 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 The `exports` field takes precedence over `main` in modern Node.js. It lets you expose multiple subpaths and serve different files to ESM and CJS consumers from the same package.
 
+### `exports` wins over `main` — proved, not just claimed
+
+The demo below builds a real fake package under `node_modules/`, giving it a `main` pointing at one file and an `exports` pointing at a different one, then asks Node to resolve it:
+
+export const mainVsExportsCode = `
+const fs = require('node:fs');
+const path = require('node:path');
+const { createRequire } = require('node:module');
+
+const dir = path.join(__dirname, 'node_modules', 'demo-pkg');
+fs.mkdirSync(dir, { recursive: true });
+fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+  name: 'demo-pkg',
+  version: '1.0.0',
+  main: './legacy.cjs',
+  exports: './modern.cjs',
+}, null, 2));
+fs.writeFileSync(path.join(dir, 'legacy.cjs'), "module.exports = { via: 'main' };\\n");
+fs.writeFileSync(path.join(dir, 'modern.cjs'), "module.exports = { via: 'exports' };\\n");
+
+const requireLocal = createRequire(__filename);
+const resolved = requireLocal.resolve('demo-pkg');
+console.log('require.resolve picked:', path.relative(__dirname, resolved));
+console.log('via:', requireLocal('demo-pkg').via);
+
+fs.rmSync(path.join(__dirname, 'node_modules'), { recursive: true, force: true });
+`;
+
+export const mainVsExportsOut = `require.resolve picked: node_modules/demo-pkg/modern.cjs
+via: exports`;
+
+<NodeRunner client:visible code={mainVsExportsCode} node expected={mainVsExportsOut} />
+
+Both fields are technically valid here — nothing warns about the mismatch — but `exports` wins every time it is present. This is exactly the failure mode behind the "`main` still points at `src/index.ts`" bug: an AI-generated `package.json` update adds a modern `exports` map but forgets to also point the legacy `main` field somewhere shippable, and vice versa.
+
 ## Semver ranges
 
 npm uses [Semantic Versioning](https://semver.org) for dependency ranges. The range syntax in `package.json` controls which versions `npm install` considers compatible.
@@ -82,6 +119,35 @@ npm uses [Semantic Versioning](https://semver.org) for dependency ranges. The ra
 ```
 
 In practice, `^` is the most common choice for dependencies: it keeps you on the latest compatible release while protecting against breaking changes introduced by a new major version.
+
+### `^0.x` is a trap: caret means patch-only below 1.0.0
+
+npm's semver spec treats a `0.x` major version as itself unstable, so `^` on a `0.x` version only allows **patch** bumps — not minor ones. This is the opposite of what most people assume `^` means, and it is easy to miss when skimming a `package.json` that mixes `^1.x` and `^0.x` ranges.
+
+`npx semver` proves it — feed it a range and a list of versions, and it prints only the ones the range allows:
+
+```bash
+# ^0.3.1 on a *pre-1.0* package: only 0.3.x patches pass, 0.4.0 does NOT
+npx semver -r "^0.3.1" 0.3.1 0.3.9 0.4.0
+```
+
+```text
+0.3.1
+0.3.9
+```
+
+Compare that with `^1.2.3`, where the same caret allows the next minor:
+
+```bash
+npx semver -r "^1.2.3" 1.2.3 1.9.9 2.0.0
+```
+
+```text
+1.2.3
+1.9.9
+```
+
+`0.4.0` was silently filtered out of the first list — `npm install` on `"^0.3.1"` will never move you to `0.4.0`, even though it looks like a normal minor bump. If a package you depend on is still on `0.x`, treat every release as a potential breaking change regardless of what the caret in your `package.json` implies.
 
 ## Initialising a project
 
@@ -118,6 +184,105 @@ Edit the file directly or use `npm pkg set name="my-library" type="module"` to u
 Adding `"type": "module"` to `package.json` switches the entire package to ESM: every `.js` file in the package is treated as an ES module. You can then use top-level `import`/`export` statements without renaming files to `.mjs`. If you need a single CJS file inside an ESM package, give it the `.cjs` extension and Node will treat it as CommonJS regardless of the `"type"` field.
 </Callout>
 
+## `sideEffects` and tree-shaking
+
+Bundlers (webpack, esbuild, Rollup, Vite) can drop unused exports from the final bundle — but only if they can prove that importing a module and never using its exports has no observable effect. A module that runs code at import time purely for a side effect (registering a polyfill, patching a global, injecting CSS) breaks that proof unless the bundler is told about it explicitly.
+
+```json
+{
+  "name": "my-library",
+  "sideEffects": false
+}
+```
+
+`"sideEffects": false` is a promise to every bundler: "every file in this package is safe to drop if nothing imports from it." If that promise is false — even for one file — the bundler can silently delete code a consumer actually depended on (a polyfill that runs on import, for example), producing a bug that only shows up in the bundled production build, never in development or in Node directly. The safer, more precise form lists exactly which files are not side-effect-free:
+
+```json
+{
+  "sideEffects": ["./src/polyfills.js", "*.css"]
+}
+```
+
+Node itself does not read `"sideEffects"` at all — it is a signal exclusively for bundlers. Getting it wrong never breaks `node app.js`; it only breaks the bundled build, which is exactly why the bug is easy to ship unnoticed.
+
+## `engines`, `.nvmrc`, and `engine-strict`
+
+`"engines"` declares which Node (and optionally npm) versions a package supports. By itself it is only documentation — npm prints a warning on a mismatch but still installs:
+
+```json
+{
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+```
+
+Two things make it enforced instead of advisory:
+
+- **`.nvmrc`** — a plain-text file (just a version string, e.g. `24.13.0`) that `nvm use` reads to switch the active Node version. It only affects a developer's shell; it has no effect on `npm install` or CI unless a script explicitly runs `nvm use`.
+- **`engine-strict=true` in `.npmrc`** — turns the `"engines"` warning into a hard install failure.
+
+```bash
+# .npmrc
+engine-strict=true
+```
+
+With both in place, installing on an incompatible Node version fails loudly instead of installing anyway and breaking at runtime:
+
+```bash
+# package.json: "engines": { "node": ">=99.0.0" }  (deliberately impossible)
+# .npmrc: engine-strict=true
+npm install
+```
+
+```text
+npm error code EBADENGINE
+npm error engine Unsupported engine
+npm error engine Not compatible with your version of node/npm: engines-demo@1.0.0
+npm error notsup Not compatible with your version of node/npm: engines-demo@1.0.0
+npm error notsup Required: {"node":">=99.0.0"}
+npm error notsup Actual:   {"node":"v24.13.0","npm":"11.18.0"}
+```
+
+Without `engine-strict`, that exact same mismatch would print a warning and install anyway — the failure only shows up later, as a confusing runtime error on whatever syntax or API the newer engine required.
+
+## Mental Model
+
+`package.json` fields fall into two very different categories: some are **read by Node or npm at install/run time** (`type`, `exports`, `main`, `engines` with `engine-strict`, `overrides`) and enforce something; others are **read only by external tooling** (`sideEffects` by bundlers, `browser` by bundlers, most of `scripts` by whatever you type after `npm run`). Reading a field's name is not enough to know whether getting it wrong breaks `node app.js`, breaks only a bundled build, or breaks nothing until a human misreads it.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `^` ranges everywhere | Automatic bug-fix and feature updates without touching `package.json` | On a `0.x` dependency, `^` silently narrows to patch-only — easy to misread as "same as any other `^`" |
+| `~` ranges | Tighter control, fewer surprise behavior changes | Misses bug fixes that land in a minor release; more manual `npm update` work |
+| `"sideEffects": false` | Smaller bundles via aggressive tree-shaking | Wrong on a package with even one side-effecting file — the bug only appears in bundled builds |
+| `engine-strict=true` | Install fails loudly on an incompatible Node version instead of breaking at runtime | Adds friction for anyone on the "wrong" Node version, including CI images that need bumping in lockstep |
+
+## Common Misconceptions
+
+- **"`^` always means minor and patch bumps are safe."** Only above `1.0.0`. On a `0.x` version, `^` allows patch bumps only — npm treats the entire `0.x` line as unstable by definition.
+- **"`sideEffects: false` is just a hint bundlers might use."** It is a hard promise. A bundler that trusts it will delete files it believes are unused, even if they actually run needed side effects on import.
+- **"`engines` blocks the install on an incompatible Node version by default."** By default it is advisory only — a warning, not a failure. It only becomes a hard failure with `engine-strict=true` in `.npmrc`.
+
+## Reading AI-generated code
+
+Model training data treats `^0.x` ranges exactly like `^1.x` ranges — the special case for pre-1.0 versions is a genuine gap in most people's (and most models') semver intuition, not a typo. It shows up in generated `package.json` diffs as a range that looks perfectly normal and is quietly wrong.
+
+<SpotTheBug code={`{
+  "name": "my-cli-tool",
+  "version": "1.0.0",
+  "dependencies": {
+    "fast-json-schema": "^0.3.1"
+  }
+}`}>
+This looks like a normal caret range, but `fast-json-schema` is still on a `0.x` major. For a `0.x` dependency, `^` only allows **patch** bumps (`0.3.x`) — it will never move to `0.4.0` even though that looks like a routine minor update. If the intent was "any 0.3.x or 0.4.x is fine," the correct range is `~0.3.1 || ~0.4.0`, or simply pin exact and bump deliberately, since pre-1.0 packages make no compatibility promises across minor versions at all.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`package.json` fields split into ones Node/npm enforce (`exports` beats `main`, `engine-strict` turns `engines` into a hard failure) and ones only external tooling reads (`sideEffects` for bundlers) — and `^` on a `0.x` version means patch-only, not "minor and patch" like it does everywhere else.
+</Callout>
+
 export const packageJsonQuiz = [
   {
     q: 'Which package.json field is recommended over "main" in modern Node.js for controlling what a package exposes?',
@@ -128,6 +293,7 @@ export const packageJsonQuiz = [
       '"entry"',
     ],
     answer: 2,
+    explain: '`"exports"` is the modern entry-point map; it takes precedence over `"main"` whenever both are present, and it is the only field that can restrict which subpaths a consumer is allowed to import.',
   },
   {
     q: 'You want to allow patch-level updates to a dependency but prevent minor or major bumps. Which semver range prefix should you use?',
@@ -138,6 +304,7 @@ export const packageJsonQuiz = [
       '=',
     ],
     answer: 1,
+    explain: '`~1.2.3` allows only `1.2.x` patch releases. `^1.2.3` would additionally allow minor bumps like `1.9.0`.',
   },
   {
     q: 'What does "npm init -y" do?',
@@ -148,6 +315,29 @@ export const packageJsonQuiz = [
       'Publishes the package to the npm registry',
     ],
     answer: 2,
+    explain: 'The `-y` (or `--yes`) flag skips every prompt and writes a minimal package.json using npm\'s defaults immediately.',
+  },
+  {
+    q: '```json\n{\n  \"name\": \"demo-pkg\",\n  \"main\": \"./legacy.cjs\",\n  \"exports\": \"./modern.cjs\"\n}\n```\nA consumer runs `require(\'demo-pkg\')`. Which file does the import actually resolve to?',
+    options: [
+      './legacy.cjs, because "main" is checked first',
+      './modern.cjs, because "exports" always takes precedence over "main" when both are present',
+      'Node throws, because having both fields is invalid',
+      'Whichever file was modified more recently on disk',
+    ],
+    answer: 1,
+    explain: '`"exports"` is authoritative whenever it exists — `"main"` is only consulted as a fallback for packages that have no `"exports"` field at all. Here it is dead code, silently ignored.',
+  },
+  {
+    q: 'A dependency is still on version 0.x. Its package.json range is `"^0.3.1"`. Which of these versions does npm consider compatible for `npm install`?',
+    options: [
+      '0.3.9 and 0.4.0 — caret allows minor and patch bumps, same as any other range',
+      'Only 0.3.9 — caret on a 0.x version allows patch bumps only, not the minor bump to 0.4.0',
+      'Only versions greater than or equal to 1.0.0',
+      'Any version, because 0.x ranges are treated as wildcards',
+    ],
+    answer: 1,
+    explain: 'Below 1.0.0, npm treats the leading zero as itself unstable: `^0.3.1` behaves like `~0.3.1` and only allows `0.3.x` patch releases, never a bump to `0.4.0`.',
   },
 ];
 

@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Two module systems, one ecosystem
 
@@ -47,10 +48,93 @@ console.log('path.sep:', path.sep);
 console.log('Joined path:', path.join('src', 'content', 'index.mdx'));
 `;
 
-<NodeRunner client:visible code={indexDemoCode} node />
+export const indexDemoOut = `path.sep: /
+Joined path: src/content/index.mdx`;
+
+<NodeRunner client:visible code={indexDemoCode} node expected={indexDemoOut} />
 
 <Callout title="Two module systems">
 Node supports both CommonJS (`require`) and ESM (`import`). A package's `"type"` field in `package.json` controls the default: `"type": "module"` makes `.js` files ESM; `"type": "commonjs"` (or no `"type"` field) keeps the CommonJS default. You can always override per-file with `.mjs` (ESM) or `.cjs` (CJS) extensions.
+</Callout>
+
+## Package scope: which package.json controls a file
+
+The `"type"` field is not a project-wide switch — it is scoped to the nearest `package.json` **above** the file being loaded. Node walks up from the file's own directory until it finds one. A subfolder with its own `package.json` creates a new boundary: everything below it obeys the new file's `"type"`, not the one further up the tree. A dependency in `node_modules` is a separate boundary too — your own `"type"` never reaches into a package you installed.
+
+The demo below writes the exact same source text into two folders that differ only in their `package.json`'s `"type"`, then loads both. The source contains no `import`/`export`/`require` syntax at all — just `typeof module`, which is only defined inside a CommonJS module wrapper — so any difference in output comes entirely from the governing `package.json`, not from the code itself.
+
+export const scopeDemoCode = `
+const fs = require('node:fs');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+
+const cjsDir = path.join(__dirname, 'scope-cjs');
+const esmDir = path.join(__dirname, 'scope-esm');
+fs.mkdirSync(cjsDir, { recursive: true });
+fs.mkdirSync(esmDir, { recursive: true });
+
+// The exact same source text, dropped into two different package scopes.
+const SAME_SOURCE = "console.log(typeof module === 'undefined' ? 'ESM (no module global)' : 'CJS (module global present)');\\n";
+
+fs.writeFileSync(path.join(cjsDir, 'package.json'), JSON.stringify({ type: 'commonjs' }));
+fs.writeFileSync(path.join(cjsDir, 'probe.js'), SAME_SOURCE);
+fs.writeFileSync(path.join(esmDir, 'package.json'), JSON.stringify({ type: 'module' }));
+fs.writeFileSync(path.join(esmDir, 'probe.js'), SAME_SOURCE);
+
+(async () => {
+  try {
+    console.log('probe.js under { "type": "commonjs" }:');
+    await import(pathToFileURL(path.join(cjsDir, 'probe.js')).href);
+
+    console.log('identical probe.js under { "type": "module" }:');
+    await import(pathToFileURL(path.join(esmDir, 'probe.js')).href);
+  } finally {
+    fs.rmSync(cjsDir, { recursive: true, force: true });
+    fs.rmSync(esmDir, { recursive: true, force: true });
+  }
+})();
+`;
+
+export const scopeDemoOut = `probe.js under { "type": "commonjs" }:
+CJS (module global present)
+identical probe.js under { "type": "module" }:
+ESM (no module global)`;
+
+<NodeRunner client:visible code={scopeDemoCode} node expected={scopeDemoOut} />
+
+## Mental Model
+
+A file's module system is not a property of the file — it is a property of the folder it lives in. Node never asks "what does this file look like"; it asks "what does the nearest `package.json` above this file say". A monorepo with ten packages can have ten different answers, side by side, without any file renaming, as long as each package declares its own `"type"`.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Explicit `"type"` in every package | Fast resolution (no file sniffing), unambiguous to a reader | One more field to keep correct as a package evolves |
+| Rely on `detect-module` (no `"type"` field) | Zero-config; Node 24 can parse ambiguous `.js` syntax and guess correctly | Slower to resolve; a human skimming the tree cannot tell the module system at a glance |
+| Nest a nested `package.json` to flip `"type"` for one subfolder | Lets one legacy CommonJS folder live inside an ESM project without renaming every file in it | Easy to miss — "why is this one folder different from the rest" is a common source of confusion during review |
+| Use `.mjs`/`.cjs` extensions instead of a nested `package.json` | Explicit per file, no scope boundaries to reason about | Renaming churn on existing files; some older tooling only recognises `.js` |
+
+## Common Misconceptions
+
+- **"My project's root `"type": "module"` covers everything I run, including my dependencies."** No — every installed package has its own `package.json` and its own `"type"` boundary. Your `"type"` field only governs files inside your own package.
+- **"Without a `"type"` field, `.js` is CommonJS forever."** Not since `detect-module` landed as the default: Node 24 can parse an ambiguous `.js` file's syntax and treat it as ESM automatically if it uses `import`/`export`. An explicit `"type"` is still the faster, clearer choice — but the absence of one is no longer a hard guarantee of CommonJS.
+- **"Moving a file to a different folder never changes its module system, as long as the extension stays `.js`."** It can — if the destination folder falls under a different `package.json`'s scope, the exact same file content can be parsed as a different module system after the move.
+
+## Reading AI-generated code
+
+Training data is full of pre-2020 Node examples where every `.js` file is CommonJS by default. A model that has not internalised a project's `"type": "module"` will often reach for `require()` out of habit, even inside a codebase that has explicitly opted into ESM everywhere.
+
+<SpotTheBug code={`// package.json (nearest to this file): { "type": "module" }
+const fs = require('node:fs');
+const data = require('./data.json');
+
+console.log(data);`}>
+The nearest `package.json` says `"type": "module"`, so this `.js` file is an ES module — and `require` is not a global inside ES modules. This throws `ReferenceError: require is not defined in ES module scope, you can use import instead` on the very first line, before `data.json` is ever touched. The fix: use `import fs from 'node:fs';` and, for the JSON file, either `import data from './data.json' with { type: 'json' };` (Node 22.10+ import attributes) or `JSON.parse(fs.readFileSync('./data.json', 'utf8'))`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A file's module system is decided by the nearest `package.json`'s `"type"` field (or its own `.mjs`/`.cjs` extension), never by the file's location in a larger project — so the same source text can be CJS in one folder and ESM in another.
 </Callout>
 
 export const indexQuiz = [
@@ -63,6 +147,7 @@ export const indexQuiz = [
       'include()',
     ],
     answer: 0,
+    explain: '`require()` is the CommonJS function for synchronously loading another module by specifier.',
   },
   {
     q: 'What file extension always forces a file to be treated as an ES module regardless of package.json?',
@@ -73,6 +158,7 @@ export const indexQuiz = [
       '.esm',
     ],
     answer: 2,
+    explain: '`.mjs` is always ESM, independent of any `"type"` field — the direct counterpart to `.cjs`, which is always CommonJS.',
   },
   {
     q: 'Which package.json field switches the entire package to ESM so that .js files are treated as ES modules?',
@@ -83,6 +169,29 @@ export const indexQuiz = [
       '"esm": true',
     ],
     answer: 1,
+    explain: '`"type": "module"` is the field that flips the default module system for every `.js` file governed by that `package.json`.',
+  },
+  {
+    q: '```js\n// package.json (nearest to this file): { "type": "module" }\nconst data = require(\'./data.json\');\nconsole.log(data);\n```\nWhat happens when this file runs?',
+    options: [
+      'Prints the parsed contents of data.json, same as in CommonJS',
+      'Throws ReferenceError: require is not defined in ES module scope',
+      'Silently evaluates to undefined',
+      'Throws SyntaxError: Unexpected token \'const\'',
+    ],
+    answer: 1,
+    explain: 'The nearest package.json says "type": "module", so this file is an ES module — `require` is a CommonJS-only global and does not exist there. The error is thrown at the `require(...)` call, before anything else runs.',
+  },
+  {
+    q: 'Folder A has a package.json with `"type": "commonjs"`; folder B has one with `"type": "module"`. Both contain a probe.js file with the byte-identical source `console.log(typeof module);`. What do the two files print?',
+    options: [
+      'Both print \'object\' — module is a Node global available everywhere',
+      'A prints \'object\', B prints \'undefined\' — each folder\'s own package.json decides how identical source is parsed',
+      'Both throw a SyntaxError, because plain console.log calls require an explicit module type',
+      'B prints \'object\', A prints \'undefined\' — ESM always wins over CommonJS',
+    ],
+    answer: 1,
+    explain: '`module` only exists inside the CommonJS wrapper function. The exact same source text is interpreted differently purely because each folder\'s nearest package.json sets a different "type" — module identity is a property of the folder, not the file content.',
   },
 ];
 
