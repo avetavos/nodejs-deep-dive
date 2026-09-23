@@ -1,0 +1,124 @@
+---
+title: Glossary
+description: 'คำศัพท์ทั้งหมดของคอร์สนี้ในที่เดียว — event loop และ async runtime, module และ package, HTTP, และการทดสอบและเครื่องมือ'
+---
+
+import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+Node ใช้คำศัพท์ JavaScript ปกติในบางจุด และมีคำเฉพาะของ runtime ในบางจุด — `libuv`, `highWaterMark`, `backpressure` ไม่มีคำเทียบเท่าในฝั่ง browser เวลาบทเรียนใช้คำที่ไม่แน่ใจความหมาย ให้กลับมาดูที่นี่
+
+## Runtime and the event loop
+
+| Term | Meaning |
+|------|---------|
+| Event loop | กลไก single-thread ที่ทำให้ Node จัดการงาน concurrent จำนวนมากได้โดยไม่ block — มันส่งงานที่ช้า (I/O, timer, crypto บางตัว) ให้ OS หรือ threadpool ทำแทน แล้วค่อยรัน callback เมื่อผลลัพธ์กลับมา ดู [Event Loop & Async](/nodejs/th/event-loop-async/) |
+| Phase | หนึ่ง stage ของ event loop หนึ่งรอบ (timers, pending callbacks, poll, check, close callbacks และอื่น ๆ) Node จะรัน callback ที่ครบกำหนดของทั้ง phase ก่อนไปยัง phase ถัดไป ไม่ใช่รันทีละ callback สลับ phase ดู [Event Loop & Async](/nodejs/th/event-loop-async/) |
+| libuv | library ภาษา C ที่อยู่ข้างใต้ Node เป็นคน implement ตัว event loop เอง, threadpool, และกลไก async I/O ระดับ OS (epoll, kqueue, IOCP) ที่ทำให้ non-blocking I/O เป็นไปได้ ดู [Event Loop & Async](/nodejs/th/event-loop-async/) |
+| Threadpool | pool ของ worker thread ขนาดคงที่ (default 4 ปรับได้ด้วย `UV_THREADPOOL_SIZE`) ที่ libuv ใช้กับงานที่ไม่มี async OS API ให้ใช้โดยตรง — async `fs`, `crypto.pbkdf2`/`scrypt`/`randomBytes`, `dns.lookup`, และ `zlib` ส่วน network socket ไม่ใช้ threadpool เลย ดู [The fs Module](/nodejs/th/core-apis/fs/) |
+| Macrotask / microtask | macrotask คือ entry หนึ่งใน task queue (callback ของ `setTimeout`/`setInterval`, callback ของ I/O) ส่วน microtask คือ Promise reaction หรือ callback ของ `queueMicrotask` microtask queue (รวมกับ `process.nextTick`) จะ drain จนหมดหลังทุก callback เดี่ยว ๆ ไม่ใช่แค่ครั้งเดียวต่อรอบ loop ดู [Microtasks & Macrotasks](/nodejs/th/event-loop-async/microtasks-macrotasks/) |
+| `process.nextTick` | จัดคิว callback ให้รันก่อน microtask queue ในการ drain รอบปัจจุบัน — เป็นคิวแยกที่มี priority สูงกว่า Promise microtask ดู [Microtasks & Macrotasks](/nodejs/th/event-loop-async/microtasks-macrotasks/) |
+| Tick | แบบไม่เป็นทางการ หมายถึงการวนคิว `process.nextTick` หนึ่งรอบ ความหมายที่แม่นยำจะหมายถึงคิวนั้นโดยเฉพาะ ไม่ใช่ "event loop วนหนึ่งรอบ" ดู [Microtasks & Macrotasks](/nodejs/th/event-loop-async/microtasks-macrotasks/) |
+| Callback | function ที่ส่งเข้าไปใน function อื่นเพื่อให้ถูกเรียกทีหลัง เมื่องานหนึ่งเสร็จ เป็น async pattern ดั้งเดิมของ Node ตามธรรมเนียม error-first: `(err, result) => ...` ดู [Callbacks](/nodejs/th/event-loop-async/callbacks/) |
+| Promise / `async` / `await` | `Promise` แทนค่าที่จะมีอยู่ในอนาคต (pending, fulfilled, หรือ rejected) `async`/`await` คือ syntax สำหรับใช้งาน Promise ราวกับเป็น synchronous code โดย function จะหยุดพักที่แต่ละ `await` โดยไม่ block event loop ดู [Promises](/nodejs/th/event-loop-async/promises/) และ [async/await](/nodejs/th/event-loop-async/async-await/) |
+| Unhandled rejection | `Promise` ที่ reject โดยไม่มีอะไรจับมันไว้เลย (ไม่มี `.catch()`, ไม่มี `try` ครอบ `await`) ตั้งแต่ Node 15 เป็นต้นมา สิ่งนี้ทำให้ process crash โดย default ไม่ใช่แค่ warning ดู [async/await](/nodejs/th/event-loop-async/async-await/) |
+| Backpressure | สัญญาณที่ consumer ที่ช้าส่งให้ producer ที่เร็วให้หยุด เพื่อไม่ให้ write กองอยู่ใน memory เร็วกว่าที่จะ drain ได้ ใน stream การที่ `writable.write()` คืนค่า `false` คือสัญญาณนั้น ดู [Backpressure](/nodejs/th/streams/backpressure/) |
+| `highWaterMark` | threshold ขนาด buffer ที่ stream ใช้ตัดสินใจว่าจะเริ่ม backpressure เมื่อไหร่ — default 64 KiB (65536 byte) สำหรับ byte stream และ 16 object สำหรับ object mode ดู [Backpressure](/nodejs/th/streams/backpressure/) |
+| Chunk | ข้อมูลชิ้นหนึ่งที่ event `data` ของ Readable ปล่อยออกมา หรือที่ส่งเข้า `write()` ของ Writable — เป็น `Buffer` (หรือ string หรือ value อะไรก็ได้ใน object mode) ไม่ใช่ payload ทั้งก้อนในครั้งเดียว ดู [Readable Streams](/nodejs/th/streams/readable/) |
+| Readable / Writable / Duplex / Transform | stream base class ทั้งสี่ตัว: `Readable` ผลิตข้อมูล, `Writable` รับข้อมูล, `Duplex` ทำทั้งสองอย่างแยกอิสระจากกัน (เช่น TCP socket), และ `Transform` คือ `Duplex` ที่แปลง input ให้เป็น output (`zlib.createGzip()`) ดู [Streams & I/O](/nodejs/th/streams/) |
+| `pipeline` | `stream.pipeline()` เชื่อม stream หลายตัวเข้าด้วยกัน และต่างจาก `.pipe()` ตรงที่มันส่งต่อ error จาก stream ตัวไหนก็ได้ในสาย แล้ว cleanup stream ทุกตัวทันทีที่ตัวใดตัวหนึ่ง fail หรือจบ ดู [pipe() and pipeline()](/nodejs/th/streams/pipe-pipeline/) |
+| Object mode | โหมดของ stream ที่ chunk เป็น JavaScript value อะไรก็ได้ แทนที่จะเป็นข้อมูล `Buffer`/string ทำให้หน่วยของ `highWaterMark` เปลี่ยนจาก byte เป็นจำนวน object ดู [Streams & I/O](/nodejs/th/streams/) |
+| `EventEmitter` | class ฐานที่อยู่เบื้องหลัง API แบบ event-driven ของ Node (`http.Server`, stream, `process`) `.on()` ลงทะเบียน listener ส่วน `.emit()` เรียก listener ทุกตัวของ event นั้นแบบ synchronous ตามลำดับที่ลงทะเบียน ดู [EventEmitter](/nodejs/th/core-apis/events/) |
+| Listener leak | การผูก listener เพิ่มเข้ากับ `EventEmitter` event เดียวกันโดยไม่เคยเอาออก ทำให้ array ของ listener โตขึ้นเรื่อย ๆ ตลอดอายุ process Node จะเตือนด้วย `MaxListenersExceededWarning` เมื่อ listener ของ event เดียวเกิน 10 ตัว ดู [EventEmitter](/nodejs/th/core-apis/events/) |
+| `AbortController` / `AbortSignal` | `AbortController` สร้าง cancellation token (`.signal`) ที่ async API อย่าง `fetch` รับได้ การเรียก `.abort()` — หรือ `AbortSignal.timeout(ms)` ที่ทำงานเอง — จะ reject operation ที่ค้างอยู่ แทนที่จะปล่อยให้มันรันค้างตลอดไป ดู [fetch and Outbound Requests](/nodejs/th/http-networking/requests/) |
+
+## Modules and packages
+
+| Term | Meaning |
+|------|---------|
+| CommonJS (CJS) | ระบบ module ดั้งเดิมของ Node: `require()` โหลด module แบบ synchronous แล้วคืน copy ของ `module.exports` ตามสภาพ ณ ตอนที่เรียก ดู [Modules: CommonJS vs ESM](/nodejs/th/js-essentials/modules/) |
+| ESM | ระบบ ECMAScript Module (`import`/`export`) ที่เป็นมาตรฐานอยู่ใน JavaScript เอง resolve แบบ static ก่อนที่ code ใด ๆ จะรัน ซึ่งเป็นสิ่งที่ทำให้ tree-shaking เป็นไปได้ ดู [Modules: CommonJS vs ESM](/nodejs/th/js-essentials/modules/) |
+| Live binding | `import` ของ ESM ให้ reference ไปยังตัวแปรของ module ต้นทางเลย ไม่ใช่ copy แบบ snapshot — ถ้า module ต้นทาง assign ตัวแปรนั้นใหม่ทีหลัง ทุกที่ที่ import ไปจะเห็นค่าใหม่ด้วย CJS `require()` ไม่ทำแบบนี้เลย ดู [Modules: CommonJS vs ESM](/nodejs/th/js-essentials/modules/) |
+| Module resolution | algorithm ที่กำหนดแน่นอนของ Node ในการแปลง specifier (`'express'`, `'./util.js'`) ให้เป็นไฟล์จริงบนดิสก์ — ตรวจ `node_modules`, extension ของไฟล์ และ field `exports` ไปตามลำดับ ดู [Module Resolution](/nodejs/th/modules-npm/resolution/) |
+| `exports` / `imports` map | `exports` ใน `package.json` คือ entry-point map สมัยใหม่ที่เป็นตัวกำหนดจริงว่าผู้ใช้ package `import`/`require` อะไรได้บ้าง และจาก subpath ไหน — มี priority เหนือ `main` ส่วน `imports` คือ map แบบเดียวกันสำหรับ subpath import ภายในของ package เองที่ขึ้นต้นด้วย `#` ดู [Module Resolution](/nodejs/th/modules-npm/resolution/) |
+| Condition | key ที่มีชื่อภายใน `exports`/`imports` map (`"import"`, `"require"`, `"types"`, `"node"`, `"default"`) ที่ Node เลือกใช้ตามวิธีที่ module ถูกโหลด ลำดับมีผล — `"types"` ต้องมาก่อนเสมอ เพื่อให้ tooling ของ TypeScript เห็นมันได้ ดู [Module Resolution](/nodejs/th/modules-npm/resolution/) |
+| Package scope / `"type"` | `package.json` ที่ใกล้ไฟล์ที่สุดเป็นตัวกำหนดระบบ module default ของไฟล์นั้นผ่าน `"type"`: `"module"` ทำให้ไฟล์ `.js` ถูกมองเป็น ESM ค่าอื่น (หรือไม่มี field นี้เลย) ทำให้เป็น CommonJS ดู [package.json Deep Dive](/nodejs/th/modules-npm/package-json/) |
+| Lockfile | ไฟล์ (`package-lock.json`) ที่ pin version ที่ resolve แล้วแบบเป๊ะของทุก dependency ทั้งทางตรงและทางอ้อม ทำให้การติดตั้งได้ผลเหมือนกันทุกเครื่อง ดู [Dependencies](/nodejs/th/modules-npm/dependencies/) |
+| Semver caret / tilde / `^0.x` | `^1.2.3` ยอม upgrade `1.x.x` อะไรก็ได้ (minor และ patch) ส่วน `~1.2.3` ยอมแค่ patch upgrade ภายใน `1.2.x` สำหรับ version `0.x` npm มองว่าเลข major `0` เองยัง unstable ทำให้ `^0.4.2` ยอมแค่ patch upgrade (`0.4.x`) เหมือนกับที่ `~0.4.2` จะให้ ดู [package.json Deep Dive](/nodejs/th/modules-npm/package-json/) |
+| Peer / dev / optional dependency | `peerDependencies` ประกาศ package ที่ผู้ใช้ต้องติดตั้งเอง (npm 7 ขึ้นไป install ให้อัตโนมัติ พร้อม warning ถ้า version ไม่ตรง) `devDependencies` คือเครื่องมือที่ใช้แค่ตอน build หรือ test ไม่ถูกส่งไปให้ผู้ใช้ `optionalDependencies` ติดตั้งแบบ best-effort ไม่ทำให้การติดตั้งทั้งหมด fail ถ้า build ไม่ผ่าน ดู [Dependencies](/nodejs/th/modules-npm/dependencies/) |
+| `npm ci` | ติดตั้งจาก lockfile เท่านั้นแบบเคร่งครัด ลบ `node_modules` เดิมทิ้งก่อน แล้ว fail ทันทีถ้า `package.json` กับ lockfile ไม่ตรงกัน เป็นคำสั่งติดตั้งแบบ reproducible สำหรับ CI และ Docker build ต่างจาก `npm install` ที่ update lockfile ได้ ดู [Dependencies](/nodejs/th/modules-npm/dependencies/) |
+| Workspace | ฟีเจอร์ของ npm สำหรับจัดการหลาย package ใน repository เดียว (monorepo) จาก `package.json` ตัวเดียวที่ root โดย dependency ข้าม package จะถูก symlink เข้า `node_modules` ของแต่ละ package แทนที่จะ publish แล้วติดตั้งใหม่ ดู [Dependencies](/nodejs/th/modules-npm/dependencies/) |
+| `node:` prefix | prefix `node:` (`node:fs`, `node:path`) ระบุชัดเจนว่า specifier นี้คือ built-in module เป็น optional สำหรับ built-in module เก่าที่มีมานาน แต่บังคับสำหรับตัวใหม่อย่าง `node:test` และ `node:sqlite` ที่ไม่มีรูปแบบไม่มี prefix ดู [Core APIs](/nodejs/th/core-apis/) |
+
+## HTTP
+
+| Term | Meaning |
+|------|---------|
+| Request lifecycle | ลำดับที่ HTTP request ขาเข้าหนึ่งตัวผ่าน: header ถูก parse เป็น `IncomingMessage`, body ถูก stream เข้ามา (ถ้ามี), handler ของเรารันแล้วเขียนลง `ServerResponse` จากนั้น connection จะปิดหรือคงไว้รอ request ถัดไป ดู [The HTTP Server](/nodejs/th/http-networking/http-server/) |
+| `IncomingMessage` / `ServerResponse` | สอง object ที่ callback ของ `http.createServer` ได้รับ `IncomingMessage` (`req`) คือ readable stream ของ request (method, URL, header, body) ส่วน `ServerResponse` (`res`) คือ writable stream ที่ใช้ส่ง status, header, และ body กลับไป ดู [The HTTP Server](/nodejs/th/http-networking/http-server/) |
+| Keep-alive | การใช้ TCP connection เดียวซ้ำสำหรับหลาย request ที่มาต่อกัน แทนที่จะเปิด socket ใหม่ทุกครั้ง ควบคุมด้วย header `Connection: keep-alive` และฝั่ง server ด้วย `server.keepAliveTimeout` ดู [The HTTP Server](/nodejs/th/http-networking/http-server/) |
+| Chunked transfer | encoding แบบ HTTP/1.1 (`Transfer-Encoding: chunked`) ที่ stream response body ออกเป็นชิ้น ๆ โดยไม่รู้ขนาดรวมล่วงหน้า ใช้อัตโนมัติเมื่อเขียนลง `res` โดยไม่ตั้ง `Content-Length` ไว้ก่อน ดู [The HTTP Server](/nodejs/th/http-networking/http-server/) |
+| `Content-Length` | response header ที่ประกาศขนาด byte ของ body ไว้ล่วงหน้าแบบเป๊ะ Node ตั้งค่าให้อัตโนมัติเฉพาะตอนเรียก `res.end(data)` ครั้งเดียวจบด้วยขนาดที่คำนวณได้ ไม่งั้น response จะย้อนกลับไปใช้ chunked encoding แทน ดู [The HTTP Server](/nodejs/th/http-networking/http-server/) |
+| Headers sent | เมื่อ `res.writeHead()` หรือการเรียก `res.write()`/`res.end()` ครั้งแรก flush header ออกไปแล้ว จะเปลี่ยนไม่ได้อีก — การตั้ง header หรือ status code หลังจากนั้นจะ throw `ERR_HTTP_HEADERS_SENT` ดู [The HTTP Server](/nodejs/th/http-networking/http-server/) |
+| Body limit | เพดานที่กำหนดไว้ชัดเจนว่า handler จะรับ body ของ request ได้กี่ byte ก่อนจะตัด connection ทิ้ง ป้องกันไม่ให้ client stream payload ที่ไม่มีขอบเขตเข้ามาจน memory ของ server หมด ดู [A Small JSON API](/nodejs/th/http-networking/json-api/) |
+| `headersTimeout` / `requestTimeout` / `keepAliveTimeout` | timeout สามตัวของ server ที่แยกจากกันและมี default ต่างกัน: `headersTimeout` (60 วินาที) จำกัดเวลาที่ Node รอ header ของ request มาครบ `requestTimeout` (300 วินาที) จำกัดทั้ง request `keepAliveTimeout` (5 วินาที) จำกัดว่า connection แบบ keep-alive ที่ไม่มีอะไรทำจะเปิดค้างได้นานแค่ไหน ดู [The HTTP Server](/nodejs/th/http-networking/http-server/) |
+| Graceful shutdown | การปิด server ด้วยการเรียก `server.close()` ก่อน — ซึ่งหยุดรับ connection ใหม่แต่ปล่อยให้ request ที่กำลังทำอยู่เสร็จก่อน — เมื่อได้รับ `SIGTERM` แทนที่จะปิดทันทีแล้วตัด request ที่ทำค้างอยู่กลางทาง ดู [The HTTP Server](/nodejs/th/http-networking/http-server/) |
+| `fetch` / undici | `fetch` ที่มีมาในตัวของ Node (เป็น global ตั้งแต่ Node 18 stable ตั้งแต่ 21) implement ด้วย undici ซึ่งเป็น HTTP client ของ Node เอง มัน reject แค่ตอนที่การเชื่อมต่อระดับ network ล้มเหลวเท่านั้น ไม่ reject ตอนได้ status ที่ไม่ใช่ 2xx ดู [fetch and Outbound Requests](/nodejs/th/http-networking/requests/) |
+| `AbortSignal.timeout()` | สร้าง `AbortSignal` ที่ทำงานเองหลังผ่านไปตามจำนวนมิลลิวินาทีที่กำหนด ทำให้ส่ง timeout ของ request เข้า `fetch({ signal })` ได้เลย โดยไม่ต้องต่อ `setTimeout` กับ `AbortController` เองด้วยมือ ดู [fetch and Outbound Requests](/nodejs/th/http-networking/requests/) |
+| CORS | Cross-Origin Resource Sharing: response header (`Access-Control-Allow-Origin` และพวก) ที่บอก browser ว่ายอมให้ script จาก origin หนึ่งอ่าน response จากอีก origin ได้ ไม่เกี่ยวข้องกับการเรียกระหว่าง server กับ server ซึ่ง `fetch`/undici ไม่เคย block อยู่แล้ว ดู [fetch and Outbound Requests](/nodejs/th/http-networking/requests/) |
+| `URL` / `URLPattern` | class `URL` ที่มีมาในตัว parse และสร้าง URL ได้ (`pathname`, `searchParams`, ...) ส่วน `URLPattern` (global ตั้งแต่ Node 24) จับคู่ path ของ URL กับ route pattern แบบ `/items/:id` ได้เลยโดยไม่ต้องใช้ routing library ดู [Routing](/nodejs/th/http-networking/routing/) |
+
+## Testing and tooling
+
+| Term | Meaning |
+|------|---------|
+| Test runner | `node:test` test runner ที่มีมาในตัวของ Node — ไม่ต้องติดตั้งอะไรเพิ่ม รันด้วย `node --test` มันจะหาไฟล์ `*.test.js` แล้วรายงานผลเป็น TAP format ดู [node:test](/nodejs/th/testing-tooling/node-test/) |
+| `describe` / `it` | function จัดกลุ่มของ `node:test`: `describe` ตั้งชื่อกลุ่ม test ที่เกี่ยวข้องกัน ส่วน `it` (alias ของ `test`) กำหนด test case หนึ่งตัวข้างใน ดู [node:test](/nodejs/th/testing-tooling/node-test/) |
+| Mock | implementation ตัวปลอมที่ใช้แทน dependency จริง เพื่อให้ test ควบคุมพฤติกรรมและตรวจสอบได้ว่าถูกเรียกยังไง สร้างใน `node:test` ด้วย `t.mock.fn()`, `t.mock.method()`, หรือ `t.mock.module()` ดู [node:test](/nodejs/th/testing-tooling/node-test/) |
+| Fake timers | แทนที่นาฬิกาจริง (`setTimeout`, `Date`) ด้วยตัวที่ควบคุมได้ระหว่าง test ผ่าน `t.mock.timers` ทำให้ test code ที่ขึ้นกับเวลาได้โดยการเลื่อนนาฬิกาปลอมแทนที่จะรอเวลาจริง ดู [node:test](/nodejs/th/testing-tooling/node-test/) |
+| Coverage | เปอร์เซ็นต์ของ line หรือ branch ที่ test รันผ่านจริง วัดด้วย `node --test --experimental-test-coverage` (ยัง experimental บน Node 24/26) เป็นสัญญาณที่จำเป็นแต่ไม่พอสำหรับคุณภาพของ test ดู [node:test](/nodejs/th/testing-tooling/node-test/) |
+| Snapshot | copy ของ output ที่ serialize ไว้แล้ว ที่ test รอบถัดไปจะเอาไปเทียบ แล้ว fail ถ้า output เปลี่ยนไปโดยไม่ตั้งใจ `node:test` รองรับผ่าน `t.assert.snapshot` (stable ตั้งแต่ 23.4) ดู [node:test](/nodejs/th/testing-tooling/node-test/) |
+| Inspector | protocol debug ที่มีมาในตัวของ Node เปิดใช้ด้วย `node --inspect` ทำให้ Chrome DevTools หรือ VS Code attach เข้า process ที่กำลังรันเพื่อตั้ง breakpoint และไล่ดู code ทีละบรรทัดได้ ดู [Debugging Node.js](/nodejs/th/testing-tooling/debugging/) |
+| `--watch` | flag ของ Node CLI ที่ restart process ให้อัตโนมัติเมื่อไฟล์ที่ require เปลี่ยน — stable สำหรับการรันแอป แต่ยัง experimental เมื่อใช้คู่กับ `--test` ดู [The Node.js Ecosystem](/nodejs/th/testing-tooling/ecosystem/) |
+| `--env-file` | flag ของ Node CLI ที่โหลด key-value จากไฟล์ `.env` เข้า `process.env` ก่อน code เราจะรัน โดยไม่ต้องใช้ package ภายนอกเลย (stable ตั้งแต่ 22.21/24.10) ดู [The Node.js Ecosystem](/nodejs/th/testing-tooling/ecosystem/) |
+| Strip-types | ความสามารถที่มีมาในตัวของ Node ที่รันไฟล์ `.ts` ได้ตรง ๆ ด้วยการตัด type annotation ออกตอนโหลด โดยไม่ transpile syntax ที่ไม่มีคู่เทียบใน JS — `node app.ts` ได้เลยโดยไม่ต้อง build สำหรับ TypeScript แบบตรงไปตรงมา ดู [The Node.js Ecosystem](/nodejs/th/testing-tooling/ecosystem/) |
+| `perf_hooks` | module ที่มีมาในตัว (`performance.now()`, `performance.mark()`/`.measure()`, `PerformanceObserver`) สำหรับวัดเวลาที่ผ่านไปและเก็บ performance entry ด้วยความละเอียดระดับต่ำกว่ามิลลิวินาที ดู [Performance Basics](/nodejs/th/testing-tooling/performance/) |
+| Event-loop lag | ความล่าช้าระหว่างเวลาที่ timer หรือ callback ควรจะทำงานกับเวลาที่มันทำงานจริง เกิดจากงาน synchronous ที่ block loop อยู่ วัดด้วย `monitorEventLoopDelay()` ของ `perf_hooks` ดู [Performance Basics](/nodejs/th/testing-tooling/performance/) |
+| Worker thread | instance ของ `worker_threads`: V8 isolate แยกต่างหากที่มี event loop ของตัวเอง รันขนานกันบน OS thread อีกตัว ใช้กับงานที่กิน CPU หนักซึ่งไม่งั้นจะ block main thread ดู [Performance Basics](/nodejs/th/testing-tooling/performance/) |
+| Cluster | module `cluster` ที่มีมาในตัว ทำการ fork Node process หลายตัวให้ share listening port เดียวกัน เพื่อกระจาย connection ขาเข้าไปยังแต่ละตัว เป็นทางเลือก (หรือใช้คู่กับ) reverse proxy สำหรับ scale ข้าม CPU core ดู [Performance Basics](/nodejs/th/testing-tooling/performance/) |
+
+## อ่านโค้ดที่ AI เขียน: จุดที่ต้องระวัง
+
+โค้ด Node.js ที่ generate มามักจะรันผ่านฉลุยใน happy path มากกว่าที่มันจะถูกต้องจริงตอนโหลดหนัก, input ที่ผิดรูป, หรือ dependency ที่ช้า — นี่คือ pattern ที่มีโอกาสสูงสุดที่จะดูดีตอน demo แต่พังเงียบ ๆ ตอนขึ้น production
+
+| Pattern | Why it's a smell | Covered in |
+|---------|-------------------|------------|
+| ลืม `await` | เรียก `async` function โดยไม่ใส่ `await` ข้างใน `async` function อีกตัว จะได้ `Promise` กลับมาที่ผู้เรียกไม่เคยรอเลย — rejection หลุดไปแบบไม่มีใครรู้ และ code ที่ต้องใช้ผลลัพธ์ต่อจากนั้นจะทำงานกับ value ที่ยังไม่ resolve | [async/await](/nodejs/th/event-loop-async/async-await/) |
+| `.forEach(async fn)` | `Array.prototype.forEach` ไม่สนใจ return value ของ callback เลย ทำให้ promise ที่ callback แบบ `async` คืนมาไม่เคยถูก await หรือเก็บไว้เลย loop ดูเหมือน synchronous แต่จริง ๆ แต่ละรอบทำงานไม่ประสานกัน แล้ว failure ก็หายไปแบบเงียบ ๆ | [async/await](/nodejs/th/event-loop-async/async-await/) |
+| `Promise.all` ไม่จำกัด concurrency | map ทุก item ของ array ใหญ่ผ่าน async call แล้ว await ทั้งหมดเป็น `Promise.all` เดียว จะยิง request ทุกตัวพร้อมกันโดยไม่มีเพดาน concurrency — อาจทำให้ socket, memory หมด หรือชน rate limit ของ service ปลายทาง | [Promises](/nodejs/th/event-loop-async/promises/) |
+| งาน sync fs/CPU ใน request handler | เรียก `fs.readFileSync` หรือรัน loop synchronous หนัก ๆ ข้างใน HTTP handler จะ block event loop thread เดียวที่มีอยู่ ทำให้ request อื่นที่กำลังทำค้างอยู่ทั้งหมดหยุดรอจนกว่าจะเสร็จ | [The fs Module](/nodejs/th/core-apis/fs/) |
+| เรียก `res.end()` ซ้ำสอง / ไม่มี listener `error` | การเรียก `res.end()` บน response ที่จบไปแล้วจะ throw `ERR_STREAM_WRITE_AFTER_END` ถ้าไม่มี listener `error` อยู่บน request, response, หรือ server การ throw นั้นจะทำให้ process ทั้งตัว crash แทนที่จะแค่ request เดียว fail | [The HTTP Server](/nodejs/th/http-networking/http-server/) |
+| ไม่จำกัดขนาด request body | รวม chunk ของ `req` ที่เข้ามาเป็น buffer โดยไม่มีเพดานสูงสุด ทำให้ client stream payload ที่ไม่มีขอบเขตเข้ามาจน memory ของ server หมดก่อนที่ handler จะได้ตรวจสอบด้วยซ้ำ | [A Small JSON API](/nodejs/th/http-networking/json-api/) |
+| `fetch` ไม่เช็ก `.ok` หรือไม่มี timeout | `fetch` จะ reject แค่ตอนที่การเชื่อมต่อระดับ network ล้มเหลวเท่านั้น ไม่ reject ตอนได้ status 4xx/5xx — code ที่คิดว่า promise resolve แปลว่าสำเร็จ จะประมวลผล error body เป็น data แบบเงียบ ๆ ถ้าไม่มี `AbortSignal.timeout(...)` server ที่ค้างจะทำให้ request ค้างรอตลอดไป | [fetch and Outbound Requests](/nodejs/th/http-networking/requests/) |
+| Listener leak | ผูก listener ใหม่เข้ากับ `EventEmitter` ทุกครั้งที่มี request หรือ connection โดยไม่เคยเอาออก ทำให้ array ของ listener โตขึ้นเรื่อย ๆ ไม่มีขอบเขต เมื่อ listener ของ event เดียวเกิน 10 ตัว `MaxListenersExceededWarning` ของ Node คือสัญญาณของ memory leak จริง ไม่ใช่แค่ noise ที่ปิดเสียงทิ้งได้ | [EventEmitter](/nodejs/th/core-apis/events/) |
+| ใช้ `process.env.PORT` เป็นตัวเลขตรง ๆ | `process.env.X` เป็น string หรือ `undefined` เสมอ การเอาไปใช้ในนิพจน์คำนวณหรือเทียบแบบ `port > 1024` ตรง ๆ จะ coerce string นั้น และตัวแปรที่ไม่ได้ตั้งไว้จะเป็น `undefined` ไม่ใช่ default สำรอง เว้นแต่ code จะเช็กเองอย่างชัดเจน | [process.env and process.argv](/nodejs/th/core-apis/process-env/) |
+| ปน `require` กับ `import` / ใช้ `__dirname` ใน ESM | การเอา `require()` ไปปนในไฟล์ที่ `"type": "module"` จะ throw `ReferenceError` ส่วน `__dirname`/`__filename` ไม่มีอยู่ใน ESM เลย — `import.meta.dirname` (หรือ `fileURLToPath(import.meta.url)`) คือตัวแทนที่ใช้แทนกัน | [Modules: CommonJS vs ESM](/nodejs/th/js-essentials/modules/) |
+| range `^0.x` / ไม่มี lockfile | `^0.4.2` ยอมแค่ patch bump เท่านั้น (ไม่ใช่ minor) เพราะ npm มองว่า major `0.x` เองยัง unstable — code ที่คิดว่า `^` แปลว่า "minor กับ patch" เสมอ จะ pin แน่นกว่าที่ตั้งใจไว้แบบเงียบ ๆ การไม่มี lockfile เลยทำให้ทุกการติดตั้งอาจ resolve transitive dependency คนละ version กันในแต่ละเครื่องหรือใน CI | [package.json Deep Dive](/nodejs/th/modules-npm/package-json/) |
+
+## เมื่อไม่ควรใช้ literal Thai translation
+
+| หลีกเลี่ยง | ใช้แทน |
+|------------|--------|
+| ลูปเหตุการณ์ | event loop |
+| ตัวรับฟังเหตุการณ์ | listener |
+| การเรียกกลับ | callback |
+| คำสัญญา | Promise |
+| แรงดันย้อนกลับ / แรงต้านกลับ | backpressure |
+| กลุ่มเธรด / พูลเธรด | threadpool |
+| ตัวปล่อยเหตุการณ์ | EventEmitter |
+| ตัวอ่าน / ตัวเขียน (สำหรับ stream) | Readable / Writable |
+| ก้อนข้อมูล (สำหรับ chunk) | chunk |
+| ไฟล์ล็อก | lockfile |
+| ตัวจัดการ (สำหรับ handler) | handler |
+| โมดูล | โมดูล (ใช้ได้ปกติ ไม่ใช่ calque) |
+
+<ProgressTracker client:visible id="th/glossary" />
