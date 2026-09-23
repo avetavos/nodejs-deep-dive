@@ -5,13 +5,27 @@ sidebar:
   order: 5
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## การรัน TypeScript ใน Node.js
 
 ตั้งแต่ Node 22.18 — และทุก release ของ Node 24 และ 26 — Node ลบ type ของ TypeScript ให้เอง คุณจะต้องใช้เครื่องมือเพิ่มก็ต่อเมื่อโค้ดใช้ syntax ที่ต้อง *แปลง* (transform) ไม่ใช่แค่ลบทิ้ง คุณมีตัวเลือกหลักสามตัว:
+
+export const runnerDecisionMermaid = `flowchart TB
+  Start["I need to run a .ts file"] --> Q1{"Only type annotations, interfaces, import type?"}
+  Q1 -->|"yes"| Native["node file.ts -- built-in stripping, no install"]
+  Q1 -->|"no -- enum, decorators, parameter properties"| Q2{"Node 26, or --experimental-transform-types?"}
+  Q2 -->|"yes"| Native
+  Q2 -->|"no"| Q3{"Need fast local dev loop?"}
+  Q3 -->|"yes"| Tsx["tsx -- esbuild-based, milliseconds to start"]
+  Q3 -->|"no, need mature config/plugins"| TsNode["ts-node"]`;
+
+<Mermaid code={runnerDecisionMermaid} title="ใช้ built-in ก่อนเสมอ เพิ่ม tsx/ts-node เฉพาะ syntax ที่ Node ลบทิ้งเองไม่ได้" />
 
 ### ตัวเลือกที่ 1: type stripping ในตัว (Node 22.18+ / 24 — ไม่ต้องใส่ flag)
 
@@ -29,6 +43,36 @@ npx tsc --noEmit
 ```
 
 รองรับเฉพาะ syntax ที่ *ลบทิ้งได้* (erasable): type annotations, interface, type alias, `import type` ส่วน syntax ที่ต้อง generate JavaScript — `enum`, `namespace` ที่มีโค้ด runtime, parameter properties อย่าง `constructor(private x: number)`, `import =` — จะถูกปฏิเสธ Node 24 แปลงพวกนี้ให้ได้ถ้าใส่ `--experimental-transform-types` ส่วนใน Node 26 การแปลงถูกรวมเข้ามาในตัวและ flag นี้ถูกถอดออกแล้ว option `--erasableSyntaxOnly` ของ TypeScript (5.8+) ทำให้ `tsc` ปฏิเสธ syntax ชุดเดียวกัน editor ของคุณจึงเตือนก่อนที่ Node จะเตือน
+
+### ยืนยัน "เปิดเป็นค่าเริ่มต้น" แทนที่จะเชื่อชื่อ flag
+
+flag นี้ยังชื่อ `--experimental-strip-types` ใน `node --help` บน Node 24 — ชื่อนั้นอย่างเดียวอาจทำให้คิดว่าต้อง opt-in เอง การเช็กว่าจริง ๆ แล้วเกิดอะไรขึ้นจะให้คำตอบที่แน่ชัด:
+
+```bash
+node --help | grep -i strip
+```
+
+```text
+  --experimental-strip-types, --no-strip-types
+                              Type-stripping for TypeScript files.
+```
+
+`--no-strip-types` ที่จับคู่มาด้วยคือตัวบอกใบ้: `--no-` counterpart จะมีอยู่ก็ต่อเมื่อสิ่งนั้นเปิดอยู่**เป็นค่าเริ่มต้น**เท่านั้น ยืนยันได้ด้วยการรันไฟล์ `.ts` จริง ๆ ทั้งสองแบบ:
+
+```bash
+node strip.ts                      # runs fine, prints the computed value, no flag needed
+node --no-experimental-strip-types strip.ts   # SyntaxError: Unexpected identifier 'Point'
+```
+
+```text
+# node strip.ts
+3
+
+# node --no-experimental-strip-types strip.ts
+SyntaxError: Unexpected identifier 'Point'
+```
+
+Type stripping **เปิดเป็นค่าเริ่มต้นบน Node 24** สำหรับไฟล์ `.ts` ธรรมดาที่มีแค่ syntax แบบ erasable — ไม่ต้องใส่ flag และไม่มี `ExperimentalWarning` พิมพ์ออกมาด้วย prefix `--experimental-` ในชื่อ flag เป็นของที่หลงเหลือจากตอนที่มันยังต้อง opt-in การใส่ `--no-experimental-strip-types` (หรือ `--no-strip-types`) อย่างชัดเจนเป็นวิธีเดียวที่จะปิดมันกลับ
 
 ### ตัวเลือกที่ 2: tsx — TypeScript runner ที่เร็ว
 
@@ -88,6 +132,35 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
 );
 ```
+
+### eslint-plugin-n — rule เฉพาะของ Node ที่ ESLint เองไม่รู้จัก
+
+`eslint-plugin-n` (เดิมชื่อ `eslint-plugin-node`) เพิ่ม rule ที่ตรวจกับ runtime และ API surface จริงของ Node — สิ่งที่ ESLint ธรรมดาไม่มีทางรู้ได้เอง การรันมันกับไฟล์ที่มี bug ตั้งใจใส่ไว้แสดงให้เห็นชัดว่ามันจับอะไรได้บ้าง:
+
+```js
+// @skip-verify CLI/flag: needs eslint-plugin-n installed as a devDependency — not part of this repo
+// eslint.config.mjs
+import n from 'eslint-plugin-n';
+
+export default [
+  n.configs['flat/recommended'],
+];
+```
+
+```bash
+npx eslint bad.js
+```
+
+```text
+bad.js
+   2:24  error  Can't resolve './does-not-exist.js' in '/project'    n/no-missing-require
+   3:13  error  'new Buffer()' was deprecated since v6.0.0. Use 'Buffer.alloc()' or 'Buffer.from()' instead  n/no-deprecated-api
+  15:1   error  Don't use process.exit(); throw an error instead     n/no-process-exit
+
+✖ 3 problems (3 errors, 0 warnings)
+```
+
+สามข้อค้นพบเฉพาะของ Node ที่ ESLint config ทั่วไปจะพลาดไปเลย: `n/no-missing-require` จับ `require()` ของไฟล์ที่ไม่มีอยู่จริงบนดิสก์ `n/no-deprecated-api` ตรวจ runtime API ที่ Node เอง deprecate ไว้ (เช่น `new Buffer()`) และ `n/no-process-exit` ตรวจการเรียก `process.exit()` นอกจุด entry point ของ CLI จริง ๆ (มันข้ามกรณีที่ return เงียบ ๆ จากฟังก์ชัน ซึ่งมักซ่อน bug มากกว่าจะแก้)
 
 ### Prettier — code formatter แบบ opinionated
 
@@ -165,17 +238,21 @@ node --env-file=.env --env-file=.env.local src/app.js
 
 ภายในโปรแกรม `process.loadEnvFile()` ทำแบบเดียวกันโดยไม่ต้องใส่ flag:
 
-```js
+export const loadEnvFileCode = `
 import { loadEnvFile } from 'node:process';
 import { writeFileSync, unlinkSync } from 'node:fs';
 
-writeFileSync('.env', 'GREETING=hello-from-dotenv\n'); // demo fixture
+writeFileSync('.env', 'GREETING=hello-from-dotenv\\n'); // demo fixture
 
 loadEnvFile('.env'); // populates process.env; throws if the file is missing
 console.log(process.env.GREETING);
 
 unlinkSync('.env');
-```
+`;
+
+export const loadEnvFileOut = `hello-from-dotenv`;
+
+<NodeRunner client:visible code={loadEnvFileCode} node expected={loadEnvFileOut} />
 
 ### dotenv — วิธีคลาสสิก
 
@@ -225,6 +302,64 @@ node --run test
 node --permission --allow-fs-read=./data --allow-fs-write=./tmp src/app.js
 ```
 
+## corepack และ pnpm
+
+Corepack มาพร้อมกับ Node เอง (ยืนยันตรงนี้: `corepack --version` พิมพ์ `0.34.5` บน Node 24.13 ของคอร์สนี้ ไม่ต้องติดตั้งแยก) และจัดการเวอร์ชันของ package manager ที่โปรเจกต์คุณประกาศไว้ เหมือนกับที่ `nvm`/`.nvmrc` จัดการเวอร์ชันของ Node:
+
+```bash
+# Pin the package manager version in package.json
+# "packageManager": "pnpm@9.12.0"
+
+corepack enable        # one-time, makes `pnpm`/`yarn` resolve through corepack
+pnpm install            # corepack downloads and runs the exact pinned pnpm version
+```
+
+`pnpm` เองใช้ content-addressable store และ hard link แทนการ copy `node_modules` ในแต่ละโปรเจกต์ — หลายโปรเจกต์บนเครื่องเดียวกันแชร์ package เวอร์ชันเดียวกันแค่ชุดเดียวบนดิสก์ และการติดตั้งมักเร็วกว่า npm นอกจากนี้มันยังบังคับการ resolve dependency ที่เข้มงวดกว่าเป็นค่าเริ่มต้น (package หนึ่งจะ `require()` สิ่งที่มันไม่ได้ประกาศเป็น dependency ของตัวเองไม่ได้ แม้ package อื่นจะ hoist มันขึ้นมาใน `node_modules` ก็ตาม) ซึ่งเผย bug แบบ "phantom dependency" ที่ `node_modules` แบบแบนของ npm มักซ่อนไว้
+
+## Docker: image ของ Node ที่เหมาะกับ production
+
+```dockerfile
+FROM node:24-slim
+
+WORKDIR /app
+
+# Only copy manifests first -- layer caching skips the install step
+# when only application code changed, not dependencies.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY . .
+
+# node:*-slim images already ship a non-root "node" user -- use it
+USER node
+
+# Exec form (not shell form) so SIGTERM reaches the Node process directly,
+# not a shell wrapping it -- required for graceful shutdown to actually run.
+CMD ["node", "src/server.js"]
+```
+
+รายละเอียดสามอย่างที่แยก image ที่เหมาะกับ production ออกจาก image ที่แค่ทำงานได้: `npm ci --omit=dev` (ไม่ใช่ `npm install`) — reproducible จาก lockfile และข้าม devDependencies ไปเลย; `USER node` — รันด้วย user ที่ไม่มีสิทธิ์ root ที่มากับ image แทนที่จะรันเป็น root; และ `CMD` แบบ JSON array (`exec` form) — `CMD` แบบ shell (`CMD node src/server.js`) รัน Node เป็น child ของ `/bin/sh` และ `SIGTERM` จาก `docker stop`/Kubernetes จะไปที่ shell ไม่ใช่ Node ทำให้ `process.on('SIGTERM', ...)` handler ของคุณไม่เคยถูกเรียกเลย และ orchestrator ต้องรอจนหมด grace period ก่อนจะ `SIGKILL`
+
+## Structured logging แทน console.log
+
+`console.log` ใช้ได้ดีสำหรับ script ที่รันบน terminal ของคุณเอง แต่ในบริการที่รันใน container หลัง log aggregator ข้อความ plain text จะเสียความสามารถในการ filter หรือ query ตาม field ไป structured logger (`pino` เป็นตัวเลือกที่เร็วที่สุดที่นิยมใน Node ecosystem) เขียน JSON object หนึ่งบรรทัดต่อหนึ่ง log แทน:
+
+```bash
+npm install pino
+```
+
+```js
+// @skip-verify CLI/flag: needs the pino package installed — not part of this repo
+import pino from 'pino';
+
+const logger = pino();
+
+logger.info({ userId: 42, action: 'login' }, 'user logged in');
+// {"level":30,"time":...,"userId":42,"action":"login","msg":"user logged in"}
+```
+
+log แต่ละบรรทัดกลายเป็น record ที่ query ได้ (filter ตาม `userId`, alert เมื่อ `level >= 50`) แทนที่จะเป็น string ที่มนุษย์ต้อง grep เอง `pino` ถูกออกแบบมาให้มี overhead ต่อการเรียกน้อยที่สุด ซึ่งสำคัญบน request path ที่ร้อนแรงที่แม้แต่ `console.log` เองก็อาจกลายเป็นต้นทุนที่วัดได้
+
 ## package.json scripts — ตัวเชื่อมทุกอย่าง
 
 ```json
@@ -244,6 +379,47 @@ node --permission --allow-fs-read=./data --allow-fs-write=./tmp src/app.js
 ตั้งแต่ Node 22.18 (และทุก release ของ 24+) `node src/app.ts` ใช้งานได้เลยสำหรับ syntax แบบ erasable โปรเจกต์ส่วนใหญ่จึงไม่ต้องมีขั้น build เพื่อรัน เก็บ `tsc --noEmit` ไว้ตรวจ type และเพิ่ม tsx เฉพาะเมื่อคุณพึ่ง `enum`, decorators, bundling หรือการ targeting หลาย environment
 </Callout>
 
+## แบบจำลองความคิด (Mental Model)
+
+ทุกอย่างในบทนี้เป็น layer ที่คุณควรเพิ่มก็ต่อเมื่อยืนยันแล้วว่าพฤติกรรม built-in ของ Node ยังไม่ครอบคลุมมันอยู่แล้ว: type stripping ก่อนจะไปหา `tsx`, `--env-file`/`--watch` ก่อนจะไปหา `dotenv`/`nodemon`, `node --run` ก่อนจะสันนิษฐานว่าต้องใช้ `npm`, coverage ในตัวของ `node:test` ก่อนจะไปหา reporter จาก third-party รูปแบบนี้เกิดซ้ำเพราะ built-in ของ Node ค่อย ๆ ดูดซับสิ่งที่เมื่อก่อนต้องพึ่ง dependency ไปเรื่อย ๆ — การเช็กว่า "flag นี้มี `--no-` counterpart ไหม" หรือ "`--help` พูดถึงมันจริงไหม" เป็นวิธีที่เร็วกว่าการสันนิษฐานว่าคำตอบเมื่อปีที่แล้วยังใช้ได้อยู่
+
+## Trade-offs
+
+| ตัวเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| Type stripping ในตัว | ไม่ต้องติดตั้ง ไม่ต้อง config ทำงานทันทีที่รันไฟล์ | ไม่มีการตรวจ type ไม่รองรับ `enum`/decorator/parameter property โดยไม่ใส่ flag เพิ่ม |
+| `tsx`/`ts-node` | รองรับฟีเจอร์ TypeScript ครบ ecosystem ที่เติบโตแล้ว | ต้องมี dependency ให้ติดตั้ง pin และคอยอัปเดต |
+| `npm ci --omit=dev` ใน Docker | build ซ้ำได้จาก lockfile, image เล็กลง, ติดตั้งเร็วกว่า | ต้องมี lockfile ที่ commit ไว้และอัปเดตอยู่เสมอ — `npm ci` fail ทันทีถ้า `package.json` กับ lockfile ไม่ตรงกัน |
+| `pino`/structured logging | log query ได้ filter ได้ overhead ต่อการเรียกต่ำกว่า `console.log` บน path ที่ร้อนแรง | output ไม่ได้อ่านง่ายตรง ๆ ใน terminal อีกต่อไปถ้าไม่มี formatter (`pino-pretty` ตอน dev) |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"TypeScript บน Node ในปี 2026 ยังต้องใช้ tsx หรือ ts-node อยู่ดี"** — ความจริง: บน Node 22.18+/24/26 syntax แบบ type annotation ธรรมดารันได้โดยไม่ต้องมีเครื่องมือเพิ่มเลย ต้องใช้ transformer เฉพาะ `enum`/decorator/parameter property เท่านั้น (หรือใช้ `--experimental-transform-types` บน 24)
+- **"prefix --experimental- ใน --experimental-strip-types แปลว่าต้อง opt-in เอง"** — ความจริง: *ชื่อ* ของ flag เป็นของหลงเหลือ ตัวพฤติกรรมจริงเปิดเป็นค่าเริ่มต้นบน Node 24 ยืนยันได้จาก `--no-strip-types` ที่มีไว้เพื่อปิดมัน ไม่ใช่เปิด
+- **"npm install กับ npm ci ทำสิ่งเดียวกัน แค่ชื่อต่างกัน"** — ความจริง: `npm ci` ต้องมี lockfile ที่มีอยู่แล้วและตรงกัน ถ้าไม่ตรงมัน fail มันลบ `node_modules` ก่อนแล้วติดตั้งตามที่ lock ไว้เป๊ะ ๆ — ความ reproducible ที่ Docker build ต้องการ ซึ่ง `npm install` ไม่รับประกันให้
+- **"CMD แบบ shell กับ exec-form JSON array ใน Dockerfile ทำงานเหมือนกัน"** — ความจริง: shell form รัน process ของคุณเป็น child ของ `/bin/sh` ดังนั้น `SIGTERM` จาก `docker stop` จะไปโดน shell ไม่ใช่ Node process ของคุณ — `SIGTERM` handler ของคุณไม่เคยถูกเรียกเลย
+
+## อ่านโค้ดที่ AI เขียน
+
+- โปรเจกต์ที่ถูกสร้างขึ้นเพิ่ม `ts-node`, `nodemon`, หรือ `dotenv` เป็น dependency โดยไม่เช็กก่อนว่า built-in ของ Node เวอร์ชันเป้าหมาย (type stripping, `--watch`, `--env-file`) ครอบคลุมความต้องการเดียวกันแล้วหรือไม่?
+- Dockerfile ใช้ `npm install` แทน `npm ci` ในขั้น build ที่ควรจะ reproducible หรือใช้ `CMD` แบบ shell (`CMD node server.js`) แทน exec-form JSON array หรือไม่?
+- Dockerfile ข้าม `USER node` (หรือ user ที่ไม่ใช่ root ที่เทียบเท่า) ทำให้ container รันเป็น root ตลอดหรือไม่?
+- ใช้ `console.log` ทั่วทั้ง service ที่ตั้งใจรันใน production โดยไม่มี structured logger เลย ทำให้ query field ของ log ไม่ได้เมื่อระบบโตขึ้นหรือไม่?
+
+<SpotTheBug code={`FROM node:24-slim
+
+WORKDIR /app
+COPY . .
+RUN npm install
+
+CMD node src/server.js`}>
+มีปัญหาแยกกันสองอย่างตรงนี้ อย่างแรก `npm install` (ไม่ใช่ `npm ci`) อาจอัปเดตเวอร์ชัน dependency ให้ต่างจาก lockfile แบบเงียบ ๆ ระหว่าง build ของ Docker — image ที่คุณ build วันนี้อาจไม่ตรงกับ image ที่ build พรุ่งนี้จาก source เดียวกัน และไม่มีบรรทัด `USER node` เลย container จึงรันเป็น root ตลอดเวลา อย่างที่สอง `CMD node src/server.js` เป็น shell form — Docker รันมันเป็น `/bin/sh -c "node src/server.js"` ทำให้ `node` เป็น child process ของ shell เมื่อ `docker stop` ส่ง `SIGTERM` มันจะไปที่ shell (PID 1) ไม่ใช่ `node` และ shell ไม่ forward สัญญาณนั้นให้เป็นค่าเริ่มต้น — ดังนั้น `process.on('SIGTERM', ...)` handler สำหรับ graceful shutdown ในแอปจึงไม่เคยถูกเรียกเลย และ container จะค้างอยู่จนกว่า grace period ของ Docker จะหมดแล้วส่ง `SIGKILL` ทางแก้: `RUN npm ci --omit=dev`, เพิ่ม `USER node` ก่อน `CMD`, และใช้ exec form `CMD ["node", "src/server.js"]` เพื่อให้ Node รับสัญญาณโดยตรงในฐานะ PID 1
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+เช็กก่อนว่า built-in ปัจจุบันของ Node ทำอะไรให้แล้วบ้าง (type stripping, --env-file, --watch, node --run) ก่อนจะไปหา dependency และใน Docker ให้ใช้ npm ci, user ที่ไม่ใช่ root, และ CMD แบบ exec form เพื่อให้ SIGTERM ไปถึง process ของคุณจริง ๆ
+</Callout>
+
 export const ecosystemQuiz = [
   {
     q: 'เกิดอะไรขึ้นเมื่อรัน `node src/app.ts` บน Node 24?',
@@ -254,6 +430,7 @@ export const ecosystemQuiz = [
       'ล้มเหลว — Node ต้องใช้ flag หรือ tsx ถึงจะรัน TypeScript ได้',
     ],
     answer: 2,
+    explain: 'Node 24 ลบ type annotation ตอนโหลดไฟล์แล้วรัน JavaScript ที่เหลือ มันไม่เคยตรวจ type ให้เลย — เก็บ tsc --noEmit ไว้เป็นขั้นแยกสำหรับสิ่งนั้น',
   },
   {
     q: 'ความแตกต่างหลักระหว่าง Prettier และ ESLint คืออะไร?',
@@ -264,6 +441,7 @@ export const ecosystemQuiz = [
       'เป็นเครื่องมือเหมือนกันแต่ต่างชื่อ',
     ],
     answer: 1,
+    explain: 'Prettier เป็นแค่ formatter (ช่องว่าง, quote, ความกว้างบรรทัด) ส่วน ESLint (กับ plugin อย่าง eslint-plugin-n) จับปัญหา logic และการใช้ API จริง ๆ',
   },
   {
     q: 'flag ใดใน Node.js ที่เปิด built-in watch mode (ไม่ต้องใช้ nodemon)?',
@@ -274,6 +452,7 @@ export const ecosystemQuiz = [
       '--live',
     ],
     answer: 2,
+    explain: '--watch stable มาตั้งแต่ Node 22 — ไม่ต้องใช้ watcher จาก third-party สำหรับ workflow restart-on-change พื้นฐาน',
   },
   {
     q: 'flag ใดของ Node ที่โหลดไฟล์ `.env` โดยไม่ต้องใช้ package `dotenv`?',
@@ -284,6 +463,40 @@ export const ecosystemQuiz = [
       '--process-env=.env',
     ],
     answer: 2,
+    explain: '--env-file=.env stable มาตั้งแต่ 22.21/24.10 — ไม่มี ExperimentalWarning ไม่ต้องมี dotenv',
+  },
+  {
+    q: '`node --help` บน Node 24 แสดง: `--experimental-strip-types, --no-strip-types` การมีอยู่ของ counterpart --no- บอกอะไร?',
+    options: [
+      'ไม่บอกอะไรเลย -- flag --no- มีอยู่กับทุกฟีเจอร์ไม่ว่าค่าเริ่มต้นจะเป็นอะไร',
+      'type stripping ปิดเป็นค่าเริ่มต้น ต้องใส่ --experimental-strip-types เพื่อเปิดใช้งาน',
+      'type stripping เปิดเป็นค่าเริ่มต้น -- flag --no- มีไว้ปิดสิ่งที่เปิดอยู่แล้วเท่านั้น',
+      'ฟีเจอร์นี้กำลังจะถูกถอดออกใน release ถัดไป',
+    ],
+    answer: 2,
+    explain: 'counterpart --no-<flag> เป็นธรรมเนียมของ Node สำหรับปิดพฤติกรรมที่เปิดเป็นค่าเริ่มต้น การรันไฟล์ .ts จริงยืนยันได้: node file.ts ลบ type ได้โดยไม่ต้องใส่ flag ในขณะที่ node --no-experimental-strip-types file.ts throw SyntaxError บน type syntax',
+  },
+  {
+    q: 'rule `n/no-deprecated-api` ของ eslint-plugin-n จับอะไรที่ ESLint ธรรมดาจับไม่ได้?',
+    options: [
+      'ตัวแปรที่ไม่ได้ใช้',
+      'semicolon ที่ขาดหาย',
+      'การเรียก Node runtime API ที่ Node เอง deprecate ไว้ อย่าง new Buffer()',
+      'ข้อผิดพลาดของ type ใน TypeScript',
+    ],
+    answer: 2,
+    explain: 'ESLint ธรรมดาไม่รู้จัก API deprecation ของ Node เลย eslint-plugin-n ตรวจจุดเรียกกับรายการ deprecated-API จริงของ Node (เช่น new Buffer() ที่ถูก deprecate ให้ใช้ Buffer.from()/Buffer.alloc() แทน)',
+  },
+  {
+    q: 'Dockerfile จบด้วย `CMD node src/server.js` (shell form) แทนที่จะเป็น `CMD ["node", "src/server.js"]` (exec form) อะไรจะพังบ้าง?',
+    options: [
+      'ไม่มีอะไรพัง -- ทั้งสองแบบทำงานเหมือนกันทุกประการ',
+      'แอปสตาร์ทไม่ขึ้นเลย',
+      'SIGTERM จาก docker stop / Kubernetes ไปที่ shell ที่ห่ออยู่ (PID 1) ไม่ใช่ Node process ทำให้ graceful-shutdown handler ไม่เคยรัน',
+      'environment variable ไม่ถูกส่งเข้า process อีกต่อไป',
+    ],
+    answer: 2,
+    explain: 'shell form รันคำสั่งเป็น child ของ /bin/sh ซึ่งกลายเป็น PID 1 และรับสัญญาณแทน Node เองไม่เคยเห็น SIGTERM เลย process.on(\'SIGTERM\', ...) จึงไม่เคยถูกเรียก -- orchestrator ต้องรอจนหมด grace period แล้ว SIGKILL container',
   },
 ];
 

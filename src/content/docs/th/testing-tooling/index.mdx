@@ -5,9 +5,12 @@ sidebar:
   order: 1
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ทำไม tooling ถึงสำคัญ
 
@@ -90,6 +93,83 @@ npx biome check --apply src/
 เริ่มต้นด้วย `node:test`, `node --inspect`, และ `perf_hooks` จากนั้นค่อยเพิ่มเครื่องมือจาก third-party เมื่อคุณพบข้อจำกัดจริง ๆ ไม่ใช่ติดตั้งไว้ก่อนโดยไม่จำเป็น
 </Callout>
 
+## สิ่งที่มีอยู่แล้ว ไม่ต้องติดตั้งอะไรเพิ่ม
+
+ทุกความสามารถที่โมดูลนี้ครอบคลุมมีอยู่ใน binary `node` ที่คุณมีอยู่แล้ว ลองเช็กจริงบน Node 24:
+
+export const indexDemoCode = `
+// A quick "what can I reach for without installing anything" check.
+import { test } from 'node:test';
+import { performance } from 'node:perf_hooks';
+
+console.log('node:test available:', typeof test === 'function');
+console.log('perf_hooks available:', typeof performance.now === 'function');
+console.log('global fetch available:', typeof fetch === 'function');
+console.log('type stripping (.ts files) is on by default on Node 24 -- no flag needed');
+`;
+
+export const indexDemoOut = `node:test available: true
+perf_hooks available: true
+global fetch available: true
+type stripping (.ts files) is on by default on Node 24 -- no flag needed`;
+
+<NodeRunner client:visible code={indexDemoCode} node expected={indexDemoOut} />
+
+## แบบจำลองความคิด (Mental Model)
+
+แต่ละบทในโมดูลนี้ตอบคำถามคนละมุมเกี่ยวกับ process ตัวเดียวกัน — มองเป็นเลนส์ 4 อันที่ส่องไปที่ `node` binary เดียวกัน ไม่ใช่เครื่องมือ 4 ชิ้นที่แยกจากกัน:
+
+export const testingToolingMentalModel = `flowchart TB
+  Q1["Is my code correct?"] -->|"node:test + node:assert"| L1["Built-in Test Runner"]
+  Q2["Why did it do that?"] -->|"--inspect, console.*, uncaughtException"| L2["Debugging"]
+  Q3["Is it fast enough?"] -->|"perf_hooks, --cpu-prof, worker_threads"| L3["Performance"]
+  Q4["How do I run/ship it?"] -->|"--env-file, --watch, node --run, Docker"| L4["Ecosystem & Toolchain"]
+  L1 --> Ship["Code you can trust in production"]
+  L2 --> Ship
+  L3 --> Ship
+  L4 --> Ship`;
+
+<Mermaid code={testingToolingMentalModel} title="คำถามสี่ข้อเกี่ยวกับ process เดียวกัน: ถูกต้อง, ดีบักได้, เร็วพอ, ส่งขึ้น production ได้" />
+
+## Trade-offs
+
+| ตัวเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| Built-in `node:test` / `perf_hooks` / `--inspect` | ไม่ต้องติดตั้ง ไม่มี config ที่ต่างกันไปในแต่ละเครื่อง ทำงานเหมือนกันทุกที่ที่มี Node | สะดวกน้อยกว่าเครื่องมือที่ ecosystem โตแล้ว (ไม่มี coverage UI, ไม่มี watch mode filter ให้ทันที) |
+| Third-party (Vitest, ESLint, pino, tsx) | DX ดีกว่า, มี plugin ecosystem, มีฟีเจอร์ที่ Node ยังไม่ stabilize | ต้องติดตั้ง, pin เวอร์ชัน, ตรวจ audit และอัปเดตอยู่เสมอ — และ lockfile ที่ทุกคนต้องเชื่อใจ |
+| เรียนรู้ built-in ก่อน | การดีบักโค้ดที่ AI เขียนหรือโค้ดที่ไม่คุ้นเคยไม่ต้องพึ่งว่า "repo นี้ใช้ test framework ตัวไหน" | ต้องพิมพ์มากกว่านิดหน่อยในสิ่งที่ framework จะให้เป็น syntax sugar (เช่น `expect().toBe()` เทียบกับ `assert.equal()`) |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ต้องใช้ Jest หรือ Mocha ถึงจะเขียนเทสต์จริงจังใน Node ได้"** — ความจริง: `node:test` มีมาตั้งแต่ Node 18 และภายใน Node 24 ก็ครอบคลุมทั้ง mocking, fake timers, snapshot, และ coverage โดยไม่ต้องมี dependency แม้แต่ตัวเดียว
+- **"TypeScript ต้องมี build step ถึงจะรันบน Node ได้"** — ความจริง: Node 24 strip type annotation ตอนโหลดไฟล์เป็นค่าเริ่มต้น ต้องใช้ `tsx`/`ts-node`/`tsc` เฉพาะ syntax ที่ต้อง *แปลง* (`enum`, decorator) ไม่ใช่แค่ลบทิ้ง
+- **"perf_hooks / node --inspect / node:test เป็นของ experimental หรือไม่เสถียร"** — ความจริง: ทั้งสามตัวเป็น API ที่ stable แล้ว มีแค่ฟีเจอร์ย่อยบางตัว (coverage, ส่วนเสริมบางอย่างของ test runner) ที่ยังต้องใช้ flag `--experimental-` ซึ่งแต่ละบทจะระบุไว้ชัดเจน
+
+## อ่านโค้ดที่ AI เขียน
+
+- โค้ดที่ AI เขียนเรียกใช้ `jest`/`mocha`/`chai` เป็น dependency สำหรับงานที่ `node:test` + `node:assert` ทำได้อยู่แล้วหรือไม่? นี่ไม่ใช่บั๊ก แต่เป็นสัญญาณว่าโค้ดที่ถูกสร้างมาไม่ได้คิดถึง Node 24
+- มีการเพิ่ม `ts-node` หรือ bundler สำหรับไฟล์ `.ts` ธรรมดาที่มีแค่ type annotation (ไม่มี `enum`, ไม่มี decorator) หรือไม่? `node file.ts` ทำงานได้อยู่แล้วโดยไม่ต้องมีสิ่งเหล่านั้น
+- มีการเรียก Node built-in ที่อยู่หลัง flag `--experimental-` (test coverage, module mocks) โดยไม่พูดถึง flag หรือ warning ที่มันพิมพ์ออกมาหรือไม่? ถ้ารันโค้ดตามที่แสดงจะ crash หรือทำงานแบบเงียบ ๆ ไม่ได้ผล
+
+<SpotTheBug code={`import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+// package.json: "test": "node --test"
+test('creates a user', async function() {
+  const user = await createUser({ name: 'Ada' });
+  assert.equal(user.name, 'Ada');
+});
+
+test.only('debugging this one locally', function() {
+  assert.ok(true);
+});`}>
+`test.only` ทำเครื่องหมายเทสต์เดียวให้รันแบบเฉพาะเจาะจง — แต่จะมีผลจริงก็ต่อเมื่อรันตัวรันด้วย `--test-only` (หรือ `run({ only: true })`) เท่านั้น script ใน `package.json` ข้างบนเป็น `node --test` ธรรมดา ดังนั้น**ถ้าไม่มี** `--test-only` ทั้งสองเทสต์ก็ยังรันตามปกติ `.only` ไม่มีผลอะไรเลย และดูเผิน ๆ ก็ไม่มีอะไรผิดปกติในเครื่อง อันตรายที่แท้จริงคือสถานการณ์ตรงข้าม: CI script ที่ใส่ `--test-only` ไว้ตลอดเวลา ถ้าลืมลบ `test.only` หลังจาก debug เสร็จแล้ว push ขึ้นไป จะทำให้เทสต์อื่นทั้งหมดในไฟล์นั้นถูกข้ามไปแบบเงียบ ๆ ตลอดกาล — และ CI ก็ยังเขียวอยู่ทั้งที่ regression ในเทสต์ที่ถูกข้ามไม่เคยถูกจับได้เลย ให้ค้นหา `.only` ในไฟล์เทสต์ก่อน commit ทุกครั้ง หรือตั้ง lint ให้จับมัน
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Node 24 มี test runner, debugger, profiler, และตัวโหลด config มาให้แล้วในตัว — ค่อยเพิ่ม dependency หลังจากยืนยันแล้วว่า built-in ทำงานนั้นไม่ได้จริง ๆ
+</Callout>
+
 export const indexQuiz = [
   {
     q: 'Node.js เวอร์ชันไหนที่แนะนำ built-in `node:test` runner เป็นครั้งแรก?',
@@ -100,6 +180,7 @@ export const indexQuiz = [
       'Node 22',
     ],
     answer: 2,
+    explain: 'node:test มาตั้งแต่ Node 18 พอถึง Node 24 มันครอบคลุมทั้ง mocking, fake timers, และ snapshot ในฐานะฟีเจอร์ stable แล้ว เหลือแค่ coverage ที่ยังอยู่หลัง flag --experimental-',
   },
   {
     q: 'โมดูล built-in ใดที่ใช้วัดเวลาการทำงานใน Node.js?',
@@ -110,6 +191,7 @@ export const indexQuiz = [
       'node:v8',
     ],
     answer: 1,
+    explain: 'node:perf_hooks มี performance.now(), performance.mark()/measure(), PerformanceObserver, และ monitorEventLoopDelay — ครอบคลุมในบทประสิทธิภาพ',
   },
   {
     q: 'บน Node 24 รันไฟล์ TypeScript โดยตรงโดยไม่ต้อง build ได้อย่างไร?',
@@ -120,6 +202,40 @@ export const indexQuiz = [
       '`node --run-ts src/app.ts`',
     ],
     answer: 2,
+    explain: 'Node 24 strip syntax ของ TypeScript ที่ลบทิ้งได้ (type annotation, interface, import type) เป็นค่าเริ่มต้น — ไม่ต้องใช้ flag ไม่ต้อง build แต่มันไม่ type-check ให้ ยังต้องใช้ tsc --noEmit แยกต่างหาก',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไรบน Node 24?\n\nimport { test } from \'node:test\';\nconsole.log(typeof test);',
+    options: [
+      'undefined',
+      'function',
+      'object',
+      'มัน throw — node:test ต้องใช้ flag --experimental-test',
+    ],
+    answer: 1,
+    explain: 'node:test เป็น built-in module ที่ stable ตั้งแต่ Node 18 — ไม่ต้องใช้ flag การ import จะได้ function จริง ๆ รวมถึง test, describe, it, และ mock',
+  },
+  {
+    q: 'CI script รันด้วย `node --test --test-only` นักพัฒนาลืมลบ `test.only(...)` ไว้ในเทสต์หนึ่งตัวหลัง debug เสร็จแล้ว push ขึ้นไป จะเกิดอะไรขึ้น?',
+    options: [
+      'CI ล้มเหลวทันทีเพราะ .only ห้ามใช้',
+      'CI ยังเขียวอยู่ แต่เทสต์อื่นทั้งหมดในไฟล์นั้นหยุดรันไปแบบเงียบ ๆ',
+      'Node เพิกเฉยต่อ .only ทั้งหมดนอกเหนือจากตอน develop ในเครื่อง',
+      '.only ไม่มีผลอะไรถ้าไม่ได้ใช้ describe() ร่วมด้วย',
+    ],
+    answer: 1,
+    explain: 'เมื่อ --test-only เปิดอยู่ .only จะกรองจริง — รันแค่ตัวที่ทำเครื่องหมายไว้ ตัวอื่นในรอบนั้นถูกข้ามโดยไม่นับว่าล้มเหลว นี่คือเหตุผลที่ .only ที่ลืมลบเป็นอันตราย เพราะ CI จะรายงานว่าสำเร็จทั้งที่เทสต์น้อยลงแบบเงียบ ๆ',
+  },
+  {
+    q: 'ทำไมโมดูลนี้ถึงสอน node:test / --inspect / perf_hooks ก่อนพูดถึงเครื่องมือ third-party ใด ๆ?',
+    options: [
+      'เครื่องมือ third-party ถูก deprecate ใน Node 24',
+      'มันเป็น built-in ที่ stable และทำงานเหมือนกันทุกเครื่องที่มี Node ติดตั้งอยู่ การเข้าใจมันก่อนทำให้อ่าน framework ที่สร้างทับมันได้ง่ายขึ้น',
+      'เครื่องมือ third-party ใช้กับ TypeScript ไม่ได้',
+      'ไม่มีเหตุผลอะไร — แค่เป็นสไตล์ของคอร์สนี้',
+    ],
+    answer: 1,
+    explain: 'framework การทดสอบ/ดีบักยอดนิยมทุกตัว (Vitest, Jest, ts-node) สร้างทับหรือเลียนแบบ primitive ชุดเดียวกันนี้ การรู้จัก built-in ก่อนหมายความว่าคุณอ่านออกว่า framework ไหนก็ตามทำอะไรอยู่ข้างใต้',
   },
 ];
 

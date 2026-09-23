@@ -5,9 +5,12 @@ sidebar:
   order: 1
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Why tooling matters
 
@@ -90,6 +93,83 @@ npx biome check --apply src/
 Start with `node:test`, `node --inspect`, and `perf_hooks`. Add third-party tools only when you hit a real limitation — not by default.
 </Callout>
 
+## What's already available, with zero installs
+
+Every capability this module covers is already inside the `node` binary you have. A quick self-check, run for real on Node 24:
+
+export const indexDemoCode = `
+// A quick "what can I reach for without installing anything" check.
+import { test } from 'node:test';
+import { performance } from 'node:perf_hooks';
+
+console.log('node:test available:', typeof test === 'function');
+console.log('perf_hooks available:', typeof performance.now === 'function');
+console.log('global fetch available:', typeof fetch === 'function');
+console.log('type stripping (.ts files) is on by default on Node 24 -- no flag needed');
+`;
+
+export const indexDemoOut = `node:test available: true
+perf_hooks available: true
+global fetch available: true
+type stripping (.ts files) is on by default on Node 24 -- no flag needed`;
+
+<NodeRunner client:visible code={indexDemoCode} node expected={indexDemoOut} />
+
+## Mental Model
+
+Each lesson in this module answers one question about the same running process — think of it as four lenses pointed at the same `node` binary, not four separate tools:
+
+export const testingToolingMentalModel = `flowchart TB
+  Q1["Is my code correct?"] -->|"node:test + node:assert"| L1["Built-in Test Runner"]
+  Q2["Why did it do that?"] -->|"--inspect, console.*, uncaughtException"| L2["Debugging"]
+  Q3["Is it fast enough?"] -->|"perf_hooks, --cpu-prof, worker_threads"| L3["Performance"]
+  Q4["How do I run/ship it?"] -->|"--env-file, --watch, node --run, Docker"| L4["Ecosystem & Toolchain"]
+  L1 --> Ship["Code you can trust in production"]
+  L2 --> Ship
+  L3 --> Ship
+  L4 --> Ship`;
+
+<Mermaid code={testingToolingMentalModel} title="Four questions about the same process: correct, debuggable, fast enough, shippable" />
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Built-in `node:test` / `perf_hooks` / `--inspect` | Zero install, zero config drift, works the same on every machine that has Node | Fewer conveniences than a mature ecosystem tool (no coverage UI, no watch-mode test filtering out of the box) |
+| Third-party (Vitest, ESLint, pino, tsx) | Richer DX, plugin ecosystems, features Node hasn't stabilized yet | A dependency to install, pin, audit, and keep updated — and a lockfile everyone must trust |
+| Learning the built-ins first | Debugging AI-generated or unfamiliar code never depends on "which test framework does this repo use" | Slightly more typing for things a framework would give you as sugar (e.g. `expect().toBe()` vs `assert.equal()`) |
+
+## Common Misconceptions
+
+- **"You need Jest or Mocha to write real tests in Node"** — fact: `node:test` has been built in since Node 18, and by Node 24 it covers mocking, fake timers, snapshots, and coverage without a single dependency.
+- **"TypeScript needs a build step to run on Node"** — fact: Node 24 strips type annotations at load time by default; you only need `tsx`/`ts-node`/`tsc` for syntax that needs to be *transformed* (`enum`, decorators) rather than erased.
+- **"perf_hooks / node --inspect / node:test are experimental or unstable"** — fact: all three are stable APIs; only specific sub-features (coverage, some test-runner extras) still carry an `--experimental-` flag, and each lesson calls those out explicitly.
+
+## Reading AI-generated code
+
+- Does a snippet reach for `jest`/`mocha`/`chai` as a dependency for a task `node:test` + `node:assert` already cover? That's an unnecessary dependency, not a correctness bug — but it's a signal the generated code wasn't written with Node 24 in mind.
+- Does it add `ts-node` or a bundler step for a plain `.ts` file with only type annotations (no `enum`, no decorators)? `node file.ts` already works.
+- Does it call a Node built-in behind an `--experimental-` flag (test coverage, module mocks) without mentioning the flag or the warning it prints? Running the snippet as shown will crash or silently no-op.
+
+<SpotTheBug code={`import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+// package.json: "test": "node --test"
+test('creates a user', async function() {
+  const user = await createUser({ name: 'Ada' });
+  assert.equal(user.name, 'Ada');
+});
+
+test.only('debugging this one locally', function() {
+  assert.ok(true);
+});`}>
+`test.only` marks exactly one test to run exclusively -- but only when the runner is invoked with `--test-only` (or `run({ only: true })`). The `package.json` script above is plain `node --test`, so **without** `--test-only` both tests still run normally, `.only` is a no-op, and nothing looks wrong locally. The real danger is the opposite setup: a CI script that always passes `--test-only`. There, forgetting to remove `test.only` after a debugging session silently excludes every other test in the file from ever running again — and CI stays green while regressions in the skipped tests go uncaught. Search test files for `.only` before every commit, or lint for it.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Node 24 already ships a test runner, a debugger, a profiler, and a config loader — reach for a dependency only after you've confirmed the built-in doesn't already do the job.
+</Callout>
+
 export const indexQuiz = [
   {
     q: 'Which Node.js version introduced the built-in `node:test` runner?',
@@ -100,6 +180,7 @@ export const indexQuiz = [
       'Node 22',
     ],
     answer: 2,
+    explain: 'node:test landed in Node 18. By Node 24 it also covers mocking, fake timers, and snapshots as stable features, with coverage still behind an --experimental- flag.',
   },
   {
     q: 'Which built-in module is used for measuring execution time in Node.js?',
@@ -110,6 +191,7 @@ export const indexQuiz = [
       'node:v8',
     ],
     answer: 1,
+    explain: 'node:perf_hooks exposes performance.now(), performance.mark()/measure(), PerformanceObserver, and monitorEventLoopDelay — all covered in the Performance lesson.',
   },
   {
     q: 'How do you run a TypeScript file directly on Node 24 without a build step?',
@@ -120,6 +202,40 @@ export const indexQuiz = [
       '`node --run-ts src/app.ts`',
     ],
     answer: 2,
+    explain: 'Node 24 strips erasable TypeScript syntax (type annotations, interfaces, import type) by default — no flag, no build step. It does not type-check; keep tsc --noEmit for that.',
+  },
+  {
+    q: 'What does this print on Node 24?\n\nimport { test } from \'node:test\';\nconsole.log(typeof test);',
+    options: [
+      'undefined',
+      'function',
+      'object',
+      'It throws — node:test needs --experimental-test flag',
+    ],
+    answer: 1,
+    explain: 'node:test is a stable built-in module since Node 18 — no flag required. Importing it gives you real functions, including test, describe, it, and mock.',
+  },
+  {
+    q: 'A CI test script is `node --test --test-only`. A developer leaves `test.only(...)` on one test after debugging and pushes it. What happens?',
+    options: [
+      'CI fails immediately because .only is forbidden',
+      'CI stays green, but every other test in that file silently stops running',
+      'Node ignores .only entirely outside of local development',
+      '.only has no effect unless describe() is also used',
+    ],
+    answer: 1,
+    explain: 'With --test-only active, .only actually filters -- only the marked test runs, everything else in the run is skipped without failing. That is what makes leftover .only dangerous: CI reports success while it is silently testing less.',
+  },
+  {
+    q: 'Why does this module teach node:test / --inspect / perf_hooks before mentioning any third-party tool?',
+    options: [
+      'Third-party tools are deprecated in Node 24',
+      'They are stable built-ins that work identically on every machine with Node installed, so understanding them first makes every framework on top of them easier to read',
+      'Third-party tools cannot be used with TypeScript',
+      'There is no reason — it is just this course\'s style',
+    ],
+    answer: 1,
+    explain: 'Every popular testing/debugging framework (Vitest, Jest, ts-node) is built on top of, or mirrors, these same primitives. Knowing the built-in first means you can read what any framework is doing underneath.',
   },
 ];
 

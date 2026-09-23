@@ -5,9 +5,12 @@ sidebar:
   order: 3
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Node.js Inspector
 
@@ -22,6 +25,38 @@ node --inspect-brk src/app.js
 ```
 
 หลังจาก launch แล้ว เปิด **chrome://inspect** ใน Chrome คลิก **"Open dedicated DevTools for Node"** จากนั้นคุณจะได้ breakpoints แบบเต็มรูปแบบ, call stacks, การตรวจสอบ scope, heap snapshots, และ CPU profiling — เหมือนกับ panel สำหรับ browser debugging ทุกประการ
+
+inspector ฟังที่ port **9229** เป็นค่าเริ่มต้นเสมอ (จะเป็น port อื่นก็ต่อเมื่อคุณส่ง `--inspect=<port>`) และมันพูดโปรโตคอลเดียวกับ [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) ที่ browser DevTools ใช้ — WebSocket เข้ามา คำสั่งและ event เป็น JSON ไม่ว่า client ตัวไหน (Chrome, VS Code, WebStorm) จะเป็นตัวที่เชื่อมต่ออยู่ก็ตาม:
+
+export const inspectorProtocolMermaid = `flowchart LR
+  App["node --inspect app.js"] -->|"opens"| Port["ws://127.0.0.1:9229/uuid"]
+  Port -->|"Chrome DevTools Protocol (JSON over WebSocket)"| Client["Any CDP client"]
+  Client --> Chrome["chrome://inspect"]
+  Client --> VSCode["VS Code debugger"]
+  Client --> CLI["node inspect (built-in CLI client)"]`;
+
+<Mermaid code={inspectorProtocolMermaid} title="โปรโตคอลเดียว พอร์ตเดียว client อะไรก็ได้ — inspector ไม่รู้และไม่สนใจว่าใครเชื่อมต่ออยู่" />
+
+## node inspect — ตัว client บรรทัดคำสั่งในตัว
+
+คุณไม่จำเป็นต้องมี browser หรือ editor เลย: `node inspect <file>` เริ่ม process เป้าหมาย **พร้อมกับ** debugger REPL ใน terminal เดียวกัน โดยใช้โปรโตคอลเดียวกัน:
+
+```bash
+node inspect src/app.js
+```
+
+```text
+< Debugger listening on ws://127.0.0.1:9229/<uuid>
+< For help, see: https://nodejs.org/en/docs/inspector
+connecting to 127.0.0.1:9229 ... ok
+debug> Break on start in src/app.js:1
+> 1 console.log('line1');
+  2 debugger;
+  3 console.log('line2');
+debug> cont
+```
+
+พิมพ์ `cont` (หรือ `c`) เพื่อรันไปยัง breakpoint/`debugger` statement ถัดไป `next`/`n` เพื่อ step over `step`/`s` เพื่อ step into `out`/`o` เพื่อ step out `watch('expr')` เพื่อเพิ่ม watch expression และ `repl` เพื่อเข้า REPL ที่ scope อยู่ใน stack frame ปัจจุบัน มันช้ากว่า GUI ในการนำทาง แต่ไม่ต้องมีอะไรนอกจาก terminal — มีประโยชน์เมื่อทำงานผ่าน SSH หรือใน container ที่ไม่ได้ forward port
 
 ## การเชื่อมต่อกับ VS Code
 
@@ -109,6 +144,168 @@ console.assert(1 === 2, 'Math is broken'); // prints assertion error
 console.assert(1 === 1, 'This never prints');
 ```
 
+`console.trace()` พิมพ์ call stack ปัจจุบันโดยไม่หยุดการทำงาน — มีประโยชน์เวลาตอบคำถาม "ใครเรียกตัวนี้" โดยไม่ต้องแนบ debugger เลย:
+
+export const consoleTraceCode = `
+function loadConfig() {
+  console.trace('loadConfig called from:');
+}
+function startServer() {
+  loadConfig();
+}
+startServer();
+`;
+
+<NodeRunner client:visible code={consoleTraceCode} node />
+
+demo นี้ไม่มีแผง verified-output ด้วยเหตุผลเดียวกับ live demo ก่อนหน้า: stack trace มี file path และเลขบรรทัดที่มีความหมาย (และเหมือนกัน) เฉพาะบนเครื่องที่รันมันเท่านั้น — ไม่ใช่สิ่งที่ควรตรึงลงเป็น snapshot "verified" ตัวเดียว
+
+## ตรวจสอบ object ที่ซ้อนลึกและ stack trace ที่ยาว
+
+formatter ค่าเริ่มต้นของ `console.log` (ที่ใช้ `util.inspect` อยู่ข้างใต้) จะหยุดลงลึกใน object ที่ซ้อนกันหลัง depth **2** — ระดับที่ลึกกว่านั้นจะถูกย่อเป็น `[Object]` ส่ง depth เองเมื่อต้องการมากกว่านั้น:
+
+export const inspectDepthCode = `
+import { inspect } from 'node:util';
+
+const nested = { a: { b: { c: { d: 1 } } } };
+
+console.log(nested);                              // default depth: 2
+console.log(inspect(nested, { depth: 1 }));        // shallower on purpose
+console.log(inspect(nested, { depth: null }));     // depth: null -- no limit at all
+`;
+
+export const inspectDepthOut = `{ a: { b: { c: [Object] } } }
+{ a: { b: [Object] } }
+{
+  a: { b: { c: { d: 1 } } }
+}`;
+
+<NodeRunner client:visible code={inspectDepthCode} node expected={inspectDepthOut} />
+
+`--stack-trace-limit` กำหนดว่า `Error.prototype.stack` จะเก็บกี่ frame (ค่าเริ่มต้นของ V8 คือ 10) ลดค่านี้ในสคริปต์ที่พิมพ์ stack ยาวมากจากการเรียกแบบ recursive ลึก ๆ หรือเพิ่มค่าเมื่อต้องการ context มากกว่า 10 frame:
+
+```bash
+node --stack-trace-limit=2 -e "function a(){b()} function b(){c()} function c(){throw new Error('x')} try{a()}catch(e){console.log(e.stack.split('\n').length)}"
+```
+
+```text
+3
+```
+
+เมื่อจำกัดที่ `2` `e.stack` มีทั้งหมด 3 บรรทัด: header `Error: x` บวกกับ stack frame อีก 2 อัน — `c` และ `b` — `a` ถูกตัดออกไป
+
+## ตาม trace warning และ throw ที่ไม่ถูกจับกลับไปยังต้นตอ
+
+flag สองตัวเปลี่ยน warning หรือข้อความ crash บรรทัดเดียวให้กลายเป็น stack trace เต็มที่ชี้ไปยังจุดที่มันถูกสร้างหรือ throw จริง ๆ:
+
+```bash
+node --trace-warnings depwarn.mjs
+```
+
+```text
+legacy
+(node:12345) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+    at showFlaggedDeprecation (node:buffer:195:11)
+    at new Buffer (node:buffer:278:3)
+    at file:///path/to/depwarn.mjs:1:11
+```
+
+ถ้าไม่มี `--trace-warnings` Node จะพิมพ์แค่ warning บรรทัดเดียวกับคำแนะนำให้รันซ้ำด้วย flag — ซึ่งเป็นบรรทัดที่คุณจะต้องเดาสาเหตุเองถ้าไม่มีมัน `--trace-uncaught` ทำสิ่งเดียวกันสำหรับ exception โดยเฉพาะเมื่อจุดที่ throw ต่างจากจุดที่ object `Error` ถูกสร้างขึ้นจริง (เช่น error ที่สร้างไว้ก่อนแล้วค่อย throw ทีหลังจาก callback ของ `setTimeout`):
+
+```bash
+node --trace-uncaught trace-uncaught-demo.mjs
+```
+
+```text
+file:///path/to/trace-uncaught-demo.mjs:6
+  throw err;
+  ^
+
+Error: created early, thrown later
+    at file:///path/to/trace-uncaught-demo.mjs:2:13
+Thrown at:
+    at file:///path/to/trace-uncaught-demo.mjs:2:13
+
+Node.js v24.13.0
+```
+
+ส่วน `Thrown at:` พิเศษนี้ปรากฏเฉพาะเมื่อมี flag เท่านั้น — ปกติคุณจะได้ stack จากจุดที่ `Error` ถูกสร้างเท่านั้น ซึ่งอาจเป็นคนละบรรทัดกับจุดที่มันถูก throw จริง ๆ
+
+## NODE_DEBUG — การ trace โมดูล built-in
+
+core module หลายตัว (`http`, `net`, `timers`, `module`, `cluster`, `tls`) จะพิมพ์บรรทัด diagnostic ภายในเมื่อคุณตั้งค่า `NODE_DEBUG` เป็นชื่อของมัน:
+
+```bash
+NODE_DEBUG=http node server-and-client.mjs
+```
+
+```text
+HTTP 12345: createConnection localhost:54321:
+HTTP 12345: sockets localhost:54321: 1 1
+HTTP 12345: outgoing message end.
+(node:12345) Warning: Setting the NODE_DEBUG environment variable to 'http' can expose sensitive data (such as passwords, tokens and authentication headers) in the resulting log.
+HTTP 12345: SERVER new http connection
+```
+
+Node เตือนเรื่องนี้ไว้เอง: `NODE_DEBUG=http` log internal ของ request/response ซึ่งในแอปจริงอาจมี authentication header และข้อมูลอ่อนไหวอื่น ๆ ปนอยู่ ใช้มันในเครื่องเพื่อเข้าใจการใช้ connection ซ้ำและพฤติกรรม keep-alive แต่อย่าเปิดใช้กับ traffic ที่มี credential จริงเด็ดขาด
+
+## uncaughtException และ unhandledRejection — พฤติกรรมค่าเริ่มต้นที่แท้จริง
+
+ทั้งคู่ทำให้ process crash เป็นค่าเริ่มต้น — Node ถือว่า exception ที่ไม่มีใครจับ หรือ rejection ที่ไม่มีใครจัดการ หมายความว่า state ของโปรแกรมไม่สามารถเชื่อถือได้อีกต่อไป:
+
+```js
+// @expect-throw uncaught sync exception crashes by default
+throw new Error('sync boom');
+```
+
+```js
+// @expect-throw unhandled rejection crashes by default (has since Node 15)
+Promise.reject(new Error('boom'));
+```
+
+คุณ listen ได้ทั้งสองแบบ — แต่การ listen ไม่ได้แปลว่าปลอดภัยที่จะทำงานต่อ มันแปลว่า **คุณ** เป็นคนตัดสินใจว่าอะไรคือ "ปลอดภัย":
+
+export const handledRejectionCode = `// @expect-throw exits 1 on purpose -- the handler sets process.exitCode
+process.on('unhandledRejection', (reason) => {
+  console.log('unhandled rejection:', reason.message); // console.error in real code -- console.log here so this page's verified panel captures it
+  process.exitCode = 1;
+});
+console.log('before reject');
+Promise.reject(new Error('async boom'));
+console.log('after scheduling rejection');
+`;
+
+export const handledRejectionOut = `before reject
+after scheduling rejection
+unhandled rejection: async boom`;
+
+<NodeRunner client:visible code={handledRejectionCode} node expected={handledRejectionOut} />
+
+การตั้ง `process.exitCode` (แทนที่จะเรียก `process.exit()` จากใน handler) ทำให้ I/O ที่ค้างอยู่หรือ cleanup ทำงานเสร็จได้ พร้อมกับยังมั่นใจว่า process จะ exit แบบ non-zero ในที่สุด เพื่อให้ CI, process manager, หรือ on-call engineer สังเกตเห็นว่ามีอะไรผิดพลาด
+
+### ทำไม "แค่เพิ่ม handler แล้วทำงานต่อ" ถึงอันตราย
+
+export const swallowExceptionCode = `
+let counter = 0;
+process.on('uncaughtException', (err) => {
+  console.log('swallowed:', err.message, '-- process kept running, state may now be inconsistent'); // console.error in real code
+});
+setInterval(() => {
+  counter++;
+  if (counter === 2) throw new Error('corrupt state at tick 2');
+  console.log('tick', counter);
+  if (counter >= 3) process.exit(0);
+}, 10);
+`;
+
+export const swallowExceptionOut = `tick 1
+swallowed: corrupt state at tick 2 -- process kept running, state may now be inconsistent
+tick 3`;
+
+<NodeRunner client:visible code={swallowExceptionCode} node expected={swallowExceptionOut} />
+
+callback ของ interval ที่ throw ตอน `counter === 2` ไม่มีโอกาสได้รัน logic ของตัวเองต่อจาก `throw` เลย — ไม่ว่ามันควรจะทำอะไรใน tick นั้น (อัปเดต counter, ปล่อย lock, เขียนไฟล์ให้เสร็จ) ก็ไม่เกิดขึ้น แต่ process ก็ยังทำงานต่อราวกับไม่มีอะไรเกิดขึ้น เอกสารของ Node.js พูดชัดเจนเรื่องนี้: หลังจาก uncaught exception "การใช้งานที่ถูกต้อง" ของ event นี้คือทำ cleanup แบบ synchronous แล้วปล่อยให้ process exit — ไม่ใช่กลับไปทำงานปกติต่อ handler ของ `uncaughtException` มีไว้สำหรับ log และ shutdown อย่างสง่างาม ไม่ใช่ try/catch แบบ global
+
 ## ขั้นตอนการดีบักที่ใช้งานจริง
 
 ```bash
@@ -140,6 +337,51 @@ npx nodemon --exec "node --inspect --loader ts-node/esm" src/app.ts
 `node --inspect` ให้ process เริ่มและทำงานตามปกติ — inspector แค่รอการเชื่อมต่อ ใช้ `node --inspect-brk` เมื่อคุณต้องการหยุดก่อนที่โค้ดใด ๆ จะทำงาน เพื่อให้มีเวลาเปิด DevTools และตั้ง breakpoints ก่อนที่ startup logic จะรัน
 </Callout>
 
+## แบบจำลองความคิด (Mental Model)
+
+เครื่องมือดีบักทุกตัวในหน้านี้ตอบคำถามเดียวกัน — "จริง ๆ แล้วตอนนี้เกิดอะไรขึ้นใน process นี้" — ที่ระดับความล่วงล้ำต่างกัน: เมธอด `console.*` ราคาถูก เปิดอยู่ตลอด ไม่เปลี่ยนแปลงการทำงานเลย `--trace-warnings`/`--trace-uncaught`/`NODE_DEBUG` เพิ่มรายละเอียดให้ output ที่จะเกิดขึ้นอยู่แล้ว `--inspect`/`--inspect-brk` หยุดจริงและให้คุณ step ผ่านได้ ส่วน handler ของ `uncaughtException`/`unhandledRejection` คือแนวป้องกันสุดท้ายเมื่อมีอะไรผิดพลาดไปแล้ว ให้ใช้เครื่องมือที่ถูกที่สุดที่ตอบคำถามของคุณได้ก่อนเสมอ
+
+## Trade-offs
+
+| ตัวเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `console.log`/`console.trace` | ไม่ต้องตั้งค่าอะไร ใช้ได้ทุกที่รวมถึง log ใน production | ไม่มี breakpoint ไม่มีการตรวจตัวแปรแบบ live ลืมทิ้งไว้ในโค้ดง่าย |
+| `node --inspect` + DevTools/VS Code | breakpoint เต็มรูปแบบ, step through, ตรวจ scope แบบ live, heap snapshot | ต้องมี GUI client และสำหรับ process ที่รันบน remote/container ต้อง forward port |
+| `node inspect` (CLI) | ทำงานผ่าน SSH ได้ ไม่ต้อง forward port นอกจาก shell เอง | นำทางช้ากว่า ไม่มี tree ตัวแปรแบบ visual |
+| จัดการ `uncaughtException`/`unhandledRejection` | มีโอกาส log context และ shutdown อย่างสะอาดแทนที่จะ crash แบบทันที | ถ้าจัดการผิด (กลับไปทำงานปกติต่อ) จะซ่อน bug จริงและเสี่ยง state เสียหาย — ทางที่ปลอดภัยยังคงเป็นการ exit |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"unhandled promise rejection แค่พิมพ์ warning ไม่ทำให้ process crash"** — ความจริง: ตั้งแต่ Node 15 unhandled rejection ทำให้ process terminate เป็นค่าเริ่มต้น เหมือนกับ uncaught synchronous exception ทุกประการ
+- **"การเพิ่ม `process.on('uncaughtException', ...)` handler ทำให้ปลอดภัยที่จะทำงานต่อ"** — ความจริง: callback ที่ throw หยุดทำงานที่จุด `throw` เลย — อะไรก็ตามที่มันควรจะทำต่อไม่เกิดขึ้น การใช้งาน handler นี้ที่ถูกต้องตามเอกสารคือ cleanup แบบ synchronous แล้ว exit ไม่ใช่กลับไปทำงานปกติต่อ
+- **"console.log แสดง object ทั้งหมดไม่จำกัดความลึก"** — ความจริง: `util.inspect` (ที่ `console.log` ใช้อยู่ข้างใน) หยุดที่ depth 2 เป็นค่าเริ่มต้น ระดับที่ลึกกว่านั้นจะพิมพ์เป็น `[Object]` เว้นแต่คุณจะส่ง `{ depth: null }` หรือตัวเลขที่สูงกว่า
+- **"--trace-warnings กับ --trace-uncaught ทำสิ่งเดียวกัน"** — ความจริง: `--trace-warnings` เพิ่ม stack ให้ process warning (deprecation ฯลฯ) ส่วน `--trace-uncaught` เพิ่ม stack ที่สอง — จุดที่ exception ถูก throw จริง ๆ — สำหรับ uncaught exception ที่จุด throw ต่างจากจุดที่ `Error` ถูกสร้าง
+
+## อ่านโค้ดที่ AI เขียน
+
+- `process.on('uncaughtException', ...)` หรือ `process.on('unhandledRejection', ...)` handler แค่ log แล้วทำงานต่อ โดยไม่มี `process.exit()`/`process.exitCode` และไม่ปิด resource ที่เปิดอยู่ (server, connection ฐานข้อมูล, timer) หรือไม่? นั่นคือ anti-pattern "กลืนแล้วทำงานต่อ" พอดี — ค่าเริ่มต้นที่ปลอดภัยคือ cleanup แล้ว exit
+- โค้ดดีบักทิ้ง `console.trace()` หรือ log แบบ `NODE_DEBUG` ไว้ทำงานอยู่บน path ที่จัดการข้อมูลผู้ใช้จริงหรือไม่? stack trace และ debug log อาจรั่วไหล internal หรือ credential เข้าไปใน production log ได้
+- มี `debugger;` statement อยู่ในโค้ดที่กำลังจะ commit หรือ deploy หรือไม่? มันไม่มีผลถ้าไม่มี inspector เชื่อมต่ออยู่ แต่ก็เป็นสัญญาณว่าโค้ดไม่ได้ถูกทำความสะอาดหลัง debug เสร็จ
+- โค้ด error-handling สมมติว่า `err.stack` มี context เต็มเสมอ โดยไม่คำนึงถึง `--stack-trace-limit` หรือความเป็นไปได้ที่ `Error` ถูกสร้างไกลจากจุดที่ถูก throw (สิ่งที่ `--trace-uncaught` มีไว้เพื่อเปิดเผยพอดี) หรือไม่?
+
+<SpotTheBug code={`import http from 'node:http';
+
+const server = http.createServer((req, res) => {
+  res.end('ok');
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('caught an error, continuing:', err.message);
+});
+
+server.listen(3000);`}>
+handler นี้ log error แล้ว return -- ไม่มี `process.exit()` ไม่มี `server.close()` ไม่มีอะไรที่หยุด process เลย request handler ที่กำลังรันตอนที่ exception ถูก throw ไม่มีทางทำงานจบ (response อาจไม่ถูกส่งเลย และ client ที่เชื่อมต่ออยู่ก็แค่ค้างจนกว่าจะ timeout ของตัวเอง) ทุก request ใน*อนาคต*จะถูกให้บริการโดย process ที่ internal state ไม่รู้ว่าเป็นอย่างไรแล้ว: transaction ฐานข้อมูลถูกทิ้งไว้แบบเปิดอยู่หรือเปล่า? lock ไม่เคยถูกปล่อยหรือเปล่า? counter ถูกอัปเดตค้างไว้ครึ่งเดียวหรือเปล่า? เอกสารของ Node.js พูดชัดเจนว่าการใช้งานที่ถูกต้องของ `uncaughtException` คือ cleanup แบบ synchronous แล้วปล่อยให้ process exit -- ไม่ใช่กลืน error แล้วให้บริการ traffic ต่อ ทางแก้: log พร้อม context เต็ม ปิด server เพื่อหยุดรับ connection ใหม่ ทำงานที่ค้างอยู่ให้เสร็จหรือยกเลิกมัน แล้วเรียก `process.exit(1)` (หรือตั้ง `process.exitCode = 1` แล้วปล่อยให้งานที่ค้างอยู่ drain) เพื่อให้ orchestrator restart process เข้าสู่สถานะที่รู้ว่าดี
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+การที่ exception หรือ rejection ที่ไม่ถูกจัดการทำให้ process crash คือกลไกความปลอดภัย ไม่ใช่ตัว bug — จัดการมันเพื่อ log และ shutdown อย่างสะอาด ไม่ใช่แค่เพื่อให้ process มีชีวิตอยู่ต่อทั้งที่ state ไม่รู้ว่าเป็นอย่างไร
+</Callout>
+
 export const debuggingQuiz = [
   {
     q: '`node --inspect` และ `node --inspect-brk` ต่างกันอย่างไร?',
@@ -150,6 +392,7 @@ export const debuggingQuiz = [
       '--inspect รันโค้ด; --inspect-brk ปิดใช้งาน inspector',
     ],
     answer: 1,
+    explain: 'node --inspect เริ่ม process ทันทีและ inspector แค่รอเฉย ๆ ส่วน --inspect-brk หยุดการทำงานที่บรรทัดแรกสุด เพื่อให้มีเวลาเชื่อมต่อและตั้ง breakpoint ก่อน',
   },
   {
     q: 'จะเกิดอะไรขึ้นกับ `debugger;` เมื่อไม่มี inspector เชื่อมต่ออยู่?',
@@ -160,6 +403,7 @@ export const debuggingQuiz = [
       'แสดง warning ไปที่ stderr',
     ],
     answer: 2,
+    explain: 'ถ้าไม่มี inspector เชื่อมต่ออยู่ debugger; ไม่มีผลอะไรเลย — การทำงานเดินหน้าผ่านมันไปตามปกติ',
   },
   {
     q: 'เมธอด `console` ใดที่แสดง array ของ objects เป็นตารางที่ formatted?',
@@ -170,6 +414,7 @@ export const debuggingQuiz = [
       'console.group',
     ],
     answer: 2,
+    explain: 'console.table render array ของ object (หรือ collection ใด ๆ) เป็นตาราง ASCII หนึ่งคอลัมน์ต่อหนึ่ง property',
   },
   {
     q: 'Node.js inspector ฟังที่ port ใดโดยค่าเริ่มต้น?',
@@ -180,6 +425,40 @@ export const debuggingQuiz = [
       '4000',
     ],
     answer: 2,
+    explain: '9229 คือ port default ของ inspector ทั้ง --inspect และ --inspect-brk เปลี่ยนได้ด้วย --inspect=<port>',
+  },
+  {
+    q: 'ตามค่าเริ่มต้น Node ทำอะไรเมื่อ Promise rejection ไม่มี .catch() เลยใน chain?',
+    options: [
+      'ไม่ทำอะไร — เพิกเฉยต่อ rejection แบบเงียบ ๆ',
+      'พิมพ์ warning แต่ยังทำงานต่อ',
+      'terminate process ด้วย exit code ที่ไม่ใช่ 0 เหมือนกับ uncaught synchronous exception',
+      'ลองใหม่ (retry) promise นั้นโดยอัตโนมัติ',
+    ],
+    answer: 2,
+    explain: 'ตั้งแต่ Node 15 unhandled rejection ทำให้ process crash เป็นค่าเริ่มต้น — ถือว่าร้ายแรงเท่ากับ uncaught throw ไม่ใช่แค่ log เฉย ๆ',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร และ process exit 0 หรือไม่ใช่ 0?\n\nprocess.on(\'uncaughtException\', (err) => {\n  console.error(\'caught:\', err.message);\n});\nthrow new Error(\'x\');\nconsole.log(\'after throw\');',
+    options: [
+      '"caught: x" แล้วก็ "after throw", exit 0',
+      'พิมพ์แค่ "caught: x" -- บรรทัดหลัง throw ไม่มีทางรัน และ process exit 0 เป็นค่าเริ่มต้นเพราะ handler รันโดยไม่ได้ตั้ง process.exitCode',
+      'process เพิกเฉยต่อ handler ทั้งหมดและ crash ด้วย exit 1',
+      'มันค้างตลอดไปรอ input เพิ่ม',
+    ],
+    answer: 1,
+    explain: 'synchronous throw หยุด script ที่ครอบอยู่ทันที -- console.log(\'after throw\') อยู่บน path synchronous เดียวกันและไม่มีทางรัน handler รันจริง แต่ exit code ยังเป็น 0 เว้นแต่ handler เองจะตั้ง process.exitCode หรือเรียก process.exit() ด้วยค่าที่ไม่ใช่ 0 -- เป็นวิธีที่ง่ายมากที่จะรายงานว่าสำเร็จโดยไม่ตั้งใจหลังจาก crash จริง',
+  },
+  {
+    q: 'codebase หนึ่งเพิ่ม `process.on(\'uncaughtException\', () => {})` (handler เปล่า) เพื่อ "ไม่ให้แอป crash" ผลจริงคืออะไร?',
+    options: [
+      'ทำให้แอปทนทานขึ้นโดยไม่มีข้อเสีย',
+      'มีผลแค่กับ logging ไม่กระทบพฤติกรรม',
+      'โค้ดที่กำลังรันตอน exception ถูก throw หยุดทำงานกลางคัน และ process ยังให้บริการ request ต่อในสถานะที่อาจเสียหายได้',
+      'Node เพิกเฉยต่อ handler เปล่าและ crash อยู่ดี',
+    ],
+    answer: 2,
+    explain: 'ฟังก์ชันที่ throw ไม่มีทางทำ logic ที่เหลือให้เสร็จ handler ที่ว่างเปล่า (หรือแค่ log) ซ่อนไว้ว่ามี bug เกิดขึ้นโดยไม่ได้รับประกันอะไรเลยว่า process ยังอยู่ในสถานะที่สอดคล้องกัน -- เอกสารของ Node แนะนำให้ cleanup แบบ synchronous แล้ว exit ไม่ใช่กลับไปทำงานปกติต่อ',
   },
 ];
 

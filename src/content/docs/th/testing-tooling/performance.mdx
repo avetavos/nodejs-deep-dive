@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ทำไมต้องวัด?
 
@@ -78,6 +80,80 @@ performance.measure('my-operation', 'a', 'b');
 obs.disconnect();
 ```
 
+`entryTypes` ไม่ได้จำกัดแค่ `'measure'` เท่านั้น entry ประเภท `'function'` มาจาก `performance.timerify()` ซึ่งห่อฟังก์ชันแล้วส่ง `PerformanceEntry` ทุกครั้งที่มันถูกเรียก — ไม่ต้องมีคู่ `mark`/`measure` เอง:
+
+export const timerifyCode = `
+import { PerformanceObserver, performance } from 'node:perf_hooks';
+
+const obs = new PerformanceObserver((list) => {
+  const names = list.getEntries().map((e) => e.entryType);
+  console.log('observed entry types include function:', names.includes('function'));
+  obs.disconnect();
+});
+obs.observe({ entryTypes: ['function'] });
+
+const timed = performance.timerify(function slow(n) {
+  let s = 0;
+  for (let i = 0; i < n; i++) s += i;
+  return s;
+});
+timed(100000);
+`;
+
+export const timerifyOut = `observed entry types include function: true`;
+
+<NodeRunner client:visible code={timerifyCode} node expected={timerifyOut} />
+
+entry ประเภท `'gc'` ต้องใช้ `--expose-gc` (เพื่อเรียก `global.gc()` ตามต้องการ) และสังเกตอัตโนมัติทุกครั้งที่มี garbage collection รอบจริงเกิดขึ้น — มีประโยชน์เวลาเชื่อมโยง latency ที่พุ่งขึ้นกับ GC pause:
+
+```bash
+node --expose-gc gc-observer.mjs
+```
+
+```text
+gc entry seen: true
+```
+
+```js
+// @skip-verify requires --expose-gc, not passed by default here
+import { PerformanceObserver } from 'node:perf_hooks';
+
+const obs = new PerformanceObserver((list) => {
+  console.log('gc entry seen:', list.getEntries().length > 0);
+  obs.disconnect();
+});
+obs.observe({ entryTypes: ['gc'] });
+global.gc();
+```
+
+## วัด event loop lag ด้วย monitorEventLoopDelay
+
+`performance.now()` วัดงานที่คุณรู้อยู่แล้วว่าจะวัด `monitorEventLoopDelay()` ตอบคำถามที่ต่างออกไป — "มีอะไรกำลังบล็อก loop อยู่ตอนนี้หรือเปล่า แม้แต่โค้ดที่คุณไม่ได้ควบคุม" — โดย sample ช่องว่างระหว่างรอบของ event loop:
+
+export const eventLoopDelayCode = `
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+
+const h = monitorEventLoopDelay({ resolution: 20 });
+h.enable();
+
+// Block the loop synchronously to create measurable delay.
+const until = Date.now() + 100;
+while (Date.now() < until) {}
+
+setTimeout(() => {
+  h.disable();
+  console.log('saw event loop delay:', h.max > 0);
+  console.log('min <= mean <= max:', h.min <= h.mean && h.mean <= h.max);
+}, 50);
+`;
+
+export const eventLoopDelayOut = `saw event loop delay: true
+min <= mean <= max: true`;
+
+<NodeRunner client:visible code={eventLoopDelayCode} node expected={eventLoopDelayOut} />
+
+`h.min`/`h.mean`/`h.max`/`h.percentile(N)` เป็นหน่วยนาโนวินาทีทั้งหมด production server ที่ expose `h.percentile(99)` ไว้บน endpoint สำหรับ health/metrics จะบอกคุณเกี่ยวกับ lag ที่เกิดจากงาน synchronous *ใดก็ตาม*ทั่วทั้ง process — โค้ดของคุณ, dependency, แม้แต่ native addon — ไม่ใช่แค่ช่วงที่คุณห่อด้วย `performance.mark()` เท่านั้น
+
 ## Demo แบบ Live — จับเวลา CPU-bound loop
 
 export const perfCode = `
@@ -127,27 +203,159 @@ async function nonBlockingWork(data) {
   return result;
 }
 
-// BEST for CPU-heavy work — offload to a Worker Thread
+// BEST for CPU-heavy work — offload to a Worker Thread (see below in this lesson)
 import { Worker } from 'node:worker_threads';
-// (see the Streams & Worker Threads module for full coverage)
 ```
 
-## CPU profiling ด้วย `--prof`
+## Profiling ด้วย `--cpu-prof` และ `--heap-prof`
 
-สำหรับการ profile CPU เชิงลึก Node มี V8 profiler ในตัว:
+flag เก่าอย่าง `--prof`/`--prof-process` ยังใช้ได้อยู่ แต่ flag สมัยใหม่ที่เรียบง่ายกว่าจะเขียนไฟล์ที่คุณลากเข้า panel Performance/Memory ของ Chrome DevTools ได้เลย — ไม่ต้องผ่านขั้นตอนแปลงข้อมูล:
 
 ```bash
-# รันพร้อม profiling
-node --prof src/app.js
-
-# แปลง isolate log เป็นรายงานที่อ่านได้
-node --prof-process isolate-*.log > profile.txt
+node --cpu-prof --cpu-prof-dir=. --cpu-prof-name=demo.cpuprofile src/app.js
 ```
 
-output จะแสดงว่า function ใดใช้ CPU time มากที่สุด (ticks) ดูที่ส่วน "Bottom up (heavy) profile" เพื่อหา hot paths
+```text
+(writes demo.cpuprofile to the current directory once the process exits)
+```
 
-<Callout title="วัดก่อน optimize — รักษา event loop ไม่ให้ถูกบล็อก">
-วัดด้วย `performance.now()` หรือ `--prof` เสมอก่อนตัดสินใจว่าจะ optimize อะไร ปัญหาประสิทธิภาพที่พบบ่อยที่สุดใน Node.js คือ CPU-bound synchronous loop ที่บล็อก event loop ระบุ hot path ก่อน แล้วค่อยเลือกระหว่างการปรับปรุง algorithm, การแบ่งงานด้วย `setImmediate`, หรือการย้ายงานไปยัง Worker Threads
+```bash
+node --heap-prof --heap-prof-dir=. --heap-prof-name=demo.heapprofile src/app.js
+```
+
+```text
+(writes demo.heapprofile to the current directory once the process exits)
+```
+
+เปิดไฟล์ทั้งสองใน Chrome DevTools (`chrome://inspect` → "Open dedicated DevTools for Node" → แท็บ Profiler/Memory → Load) เพื่อดู flame graph หรือรายละเอียดการจอง memory โดยไม่ต้องออกจาก browser ที่คุณใช้ทำทุกอย่างอยู่แล้ว
+
+## worker_threads สำหรับงานที่ใช้ CPU หนัก
+
+การแบ่งงานด้วย `setImmediate` (ข้างบน) ทำให้ event loop ตอบสนองได้โดย*สลับ*งานนั้นกับงานอื่น — CPU time รวมที่ใช้เท่าเดิม แค่กระจายออกไป ส่วน `Worker` ย้ายงานไปยัง**เธรดอื่นจริง ๆ** ทำให้ main thread จัดการ I/O แบบขนานไปด้วยได้ แทนที่จะผลัดกันทำ:
+
+export const workerCode = `
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
+
+function fib(n) { return n <= 1 ? n : fib(n - 1) + fib(n - 2); }
+
+if (isMainThread) {
+  const worker = new Worker(new URL(import.meta.url), { workerData: 30 });
+  worker.on('message', (result) => {
+    console.log('worker result:', result);
+    console.log('main thread was free to do other work while this ran');
+  });
+} else {
+  // This branch runs inside the worker thread, in the same file.
+  const result = fib(workerData);
+  parentPort.postMessage(result);
+}
+`;
+
+export const workerOut = `worker result: 832040
+main thread was free to do other work while this ran`;
+
+<NodeRunner client:visible code={workerCode} node expected={workerOut} />
+
+ไฟล์เดียวทำหน้าที่เป็นทั้ง entry point ของ main thread และ script ของ worker ได้ด้วยการแยก branch ตาม `isMainThread` — `new Worker(new URL(import.meta.url), ...)` รันไฟล์เดียวกันนี้ซ้ำในเธรดใหม่ และ `workerData`/`parentPort.postMessage()` คือช่องทางสื่อสารสองทิศทางเข้า-ออก สำหรับงานจริงให้แยก worker ไปเป็นไฟล์ของตัวเองเมื่อ logic เริ่มยาวเกินไม่กี่บรรทัด
+
+<Callout title="Worker มี overhead — ใช้กับงาน CPU จริง ไม่ใช่ทุกอย่าง">
+การสร้าง `Worker` มีต้นทุนไม่กี่มิลลิวินาทีและ V8 isolate ของตัวเอง (ไม่มีการแชร์ memory เป็นค่าเริ่มต้น — ข้อมูลถูก copy หรือ transfer ไม่ใช่แชร์ เว้นแต่คุณจะใช้ `SharedArrayBuffer` อย่างชัดเจน) ใช้ worker เมื่องานคำนวณหนักพอ (หลักสิบมิลลิวินาทีขึ้นไป) จนความคุ้มค่าของการไม่บล็อก event loop มากกว่าต้นทุนการเริ่มต้นนั้น — ไม่ใช่สำหรับทุกการเรียกฟังก์ชัน
+</Callout>
+
+## cluster เทียบกับ reverse proxy
+
+โมดูล `cluster` ในตัวของ Node fork process ของคุณหลายชุด (โดยทั่วไปหนึ่งชุดต่อหนึ่ง CPU core) ที่แชร์ port การฟังร่วมกัน ทำให้ใช้ multi-core ได้โดยไม่ต้องมี load balancer แยกต่างหาก:
+
+export const clusterCode = `
+import cluster from 'node:cluster';
+
+if (cluster.isPrimary) {
+  console.log('primary pid, forking 2 workers');
+  cluster.fork();
+  cluster.fork();
+  let exited = 0;
+  cluster.on('exit', () => {
+    exited++;
+    if (exited === 2) console.log('all workers exited, primary done');
+  });
+} else {
+  console.log('worker running, exiting immediately');
+  process.exit(0);
+}
+`;
+
+export const clusterOut = `primary pid, forking 2 workers
+worker running, exiting immediately
+worker running, exiting immediately
+all workers exited, primary done`;
+
+<NodeRunner client:visible code={clusterCode} node expected={clusterOut} />
+
+ในทางปฏิบัติ production ส่วนใหญ่ใช้ **reverse proxy** (nginx, cloud load balancer, หรือ container orchestrator ที่รัน N replica) แทนที่จะใช้ `cluster` โดยตรง: reverse proxy ยังจัดการ TLS termination, health check, rolling restart แบบไม่มี downtime, และ scale ในแนวนอนข้าม*เครื่อง* ไม่ใช่แค่ core บนเครื่องเดียว — `cluster` ช่วยแค่ให้ใช้ core ของเครื่องที่คุณมีอยู่แล้วเท่านั้น `cluster` ยังมีประโยชน์สำหรับ deployment เครื่องเดียว หรือเป็นกลไกที่ process manager (เช่น PM2) ใช้อยู่ข้างใน
+
+สำหรับ load testing ทั้งสองแบบ `autocannon` (`npx autocannon http://localhost:3000`) คือเครื่องมือมาตรฐานของ Node ecosystem — มันไม่ได้มาในตัว แต่เป็นวิธีที่ใช้กันทั่วไปในการสร้าง HTTP load แบบ concurrent และดู request/sec กับ latency percentile ของ server ที่กำลังรันอยู่
+
+## Profiling loop
+
+export const profilingLoopMermaid = `flowchart LR
+  Measure["Measure: performance.now() / monitorEventLoopDelay / --cpu-prof"] --> Identify["Identify the actual hot path"]
+  Identify --> Decide{"What kind of cost?"}
+  Decide -->|"blocks the loop, moderate"| Chunk["Chunk with setImmediate/await"]
+  Decide -->|"blocks the loop, heavy CPU"| Offload["Offload to worker_threads"]
+  Decide -->|"single-core limit under load"| Scale["cluster / reverse proxy replicas"]
+  Chunk --> Measure
+  Offload --> Measure
+  Scale --> Measure`;
+
+<Mermaid code={profilingLoopMermaid} title="วัด หา hot path จริง แก้ไข แล้ววัดใหม่ — อย่าเดา" />
+
+## แบบจำลองความคิด (Mental Model)
+
+ทุกเทคนิคในหน้านี้จริง ๆ แล้วตอบคำถามหนึ่งในสองข้อ: "สิ่งนี้ใช้เวลานานแค่ไหน" (`performance.now`, `mark`/`measure`, `--cpu-prof`) หรือ "มีอะไรกำลังบล็อก loop อยู่ตอนนี้หรือเปล่า ที่ไหนก็ได้ในระบบ" (`monitorEventLoopDelay`) การ optimize ไม่ใช่สิ่งที่ทำครั้งเดียวจบ — มันคือ loop นี้: วัด หา hot path จริง (ไม่ใช่ตัวที่คุณคิดเอาเอง) แก้ไขสิ่งนั้น แล้ววัดใหม่อีกครั้ง
+
+## Trade-offs
+
+| ตัวเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| การแบ่งงานด้วย `setImmediate`/`await` | ง่าย ไม่ต้องมีเธรดใหม่ งานทั้งหมดยังอยู่บน core เดียว | CPU time รวมเท่าเดิม แค่สลับกันทำ — ไม่ได้เพิ่ม throughput |
+| `worker_threads` | ขนานกันจริง main thread ยังตอบสนอง I/O ได้ | มี overhead ต่อ worker หนึ่งตัว ไม่มีการแชร์ memory เป็นค่าเริ่มต้น ต้องเขียนโค้ดประสานงานเพิ่ม |
+| `cluster` (multi-process) | ใช้ทุก core บนเครื่องเดียว เปลี่ยนโค้ดน้อย | แต่ละ worker process มี memory ของตัวเอง (ไม่มี cache ที่แชร์ใน process) ยังเป็นเพดานของเครื่องเดียวอยู่ดี |
+| Reverse proxy + N replica | scale ข้ามเครื่องได้ จัดการ TLS/health check/rolling restart ให้ด้วย | ต้องมี infrastructure ให้รันและดูแล แยกจากโค้ดแอปพลิเคชัน |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"การแบ่งงานด้วย setImmediate ทำให้งานเร็วขึ้น"** — ความจริง: มันทำให้ *event loop* ตอบสนองมากขึ้นด้วยการสลับงานอื่นเข้ามาคั่น CPU time รวมของงานหนักตัวนั้นไม่ได้ลดลงเลย
+- **"Worker thread แชร์ memory กับ main thread โดยอัตโนมัติ"** — ความจริง: โดยค่าเริ่มต้น ข้อมูลที่ส่งเข้า/ออกจาก `Worker` ถูก structured-clone (copy) การแชร์ memory จริง ๆ ต้องใช้ `SharedArrayBuffer` และ `Atomics` อย่างชัดเจน
+- **"cluster ให้ประโยชน์เหมือนกับ reverse proxy"** — ความจริง: `cluster` ใช้แค่ core บนเครื่องเดียวเท่านั้น มันไม่ได้ช่วยเรื่อง TLS termination, scale ข้ามเครื่อง, หรือ zero-downtime deploy แบบที่ reverse proxy/load balancer ทำได้
+- **"performance.now() วัดสิ่งที่ทั้ง server สัมผัส"** — ความจริง: มันวัดแค่ช่วงที่คุณห่อด้วย `mark`/`measure` หรือ `t0`/`t1` เท่านั้น สิ่งอื่นทั้งหมด (dependency, GC, request อื่น) ยังอาจเป็นต้นตอ latency จริงได้ — นั่นคือสิ่งที่ `monitorEventLoopDelay` มีไว้เพื่อจับ
+
+## อ่านโค้ดที่ AI เขียน
+
+- โค้ดย้ายงานคำนวณไปยัง `Worker` สำหรับสิ่งที่ใช้เวลาแค่ไมโครวินาทีหรือไม่? overhead ของการสร้างเธรดและ copy ข้อมูลอาจแพงกว่าตัวงานคำนวณเอง
+- benchmark ใช้ `Date.now()` แทน `performance.now()` หรือวัดข้าม `await` โดยไม่นับงานอื่นที่อาจรันแทรกเข้ามาหรือไม่?
+- มีการสร้าง `PerformanceObserver` และ `.observe()` แต่ไม่เคย `.disconnect()` หรือไม่? มันจะรักษา reference ไว้และเก็บ entry ต่อไปตลอดอายุของ process
+- มีการเสนอ "เพิ่ม clustering" เป็นทางแก้เรื่อง scaling โดยไม่ถามด้วยว่า reverse proxy กับหลาย replica (ที่แก้ TLS, health check, และ scale ข้ามเครื่องได้ด้วย) เป็นคำตอบที่ครบถ้วนกว่าหรือไม่?
+
+<SpotTheBug code={`import { PerformanceObserver, performance } from 'node:perf_hooks';
+
+function handleRequest(req, res) {
+  const obs = new PerformanceObserver((list) => {
+    console.log(list.getEntries()[0].duration);
+  });
+  obs.observe({ entryTypes: ['measure'] });
+
+  performance.mark('start');
+  // ... handle the request ...
+  performance.mark('end');
+  performance.measure('request', 'start', 'end');
+
+  res.end('ok');
+}`}>
+มีการสร้าง `PerformanceObserver` ใหม่และ `.observe()` ทุก request แต่ไม่เคย `.disconnect()` เลย แต่ละตัวยังฟัง entry `'measure'` ใหม่ต่อไปตลอดอายุที่เหลือของ process — หลังจากผ่านไปพันครั้ง observer พันตัวจะทำงาน (และ log) พร้อมกันทุกครั้งที่มีการเรียก `performance.measure()` ที่ไหนก็ตามใน process ไม่ใช่แค่ตัวที่สร้าง observer นั้นขึ้นมา นี่คือรูปแบบ listener leak: output การ log เพิ่มขึ้นเรื่อย ๆ memory สำหรับ observer ที่ค้างอยู่โตไม่มีขีดจำกัด และระบบช้าลงเรื่อย ๆ ทางแก้: สร้าง observer แค่ครั้งเดียวนอก request handler (หรือใช้ `performance.getEntriesByName()` แบบ synchronous หลัง `measure()` แทน observer เลยเมื่อไม่ต้องการเก็บข้อมูลแบบ async) และเรียก `.disconnect()` เมื่อใช้เสร็จจริง ๆ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+อย่าเดาว่าอะไรช้า — วัดด้วย `performance.now()`/`--cpu-prof` เพื่อหา hot path จริง แล้วค่อยเลือกระหว่างการแบ่งงาน, worker_threads, หรือ scale แนวนอน ตามประเภทของต้นทุนที่แท้จริง
 </Callout>
 
 export const performanceQuiz = [
@@ -160,6 +368,7 @@ export const performanceQuiz = [
       'นาโนวินาที',
     ],
     answer: 2,
+    explain: 'performance.now() คืนค่า float เป็นมิลลิวินาที ด้วยความแม่นยำระดับ sub-millisecond (ไมโครวินาที)',
   },
   {
     q: 'ทำไม `performance.now()` ถึงเหมาะสำหรับการ benchmark มากกว่า `Date.now()`?',
@@ -170,6 +379,7 @@ export const performanceQuiz = [
       'บันทึก log ไปที่ console โดยอัตโนมัติ',
     ],
     answer: 1,
+    explain: 'performance.now() เป็น monotonic -- มันเพิ่มขึ้นเรื่อย ๆ เท่านั้น แม้นาฬิการะบบจะถูกปรับ (NTP sync, เปลี่ยนเวลาด้วยมือ) Date.now() สามารถถอยหลังได้',
   },
   {
     q: 'CPU-bound loop ที่ทำงานนานทำให้เกิดปัญหาอะไรใน Node.js?',
@@ -180,6 +390,7 @@ export const performanceQuiz = [
       'กระตุ้น garbage collection',
     ],
     answer: 1,
+    explain: 'Node เป็น single-threaded สำหรับการรัน JavaScript -- loop แบบ synchronous ครองเธรดเดียวนั้นไว้ ทำให้ timer, I/O callback, หรือ request อื่นทำงานไม่ได้จนกว่ามันจะเสร็จ',
   },
   {
     q: 'เทคนิคใดที่ yield control กลับให้ event loop เป็นระยะระหว่าง loop ขนาดใหญ่?',
@@ -190,6 +401,40 @@ export const performanceQuiz = [
       'เพิ่ม console.log ภายใน loop',
     ],
     answer: 1,
+    explain: 'การ await Promise ที่ resolve ผ่าน setImmediate ทำให้ I/O และ timer ที่ค้างอยู่ได้รันแทรกระหว่าง chunk -- งานรวมเท่าเดิม แค่สลับกันแทนที่จะครอง loop รวดเดียว',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร (โดยประมาณ) และทำไม?\n\nconst obs = new PerformanceObserver((list) => {\n  console.log(list.getEntries().length > 0);\n});\nobs.observe({ entryTypes: [\'gc\'] });\nglobal.gc();',
+    options: [
+      'มัน throw TypeError ทันที เพราะ global.gc ไม่มีอยู่โดยค่าเริ่มต้น',
+      'true -- แต่เฉพาะเมื่อรัน Node ด้วย --expose-gc เท่านั้น ถ้าไม่มี flag global.gc จะเป็น undefined และโค้ดนี้ throw',
+      'false -- gc entry ไม่มีทาง observe ได้จากโค้ดผู้ใช้',
+      'มันพิมพ์ true เสมอไม่ว่าจะมี flag หรือไม่',
+    ],
+    answer: 1,
+    explain: 'global.gc() มีอยู่ก็ต่อเมื่อ Node ถูกเริ่มด้วย --expose-gc เท่านั้น เมื่อมี flag การ garbage collection รอบจริงจะรัน และ PerformanceObserver ประเภท "gc" จะรายงานมัน ถ้าไม่มี flag global.gc จะเป็น undefined และการเรียกมันจะ throw',
+  },
+  {
+    q: 'worker_threads Worker คำนวณค่าและเรียก `parentPort.postMessage(result)` main thread จะเห็นการเปลี่ยนแปลงโดยอัตโนมัติหรือไม่ ถ้า worker mutate object ธรรมดาที่มันจับไว้ใน closure ในภายหลัง?',
+    options: [
+      'เห็น เพราะ object ถูกแชร์โดย reference ระหว่างเธรดเป็นค่าเริ่มต้น',
+      'ไม่เห็น -- ข้อมูลที่ข้าม worker boundary (postMessage, workerData) ถูก structured-clone เท่านั้น ต้องตั้ง SharedArrayBuffer/Atomics เองถึงจะแชร์ memory จริง',
+      'มีแค่ string กับ number เท่านั้นที่ข้ามได้ object ไม่รองรับเลย',
+      'เห็น แต่เฉพาะ object ที่สร้างด้วย new Object() เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'เธรดใน worker_threads ไม่แชร์ memory กันเป็นค่าเริ่มต้น ค่าที่ส่งผ่าน postMessage/workerData ถูก copy (structured clone) การแชร์ memory จริง ๆ ต้องใช้ SharedArrayBuffer เข้าถึงผ่าน Atomics',
+  },
+  {
+    q: 'ทำไม reverse proxy กับ N replica มักจะแทนที่ ไม่ใช่แค่เสริม การใช้ node:cluster เพียงอย่างเดียวใน production?',
+    options: [
+      'cluster เลิกใช้แล้วและใช้งานบน Node 24 ไม่ได้',
+      'reverse proxy ยังจัดการ TLS termination, health check, และ scale ข้ามหลายเครื่องได้ด้วย -- cluster ใช้ได้แค่ core ของเครื่องเดียว',
+      'cluster fork worker process ได้แค่ตัวเดียว',
+      'reverse proxy ไม่รองรับแอปพลิเคชัน Node.js',
+    ],
+    answer: 1,
+    explain: 'node:cluster ยังใช้งานได้ดีและมีประโยชน์อยู่ -- มันแค่แก้ปัญหาที่แคบกว่า (multi-core บนเครื่องเดียว) เมื่อเทียบกับ reverse proxy/load balancer ที่ครอบคลุม TLS, health check, rolling restart, และ scale แนวนอนข้ามเครื่องด้วย',
   },
 ];
 

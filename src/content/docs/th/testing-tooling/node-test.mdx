@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## node:test — ครบครันในตัว
 
@@ -82,6 +84,52 @@ test('fetch-like async test', async function() {
 });
 ```
 
+## Lifecycle hooks — before / after / beforeEach / afterEach
+
+`before` และ `after` รันครั้งเดียวต่อ `describe` block หนึ่งบล็อก (หรือครั้งเดียวสำหรับทั้งไฟล์ถ้าอยู่ระดับบนสุด) ส่วน `beforeEach`/`afterEach` รันล้อมรอบทุกการทดสอบใน scope นั้น:
+
+```js
+import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+
+describe('a resource pool', () => {
+  let pool;
+  before(() => { pool = []; console.log('before: pool created once'); });
+  after(() => { console.log('after: pool torn down once'); });
+  beforeEach(() => { pool.push('conn'); console.log('beforeEach: connection added'); });
+  afterEach(() => { pool.pop(); console.log('afterEach: connection removed'); });
+
+  it('has one connection during the test', () => {
+    assert.equal(pool.length, 1);
+  });
+  it('still has exactly one connection in the next test', () => {
+    assert.equal(pool.length, 1);
+  });
+});
+```
+
+```text
+before: pool created once
+beforeEach: connection added
+afterEach: connection removed
+beforeEach: connection added
+afterEach: connection removed
+after: pool torn down once
+▶ a resource pool
+  ✔ has one connection during the test
+  ✔ still has exactly one connection in the next test
+✔ a resource pool
+ℹ tests 2
+ℹ suites 1
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+`before`/`after` รันแค่ครั้งเดียวไม่ว่าใน block จะมีกี่การทดสอบ ส่วน `beforeEach`/`afterEach` รีเซ็ต shared state เพื่อไม่ให้การทดสอบรั่วไหลข้ามกัน — สังเกตว่า pool กลับมามีความยาว 1 อีกครั้งในการทดสอบที่ *สอง* เพราะ `afterEach` ได้ pop connection ที่การทดสอบแรกเพิ่มไว้ออกไปแล้ว
+
 ## คู่มือ node:assert/strict
 
 ```js
@@ -127,6 +175,8 @@ test('async: resolves to correct value', async function() {
 
 <NodeRunner client:visible code={nodeTestCode} node />
 
+demo นี้ไม่มีแผง "verified output" โดยตั้งใจ: reporter ของ `node:test` โดยค่าเริ่มต้นพิมพ์ `duration_ms` ในทุกบรรทัด ซึ่งไม่เท่ากันในแต่ละครั้งที่รัน การแปะตัวเลขจากการรันจริงครั้งหนึ่งลงใน `expected` จะทำให้แผงนั้นดูแม่นยำเกินจริงแบบผิด ๆ demo ที่ตามมาข้างล่างใช้ `mock`/`assert` โดยตรง (ไม่ผ่าน `test()`) เพื่อให้ output แน่นอน 100% และปลอดภัยที่จะแสดงเป็น verified
+
 <Callout title="Node มี built-in test runner มาตั้งแต่ v18 — ไม่ต้องติดตั้ง dependency เพิ่ม">
 คุณไม่จำเป็นต้องใช้ Jest, Mocha, หรือ Vitest เพื่อเขียนทดสอบใน Node.js `node:test` + `node:assert` ครอบคลุม unit tests, async tests, และ grouped suites ได้ครบถ้วนโดยไม่ต้องติดตั้งอะไร mocking และ snapshot testing ก็มีในตัวเช่นกัน เพิ่ม third-party runner เฉพาะเมื่อต้องการ coverage UI, browser-environment simulation หรือ ecosystem ของ plugin
 </Callout>
@@ -135,11 +185,117 @@ test('async: resolves to correct value', async function() {
 
 | ฟีเจอร์ | สถานะใน Node 24 / 26 |
 |---------|----------------------|
-| `mock.fn()`, `mock.method()`, `mock.timers`, `mock.module()` | Stable |
+| `mock.fn()`, `mock.method()`, `mock.timers` | Stable |
+| `mock.module()` | **Experimental** — ต้องใช้ `--experimental-test-module-mocks` และมี warning |
 | Snapshot testing — `t.assert.snapshot(value)` | Stable ตั้งแต่ 23.4 |
 | Code coverage | Experimental — `--experimental-test-coverage` |
 | `--watch` สำหรับ test | Stable — ไม่ต้องใช้ flag และไม่มี warning |
 | Test tags — `--experimental-test-tag-filter` | Early development (26.2+) |
+
+### mock.fn — ติดตามการเรียกโดยไม่ต้องใช้ library
+
+`mock.fn(implementation)` ห่อฟังก์ชันแล้วบันทึกทุกการเรียก — argument, ค่าที่ return, และจำนวนครั้ง — ไว้ที่ `.mock` มันทำงานแบบ standalone ได้ นอกเหนือจาก `test()` ซึ่งมีประโยชน์สำหรับการเช็กเร็ว ๆ ในหน้านี้เลย:
+
+export const mockFnCode = `
+import { mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+const add = (a, b) => a + b;
+const tracked = mock.fn(add);
+
+console.log('result:', tracked(2, 3));
+console.log('call count:', tracked.mock.callCount());
+console.log('first call args:', tracked.mock.calls[0].arguments);
+
+assert.equal(tracked.mock.callCount(), 1);
+console.log('assertion passed: called exactly once');
+
+mock.reset();
+`;
+
+export const mockFnOut = `result: 5
+call count: 1
+first call args: [ 2, 3 ]
+assertion passed: called exactly once`;
+
+<NodeRunner client:visible code={mockFnCode} node expected={mockFnOut} />
+
+### mock.method — กับดักของการ mock ผิดตัวอ้างอิง
+
+`mock.method(object, 'methodName', impl)` แทนที่ `object.methodName` ในตำแหน่งเดิม มันจะมีผลเฉพาะจุดที่เรียกโดยดูค่าจาก `object` **ตอนเรียกจริง** เท่านั้น — reference ที่ถูก destructure ไว้ก่อนหน้านั้นเป็นคนละ binding ที่ mock ไม่แตะต้องเลย:
+
+export const mockMethodTrapCode = `
+import { mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+const db = {
+  save(record) { return { id: 1, ...record }; },
+};
+
+// service.js style: destructure the method out at import time
+const { save } = db;
+function createUser(name) {
+  return save({ name }); // calls the destructured reference, not db.save
+}
+
+// BUG: mocking db.save does not affect the already-destructured 'save'
+// reference that createUser closed over.
+mock.method(db, 'save', () => ({ id: 999, mocked: true }));
+
+const result = createUser('Ada');
+console.log('result:', result);
+console.log('mock was actually called:', db.save.mock.callCount());
+assert.equal(db.save.mock.callCount(), 0); // proves the mock was never hit
+console.log('assertion passed: mocking db.save missed the real call site entirely');
+
+mock.reset();
+`;
+
+export const mockMethodTrapOut = `result: { id: 1, name: 'Ada' }
+mock was actually called: 0
+assertion passed: mocking db.save missed the real call site entirely`;
+
+<NodeRunner client:visible code={mockMethodTrapCode} node expected={mockMethodTrapOut} />
+
+<Callout title="Mock วัตถุที่โค้ดของคุณเรียกผ่านจริง ๆ">
+`mock.method` แพตช์ช่อง property ตัวหนึ่ง ไม่ใช่ทุกตัวแปรที่เคยชี้ไปยังฟังก์ชันต้นฉบับ ถ้าโค้ดที่ทดสอบ import ฟังก์ชันมาโดยตรง (`import { save } from './db.js'`) หรือ destructure มันออกมาก่อนที่ mock จะรัน ให้แพตช์ binding เดียวกันนั้น — หรือปรับโครงสร้างโค้ดให้เรียกผ่าน object (`db.save(...)`) เพื่อให้เหลือจุดเดียวที่ต้อง mock
+</Callout>
+
+### mock.module — ยังเป็น experimental บน Node 24
+
+`mock.module()` แทนที่ export ทั้งหมดของโมดูล รวมถึง ESM ด้วย — แต่บน Node 24 มันยังอยู่หลัง `--experimental-test-module-mocks` และพิมพ์ `ExperimentalWarning`:
+
+```js
+// @skip-verify needs --experimental-test-module-mocks, not passed by default here
+import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('mock.module replaces a module', async () => {
+  mock.module('node:os', {
+    namedExports: { hostname: () => 'fake-host' },
+  });
+  const os = await import('node:os');
+  assert.equal(os.hostname(), 'fake-host');
+});
+```
+
+```bash
+node --experimental-test-module-mocks mock-os.test.mjs
+```
+
+```text
+✔ mock.module replaces a module
+(node:12345) ExperimentalWarning: Module mocking is an experimental feature and might change at any time
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+ถ้าไม่ใส่ flag `mock.module` จะไม่ใช่ function เลย (`TypeError: mock.module is not a function`) — มันไม่เงียบแล้วไม่ทำอะไร (no-op) แต่ fail ดังชัดเจน ทำให้ flag ที่ลืมใส่ทำให้ CI ล้มเหลวแบบเห็นได้ชัด แทนที่จะให้ผลบวกลวง
 
 fake timers ช่วยให้ทดสอบ logic ของ retry และ timeout ได้โดยไม่ต้องรอจริง:
 
@@ -174,6 +330,354 @@ test('retries call the fetcher twice', async function(t) {
 
 `setTimeout` ด้านบนถูกเรียกอยู่ภายใน callback ของ `.then()` ซึ่งรันเป็น microtask เท่านั้น — ณ ตอนที่บรรทัดถัดไปเรียก `tick()` แบบ synchronous, timer ตัวนี้ยังไม่ถูกลงทะเบียนเลย `await null` ช่วยให้ event loop ไป drain microtask ที่ค้างอยู่นั้นก่อน ทำให้ timer ถูกตั้งก่อนที่ `tick()` จะมาหา ถ้าข้ามขั้นตอนนี้ไป การทดสอบนี้จะ**ค้างตลอดไป** เพราะ `node:test` ไม่มี timeout ต่อ test เป็นค่าเริ่มต้น ควรใส่ `--test-timeout=<ms>` เสมอ (เช่น `node --test --test-timeout=2000`) เพื่อให้ความผิดพลาดแบบนี้ล้มเหลวเร็วแทนที่จะทำให้ CI ค้าง
 
+ข้อพิสูจน์ว่าการข้าม `await null` ทำให้ fake clock ไม่มีอะไรให้เดินหน้าจริง ๆ — ไม่ต้องมี test wrapper ไม่ต้องค้าง แค่ดู state ของ fake timer:
+
+export const missingAwaitNullCode = `
+import { mock } from 'node:test';
+
+const fetcher = mock.fn(async function() { throw new Error('flaky'); });
+mock.timers.enable({ apis: ['setTimeout'] });
+
+function retry(fn, options) {
+  return fn().catch(function(err) {
+    return new Promise(function(resolve) { setTimeout(resolve, options.delayMs); })
+      .then(function() { return 'retried'; });
+  });
+}
+
+const pending = retry(fetcher, { delayMs: 1000 });
+// BUG: no 'await null' here -- the setTimeout inside .then() has not been
+// registered with the fake clock yet, so tick() advances nothing.
+mock.timers.tick(1000);
+console.log('tick() returned -- fake clock advanced, but nothing was scheduled yet');
+
+mock.timers.reset();
+`;
+
+export const missingAwaitNullOut = `tick() returned -- fake clock advanced, but nothing was scheduled yet`;
+
+<NodeRunner client:visible code={missingAwaitNullCode} node expected={missingAwaitNullOut} />
+
+ถ้าอยู่ใน `test()` จริง ๆ `pending` promise ด้านบนจะไม่มีทาง settle เลย `await assert.rejects(pending, ...)` จะรอมันไปตลอดกาล และ — ถ้าไม่ได้ตั้ง `--test-timeout` ไว้ — การรัน test ทั้งชุดจะไม่มีวันจบ
+
+## Test ที่ผ่านทั้งที่ผิด
+
+test ที่อันตรายที่สุดไม่ใช่ตัวที่ล้มเหลว — แต่คือตัวที่รายงานว่าผ่านทั้งที่ไม่ได้ทดสอบอะไรเลย `node:test` ไม่ได้จับสิ่งเหล่านี้ให้คุณ คุณต้องรู้ว่าต้องมองหาอะไรตอนอ่านไฟล์ทดสอบ (ของคุณเองหรือที่ AI เขียน)
+
+### ไม่มี assertion เลย
+
+```js
+import { test } from 'node:test';
+
+test('checks that createUser sets a default role', async () => {
+  const user = { name: 'Ada' }; // BUG: forgot to call createUser() and check user.role
+  // no assert.* call at all -- the test body just runs to completion
+});
+```
+
+```bash
+node --test no-assertion.test.mjs
+```
+
+```text
+✔ checks that createUser sets a default role
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+test ที่ไม่เคยเรียก `assert.*` (หรือ `t.assert.*`) เลยไม่มีทางล้มเหลวได้ — มัน "ผ่าน" เพราะไม่ได้ทำอะไรเลย เวลาอ่านไฟล์ทดสอบ ให้เช็กเสมอว่าทุก body ของ `it`/`test` จบด้วย assertion อย่างน้อยหนึ่งอันที่ตรวจพฤติกรรมจริงที่มันอ้างว่าทดสอบ
+
+### งาน async ที่อยู่รอดเกินอายุของ test — Node 24 จับสิ่งนี้ได้จริง
+
+```js
+// @expect-throw file exits non-zero -- Node 24 reports the leaked async assertion as a whole-file failure
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('rejects an invalid user (BUG: missing await/return)', () => {
+  // BUG: no `return` and no `await` in front of the async work below --
+  // the test function itself returns undefined synchronously, so node:test
+  // considers it "passed" before the promise below ever settles.
+  Promise.resolve().then(() => {
+    assert.equal(1, 2); // this failure is never seen by the test runner directly
+  });
+});
+```
+
+```bash
+node --test missing-await.test.mjs
+```
+
+```text
+✔ rejects an invalid user (BUG: missing await/return)
+ℹ Error: Test "rejects an invalid user (BUG: missing await/return)" at missing-await.test.mjs:4:1 generated asynchronous activity after the test ended. This activity created the error "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+1 !== 2
+" and would have caused the test to fail, but instead triggered an unhandledRejection event.
+✖ missing-await.test.mjs
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+test ตัวนั้นยังแสดง ✔ อยู่ — node:test คืนการควบคุมไปแล้วก่อนที่ `.then()` นั้นจะรัน แต่ runner ของ Node 24 ติดตาม async activity ต่อ test และสังเกตเห็นงานที่เกิดขึ้น *หลัง* test จบไปแล้ว มันรายงานว่าทั้งไฟล์ fail แทนที่จะกลืนมันไปเงียบ ๆ ซึ่งปลอดภัยกว่า Node เวอร์ชันเก่า อย่างไรก็ตามอย่าพึ่งพา safety net นี้ — ให้ `return`/`await` promise ที่ test body สร้างขึ้นเสมอ เพื่อให้ความล้มเหลวถูกระบุไปที่ test ที่ถูกต้องและไม่ต้องพึ่งการตรวจจับนี้:
+
+```js
+// fixed
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('rejects an invalid user', async () => {
+  await assert.rejects(async () => { throw new Error('invalid'); });
+});
+```
+
+### mock.method ผิดตัวอ้างอิง
+
+อธิบายไว้ละเอียดข้างบน — การ mock `db.save` ไม่มีผลกับ `save` ที่ถูก destructure ออกมาก่อนที่ mock จะรัน test อาจยังผ่านอยู่ (มันอาจ assert ว่า `db.save` ตัวจริงไม่เคยถูกเรียก โดยคาดหวังว่าจะเป็น mock) ทั้งที่จริง ๆ แล้วพิสูจน์ว่า mock ไม่มีผลอะไรกับโค้ดที่ทดสอบเลย
+
+## test.only, --test-only, และ t.skip/t.todo
+
+```js
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('this one is skipped without --test-only handling', () => {
+  assert.equal(1, 1);
+});
+
+test.only('only this one runs when --test-only is set', () => {
+  assert.equal(2, 2);
+});
+```
+
+```bash
+# without --test-only: .only has NO effect, both tests run
+node --test only.test.mjs
+
+# with --test-only: only the marked test runs, the rest are skipped
+node --test --test-only only.test.mjs
+```
+
+```text
+# without --test-only
+✔ this one is skipped without --test-only handling
+✔ only this one runs when --test-only is set
+ℹ 'only' and 'runOnly' require the --test-only command-line option.
+ℹ tests 2
+ℹ pass 2
+
+# with --test-only
+✔ only this one runs when --test-only is set
+ℹ tests 1
+ℹ pass 1
+```
+
+`test.only` ไม่มีผลอะไรเลยจนกว่า runner จะถูกสั่งให้ยอมรับมัน นั่นคือเหตุผลที่มันอันตราย: CI script ที่ใส่ `--test-only` ไว้เสมอจะรัน test น้อยลงแบบเงียบ ๆ ตลอดไปถ้ามีคนลืมลบ `.only` ที่ใช้ตอน debug ออก และการรันก็ยังรายงานว่าสำเร็จอยู่ดี
+
+`t.skip` (หรือ `{ skip: true }`) และ `t.todo` (หรือ `{ todo: true }`) คือเวอร์ชันที่ตั้งใจและมองเห็นได้ของ "อย่ารันตัวนี้ตามปกติ":
+
+```js
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('skipped test', { skip: true }, () => {
+  assert.fail('never runs');
+});
+
+test('todo test', { todo: true }, () => {
+  assert.fail('reported as todo, does not fail the run');
+});
+
+test('a normal passing test', () => {
+  assert.ok(true);
+});
+```
+
+```bash
+node --test skip-todo.test.mjs
+```
+
+```text
+﹣ skipped test # SKIP
+✖ todo test # TODO
+✔ a normal passing test
+ℹ tests 3
+ℹ pass 1
+ℹ skipped 1
+ℹ todo 1
+```
+
+test ที่เป็น `todo` แล้ว fail ยังถูกรายงานอยู่ (ด้วย `✖` และ `# TODO`) แต่**ไม่ทำให้**การรันทั้งหมด fail — exit code ยังเป็น `0` ต่างจาก bug ที่ผ่านแบบเงียบ ๆ `skip`/`todo` แสดงชัดเจนในตัวเลขสรุป ทำให้ reviewer เห็นได้ว่ามี test กี่ตัวที่ไม่ได้ถูกบังคับใช้จริง ๆ
+
+## Reporter และ coverage
+
+`--test-reporter` กำหนดรูปแบบ output `spec` (ค่าเริ่มต้น ที่แสดงตลอดหน้านี้) อ่านง่ายสำหรับมนุษย์ `tap` คือ TAP13 protocol ดิบที่เครื่องมืออื่น parse ได้ `dot` คือสรุปแบบกระชับหนึ่งตัวอักษรต่อ test `junit` สร้าง XML ที่ CI ใช้ได้ รวมกับ `--test-reporter-destination` เพื่อเขียนลงไฟล์:
+
+```bash
+node --test --test-reporter=dot small.test.mjs
+```
+
+```text
+.
+```
+
+```bash
+node --test --test-reporter=tap small.test.mjs
+```
+
+```text
+TAP version 13
+# Subtest: adds
+ok 1 - adds
+  ---
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+```
+
+Coverage ยังเป็น `--experimental-test-coverage` บน Node 24 และ 26 — มันใช้งานได้จริง แต่ชื่อ flag คือสัญญาณที่ซื่อสัตย์ว่ารูปแบบ output ของมันยังเปลี่ยนได้:
+
+```bash
+node --test --experimental-test-coverage --test-coverage-functions=100 partial.test.mjs
+```
+
+```text
+✔ only uses one function
+ℹ tests 1
+ℹ pass 1
+ℹ Error: 50.00% function coverage does not meet threshold of 100%.
+ℹ start of coverage report
+------------------------------------------------------------
+file        | line % | branch % | funcs % | uncovered lines
+------------------------------------------------------------
+partial.mjs | 100.00 |   100.00 |   50.00 |
+------------------------------------------------------------
+all files   | 100.00 |   100.00 |   50.00 |
+------------------------------------------------------------
+end of coverage report
+```
+
+การรันนั้น exit แบบ non-zero: `--test-coverage-functions=100` (มี `--test-coverage-lines` และ `--test-coverage-branches` threshold แบบเดียวกัน) ทำให้ process ทั้งหมด fail เมื่อ coverage จริงต่ำกว่าที่กำหนด มีประโยชน์เป็น CI gate เมื่อคุณตัดสินใจแล้วว่าตัวเลข coverage คุ้มค่าที่จะบังคับใช้
+
+## Snapshot testing
+
+`t.assert.snapshot(value)` เปรียบเทียบค่ากับไฟล์ `.snapshot` ที่เก็บไว้ข้างไฟล์ทดสอบ ซึ่ง serialize ด้วย `util.inspect` การรันครั้งแรก (หรือรันด้วย `--test-update-snapshots`) จะเขียนไฟล์นั้น การรันครั้งต่อ ๆ ไปจะเทียบกับมัน:
+
+```js
+// @skip-verify needs a pre-recorded .snapshot file (or --test-update-snapshots first) to pass
+import { test } from 'node:test';
+
+test('snapshot demo', (t) => {
+  t.assert.snapshot({ a: 1, b: [1, 2, 3] });
+});
+```
+
+```bash
+# first time, or after an intentional change: record the snapshot
+node --test --test-update-snapshots snapshot.test.mjs
+```
+
+```text
+exports[`snapshot demo 1`] = `
+{
+  "a": 1,
+  "b": [
+    1,
+    2,
+    3
+  ]
+}
+`;
+```
+
+```bash
+# every later run: compare against the recorded snapshot, fail on drift
+node --test snapshot.test.mjs
+```
+
+commit ไฟล์ `*.snapshot` ที่ถูกสร้างขึ้นเข้า version control และ review diff ของมันเหมือนกับที่คุณ review โค้ดที่เปลี่ยนแปลงอื่น ๆ — การอัปเดต snapshot ปลอดภัยก็ต่อเมื่อมนุษย์ยืนยันแล้วว่าค่าใหม่ถูกต้อง ไม่ใช่แค่ต่างไปจากเดิม
+
+## Test lifecycle ทั้งหมด
+
+export const testLifecycleMermaid = `flowchart TB
+  Discover["node --test discovers *.test.js, *-test.*, *_test.*, test-*.*, and everything under test/"] --> Before["before() -- once per file/describe"]
+  Before --> Loop{"For each test"}
+  Loop --> BE["beforeEach()"]
+  BE --> Run["test body runs (assert.* / t.assert.*)"]
+  Run --> AE["afterEach()"]
+  AE --> Loop
+  Loop -->|"all tests done"| After["after() -- once per file/describe"]
+  After --> Report["reporter (spec/tap/dot/junit) + coverage + exit code"]`;
+
+<Mermaid code={testLifecycleMermaid} title="ค้นหาไฟล์ ครอบ hook รอบทุก test แล้วรัน reporter รอบเดียวตอนท้าย" />
+
+## แบบจำลองความคิด (Mental Model)
+
+`node:test` ไม่ใช่ mini-framework ที่ยัดเข้าไปใน Node — มันเป็น layer บาง ๆ ที่ซื่อตรง: `test()`/`describe()`/`it()` ลงทะเบียนงาน hooks ห่อรอบมัน `mock`/`assert` เป็นแค่ object ธรรมดาที่ใช้ได้ทั้งมีหรือไม่มี `test()` wrapper และ reporter เป็นสิ่งสุดท้ายที่รันจริง ๆ ไม่มีอะไรมหัศจรรย์ตรงนี้: test "ผ่าน" เพราะ function ของมัน return (หรือ resolve) โดยไม่ throw และไม่มี unhandled rejection — นั่นคือเหตุผลที่ assertion ที่ไม่ได้ await หรือการไม่มี `assert.*` เลยหลุดผ่านไปแบบเงียบ ๆ ได้
+
+## Trade-offs
+
+| ตัวเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `node:test` แทน Jest/Vitest | ไม่ต้องมี dependency มาพร้อมทุกการติดตั้ง Node ไม่ต้องมี config file | ไม่มี coverage UI ในตัว ไม่มีเครื่องมือ review snapshot ไม่มีการจำลอง DOM/browser environment |
+| ตั้ง `--test-timeout` ไว้ชัดเจน | test ที่ค้าง (ลืม `await null`, promise ที่ไม่ settle) fail เร็วใน CI แทนที่จะทำให้ pipeline ค้าง | ต้องจำ flag เพิ่มอีกตัวในทุก CI script |
+| `mock.module()` | แทนที่แม้แต่ built-in module อย่าง `node:os` ได้เพื่อการทดสอบ | Experimental — อยู่หลัง flag พิมพ์ warning และพฤติกรรมไม่รับประกันว่าจะเสถียรในทุก release |
+| Snapshot testing | เขียนเร็วสำหรับ output ที่มีรูปร่างซับซ้อน | การกด `--test-update-snapshots` แบบไม่ได้ตรวจสอบหลังการเปลี่ยนแปลงทำให้ snapshot test นั้นหยุดจับอะไรเลย |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"test ที่แสดงเครื่องหมายถูกสีเขียวแปลว่ามันทดสอบอะไรบางอย่างจริง ๆ"** — ความจริง: test ที่ไม่มีการเรียก `assert.*` เลย หรือ assertion ของมันรันหลังจาก function ของ test คืนค่าไปแล้ว จะรายงานว่าผ่านไม่ว่าจะเกิดอะไรขึ้นก็ตาม
+- **"mock.method(obj, 'name', fn) มีผลกับทุก reference ของฟังก์ชันนั้นทั่วทั้ง codebase"** — ความจริง: มันแพตช์แค่ property slot บน `obj` เท่านั้น reference ที่ถูก destructure หรือจับไว้ก่อนหน้านั้นจากฟังก์ชันต้นฉบับจะไม่ถูกแตะต้องเลย
+- **"การรองรับ mocking, coverage, และ snapshot ที่มีในตัวของ Node เสถียรเท่ากันหมด"** — ความจริง: `mock.fn`/`mock.method`/`mock.timers` และ snapshot เป็น stable แล้ว แต่ `mock.module()` และ `--experimental-test-coverage` ยังเป็น experimental อย่างชัดเจนบน Node 24 และ 26
+- **"test.only เป็นวิธีที่ปลอดภัยในการโฟกัสที่ test เดียวตอน debug"** — ความจริง: มันปลอดภัยตอน debug ในเครื่อง เพราะ `--test-only` (ส่วนใหญ่) ปิดอยู่ตรงนั้น แต่ใน CI script ที่เปิด `--test-only` ไว้เสมอ `.only` ที่ลืมลบจะทำให้ test อื่นทั้งหมดหลุดออกจากการรันไปแบบเงียบ ๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+- test body จบลงโดยไม่มีการเรียก `assert.*`/`t.assert.*` แม้แต่ครั้งเดียวหรือไม่? ถ้าใช่ มันจะผ่านไม่ว่าโค้ดที่ทดสอบจะทำอะไรจริง ๆ ก็ตาม
+- งานภายในของ async test เริ่มด้วย `.then()`/เรียก `Promise` เปล่า ๆ แทนที่จะ `await` หรือ `return` หรือไม่? test อาจจบและรายงานว่าผ่านก่อนที่งานนั้น — หรือ assertion ของมัน — จะรันเสร็จ
+- `mock.method` เล็งไปที่ property ของ object ในขณะที่โค้ดที่ทดสอบ import หรือ destructure ฟังก์ชันเดียวกันนั้นมาโดยตรงหรือไม่? mock กับจุดเรียกจริงอาจไม่ใช่ binding เดียวกัน
+- มี `test.only` หลงเหลืออยู่ในไฟล์ทดสอบโดยไม่มี comment อธิบายเหตุผล ก่อนจะ commit หรือไม่? มันอาจไม่มีผลอะไรเลย (ถ้า CI ไม่มี `--test-only`) หรือกำลังปิด test ตัวอื่นทั้งหมดแบบเงียบ ๆ (ถ้ามี)
+- test ของ `mock.timers` เรียก `tick()` ทันทีหลังเริ่มงาน async โดยไม่มี `await null` (หรือการ yield ที่เทียบเท่า) คั่นกลางหรือไม่? timer อาจยังไม่ถูกลงทะเบียน และ test อาจค้างตลอดไปโดยไม่มี timeout เป็นค่าเริ่มต้น
+
+<SpotTheBug code={`import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+const emailer = {
+  send(to, body) { /* real network call */ },
+};
+
+import { send } from './emailer.js'; // destructured at module load time
+
+async function notifyUser(user) {
+  return send(user.email, 'Welcome!');
+}
+
+test('notifyUser sends an email', async () => {
+  mock.method(emailer, 'send', () => Promise.resolve('sent'));
+
+  await notifyUser({ email: 'ada@example.com' });
+
+  assert.equal(emailer.send.mock.callCount(), 1);
+});`}>
+`notifyUser` เรียก `send` ที่ import (destructure) มาโดยตรงจาก `./emailer.js` — เป็นคนละ binding กับ `emailer.send` การ mock `emailer.send` แทนที่ property บน object `emailer` แต่การเรียก `send(...)` ของ `notifyUser` ไม่เคยดูที่ object นั้นเลย ดังนั้น mock จึงไม่เคยถูกเรียกใช้ ขึ้นอยู่กับว่า `send` จริง ๆ ทำอะไร test นี้อาจ throw (มีการเรียก network จริงเกิดขึ้นระหว่าง "การทดสอบ") หรือแย่กว่านั้นคือผ่านด้วยเหตุผลผิด ๆ ถ้า `send` บังเอิญ return บางอย่างที่ทำให้ `assert.equal(emailer.send.mock.callCount(), 1)` ยัง fail อยู่ — ซึ่งในกรณีนั้น bug อย่างน้อยก็ถูกจับได้ แค่ทำให้งงเท่านั้น ทางแก้: mock binding ที่ import มาจริง ๆ (`mock.method(emailerModule, 'send', ...)` กับ module namespace) หรือปรับโครงสร้าง `notifyUser` ให้เรียก `emailer.send(...)` เพื่อให้เหลือจุดเดียวที่ต้อง mock
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+การรัน node:test แล้วเขียวพิสูจน์แค่ว่าทุก test function return โดยไม่มี unhandled rejection — มันไม่ได้บอกอะไรเลยว่ามี assertion จริงรันหรือไม่ ดังนั้นให้อ่านหาการเรียก `assert.*` จริงบน code path จริงก่อนที่จะเชื่อเครื่องหมายถูกนั้น
+</Callout>
+
 ## ฟีเจอร์เพิ่มเติม
 
 ```bash
@@ -200,6 +704,7 @@ export const nodeTestQuiz = [
       "import { test } from 'mocha'",
     ],
     answer: 1,
+    explain: 'node:test เป็น core module ที่มีในตัว ไม่ต้องมี dependency ใน package.json เลย',
   },
   {
     q: 'จะรันไฟล์ `*.test.js` ทั้งหมดในโปรเจกต์แบบ recursive ได้อย่างไร?',
@@ -210,6 +715,7 @@ export const nodeTestQuiz = [
       'node run-tests',
     ],
     answer: 2,
+    explain: 'เมื่อไม่ระบุ path, node --test จะค้นหาแบบ recursive ให้ทั้ง *.test.{js,mjs,cjs}, *-test.*, *_test.*, test-*.*, และทุกไฟล์ในไดเรกทอรี test/',
   },
   {
     q: 'จะเกิดอะไรขึ้นเมื่อ async test function reject promise?',
@@ -220,6 +726,7 @@ export const nodeTestQuiz = [
       'การ reject ถูกกลืนและการทดสอบผ่าน',
     ],
     answer: 2,
+    explain: 'node:test await promise ที่ async test function return การ reject ทำให้ test นั้นล้มเหลวและสาเหตุถูกรวมไว้ในรายงานด้วย',
   },
   {
     q: 'ทำไมควรใช้ `node:assert/strict` แทน `node:assert`?',
@@ -230,16 +737,40 @@ export const nodeTestQuiz = [
       'เป็นเวอร์ชันเดียวที่มีใน Node 24+',
     ],
     answer: 1,
+    explain: 'strict variant ทำให้ assert.equal ทำงานเหมือน === แทน == ตัดความผิดพลาดจาก type coercion ทั้งกลุ่มออกไป',
   },
   {
-    q: 'ฟีเจอร์ใดของ `node:test` ที่ยังต้องใช้ flag `--experimental-` ใน Node 24 และ 26?',
+    q: 'ฟีเจอร์ใดของ `node:test` ที่ยังต้องใช้ flag `--experimental-` บน Node 24?',
     options: [
       'Mocking ด้วย `mock.fn()`',
       'Snapshot testing',
-      'Code coverage',
+      'mock.module() และ code coverage',
       'การจัดกลุ่มด้วย `describe` / `it`',
     ],
     answer: 2,
+    explain: 'mock.fn/mock.method/mock.timers และ snapshot (t.assert.snapshot) เป็น stable แล้ว mock.module() ต้องใช้ --experimental-test-module-mocks และ coverage ต้องใช้ --experimental-test-coverage ทั้งคู่พิมพ์ ExperimentalWarning',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร และ test ผ่านหรือไม่?\n\ntest(\'checks role\', async () => {\n  const user = { name: \'Ada\' };\n});',
+    options: [
+      'มัน fail เพราะไม่มี assertion',
+      'มันผ่าน -- test ที่ไม่มีการเรียก assert.* เลยไม่มีทางล้มเหลวได้ มันแค่รันจนจบ',
+      'มัน throw TypeError ตอน runtime',
+      'มันถูกทำเครื่องหมาย todo โดยอัตโนมัติ',
+    ],
+    answer: 1,
+    explain: 'test body ที่ไม่เคยเรียก assert.*/t.assert.* ไม่มีอะไรที่ทำให้มัน fail ได้ มันรายงานว่าผ่านไม่ว่าโค้ดจะทำอะไรจริง ๆ ก็ตาม — เป็นหนึ่งใน bug "เขียวแต่ไม่มีความหมาย" ที่พบบ่อยที่สุด',
+  },
+  {
+    q: 'test หนึ่งเรียก `mock.method(db, \'save\', fn)` แต่โค้ดที่ทดสอบรัน `const { save } = db;` ตอน import แล้วเรียก `save(...)` เปล่า ๆ จะเกิดอะไรขึ้นตอน test รัน?',
+    options: [
+      'mock ดักการเรียกได้ตามปกติ เพราะ db.save ถูกแพตช์แล้ว',
+      'มัน throw ERR_INVALID_ARG_TYPE',
+      'mock ไม่เคยถูกกระตุ้นเลย -- save ที่ destructure ออกมาเป็นคนละ reference จากฟังก์ชันต้นฉบับ',
+      'Node เขียน reference ที่ destructure ออกมาให้ชี้ไปที่ mock โดยอัตโนมัติ',
+    ],
+    answer: 2,
+    explain: 'mock.method แพตช์ property slot บน object เท่านั้น reference ที่ถูก destructure ออกมาจาก object นั้นก่อนที่ mock จะรันยังคงชี้ไปที่ฟังก์ชันต้นฉบับ -- mock กับจุดเรียกจริงเป็นคนละ binding',
   },
 ];
 

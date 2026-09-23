@@ -5,9 +5,12 @@ sidebar:
   order: 3
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The Node.js Inspector
 
@@ -22,6 +25,38 @@ node --inspect-brk src/app.js
 ```
 
 After launching, open **chrome://inspect** in Chrome, click **"Open dedicated DevTools for Node"**, and you get full breakpoints, call stacks, scope inspection, heap snapshots, and CPU profiling — exactly the same panel you use for browser debugging.
+
+The inspector always listens on port **9229** by default (a different port only if you pass `--inspect=<port>`), and it speaks the same [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) used by browser DevTools — WebSocket in, JSON commands and events, whichever client (Chrome, VS Code, WebStorm) just happens to be the one connected:
+
+export const inspectorProtocolMermaid = `flowchart LR
+  App["node --inspect app.js"] -->|"opens"| Port["ws://127.0.0.1:9229/uuid"]
+  Port -->|"Chrome DevTools Protocol (JSON over WebSocket)"| Client["Any CDP client"]
+  Client --> Chrome["chrome://inspect"]
+  Client --> VSCode["VS Code debugger"]
+  Client --> CLI["node inspect (built-in CLI client)"]`;
+
+<Mermaid code={inspectorProtocolMermaid} title="One protocol, one port, any client — the inspector does not know or care which one is attached" />
+
+## node inspect — the built-in command-line client
+
+You do not need a browser or an editor at all: `node inspect <file>` starts the target process **and** a debugger REPL in the same terminal, using the same protocol:
+
+```bash
+node inspect src/app.js
+```
+
+```text
+< Debugger listening on ws://127.0.0.1:9229/<uuid>
+< For help, see: https://nodejs.org/en/docs/inspector
+connecting to 127.0.0.1:9229 ... ok
+debug> Break on start in src/app.js:1
+> 1 console.log('line1');
+  2 debugger;
+  3 console.log('line2');
+debug> cont
+```
+
+Type `cont` (or `c`) to run to the next breakpoint/`debugger` statement, `next`/`n` to step over, `step`/`s` to step into, `out`/`o` to step out, `watch('expr')` to add a watch expression, and `repl` to drop into a REPL scoped to the current stack frame. It is slower to navigate than a GUI, but it needs nothing beyond a terminal — useful over SSH or in a container with no forwarded port.
 
 ## Connecting with VS Code
 
@@ -109,6 +144,168 @@ console.assert(1 === 2, 'Math is broken'); // prints assertion error
 console.assert(1 === 1, 'This never prints');
 ```
 
+`console.trace()` prints the current call stack without stopping execution — useful for answering "who called this?" without attaching a debugger at all:
+
+export const consoleTraceCode = `
+function loadConfig() {
+  console.trace('loadConfig called from:');
+}
+function startServer() {
+  loadConfig();
+}
+startServer();
+`;
+
+<NodeRunner client:visible code={consoleTraceCode} node />
+
+This one has no verified-output panel for the same reason as the earlier live demo: the stack trace includes file paths and line numbers that are only meaningful (and only identical) on the machine that ran it — not something to freeze into a single "verified" snapshot.
+
+## Inspecting deep objects and long stack traces
+
+`console.log`'s default formatter (`util.inspect` under the hood) stops descending into nested objects after depth **2** — deeper levels collapse to `[Object]`. Pass a custom depth when you need more:
+
+export const inspectDepthCode = `
+import { inspect } from 'node:util';
+
+const nested = { a: { b: { c: { d: 1 } } } };
+
+console.log(nested);                              // default depth: 2
+console.log(inspect(nested, { depth: 1 }));        // shallower on purpose
+console.log(inspect(nested, { depth: null }));     // depth: null -- no limit at all
+`;
+
+export const inspectDepthOut = `{ a: { b: { c: [Object] } } }
+{ a: { b: [Object] } }
+{
+  a: { b: { c: { d: 1 } } }
+}`;
+
+<NodeRunner client:visible code={inspectDepthCode} node expected={inspectDepthOut} />
+
+`--stack-trace-limit` controls how many frames `Error.prototype.stack` captures (the V8 default is 10). Lower it in a script that logs huge stacks from a deep recursive call, raise it when you need more context than 10 frames give you:
+
+```bash
+node --stack-trace-limit=2 -e "function a(){b()} function b(){c()} function c(){throw new Error('x')} try{a()}catch(e){console.log(e.stack.split('\n').length)}"
+```
+
+```text
+3
+```
+
+With the limit at `2`, `e.stack` has 3 lines total: the `Error: x` header plus exactly 2 stack frames — `c` and `b` — `a` is cut off.
+
+## Tracing warnings and uncaught throws to their source
+
+Two flags turn a one-line warning or crash message into a full stack trace pointing at where it was actually created or thrown:
+
+```bash
+node --trace-warnings depwarn.mjs
+```
+
+```text
+legacy
+(node:12345) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+    at showFlaggedDeprecation (node:buffer:195:11)
+    at new Buffer (node:buffer:278:3)
+    at file:///path/to/depwarn.mjs:1:11
+```
+
+Without `--trace-warnings`, Node prints only the one-line warning and a hint to re-run with the flag — exactly the line you'd otherwise have to guess the cause of. `--trace-uncaught` does the same for exceptions specifically when the throw site differs from where the `Error` object was originally created (for example, an error built early and thrown later from a `setTimeout` callback):
+
+```bash
+node --trace-uncaught trace-uncaught-demo.mjs
+```
+
+```text
+file:///path/to/trace-uncaught-demo.mjs:6
+  throw err;
+  ^
+
+Error: created early, thrown later
+    at file:///path/to/trace-uncaught-demo.mjs:2:13
+Thrown at:
+    at file:///path/to/trace-uncaught-demo.mjs:2:13
+
+Node.js v24.13.0
+```
+
+The extra `Thrown at:` block only appears with the flag — normally you only get the stack from where the `Error` was constructed, which can be a different line entirely from where it was actually thrown.
+
+## NODE_DEBUG — built-in module tracing
+
+Several core modules (`http`, `net`, `timers`, `module`, `cluster`, `tls`) print internal diagnostic lines when you set `NODE_DEBUG` to their name:
+
+```bash
+NODE_DEBUG=http node server-and-client.mjs
+```
+
+```text
+HTTP 12345: createConnection localhost:54321:
+HTTP 12345: sockets localhost:54321: 1 1
+HTTP 12345: outgoing message end.
+(node:12345) Warning: Setting the NODE_DEBUG environment variable to 'http' can expose sensitive data (such as passwords, tokens and authentication headers) in the resulting log.
+HTTP 12345: SERVER new http connection
+```
+
+Node itself warns about this: `NODE_DEBUG=http` logs request/response internals, which in a real application can include authentication headers and other sensitive data. Use it locally to understand connection reuse and keep-alive behavior; never enable it against traffic carrying real credentials.
+
+## uncaughtException and unhandledRejection — the real default behavior
+
+Both crash the process by default — Node considers an exception nobody caught, or a rejection nobody handled, to mean the program's state can no longer be trusted:
+
+```js
+// @expect-throw uncaught sync exception crashes by default
+throw new Error('sync boom');
+```
+
+```js
+// @expect-throw unhandled rejection crashes by default (has since Node 15)
+Promise.reject(new Error('boom'));
+```
+
+You can listen for either — but listening does not mean it becomes safe to keep running. It means **you** decide what "safe" is:
+
+export const handledRejectionCode = `// @expect-throw exits 1 on purpose -- the handler sets process.exitCode
+process.on('unhandledRejection', (reason) => {
+  console.log('unhandled rejection:', reason.message); // console.error in real code -- console.log here so this page's verified panel captures it
+  process.exitCode = 1;
+});
+console.log('before reject');
+Promise.reject(new Error('async boom'));
+console.log('after scheduling rejection');
+`;
+
+export const handledRejectionOut = `before reject
+after scheduling rejection
+unhandled rejection: async boom`;
+
+<NodeRunner client:visible code={handledRejectionCode} node expected={handledRejectionOut} />
+
+Setting `process.exitCode` (rather than calling `process.exit()` from inside the handler) lets any pending I/O or cleanup finish, while still making sure the process ultimately exits non-zero so CI, a process manager, or an on-call engineer notices something went wrong.
+
+### Why "just add a handler and keep going" is dangerous
+
+export const swallowExceptionCode = `
+let counter = 0;
+process.on('uncaughtException', (err) => {
+  console.log('swallowed:', err.message, '-- process kept running, state may now be inconsistent'); // console.error in real code
+});
+setInterval(() => {
+  counter++;
+  if (counter === 2) throw new Error('corrupt state at tick 2');
+  console.log('tick', counter);
+  if (counter >= 3) process.exit(0);
+}, 10);
+`;
+
+export const swallowExceptionOut = `tick 1
+swallowed: corrupt state at tick 2 -- process kept running, state may now be inconsistent
+tick 3`;
+
+<NodeRunner client:visible code={swallowExceptionCode} node expected={swallowExceptionOut} />
+
+The interval callback that threw at `counter === 2` never got to run its own logic past the `throw` — whatever it was supposed to do on that tick (update a counter, release a lock, finish writing a file) simply did not happen, yet the process carries on as if nothing happened. The Node.js documentation is explicit about this: after an uncaught exception, the "correct use" of the event is to perform synchronous cleanup and then let the process exit — not to resume normal operation. An `uncaughtException` handler is for logging and a graceful shutdown, not a global try/catch.
+
 ## Practical debugging workflow
 
 ```bash
@@ -140,6 +337,51 @@ npx nodemon --exec "node --inspect --loader ts-node/esm" src/app.ts
 `node --inspect` lets the process start and run normally — the inspector just listens for a connection. Use `node --inspect-brk` when you need to pause before any code executes, giving you time to open DevTools and set breakpoints before startup logic runs.
 </Callout>
 
+## Mental Model
+
+Every debugging tool on this page answers the same question — "what is actually happening, right now, in this process?" — at a different level of intrusiveness: `console.*` methods are cheap, always-on, and change nothing about execution; `--trace-warnings`/`--trace-uncaught`/`NODE_DEBUG` add detail to output that would happen anyway; `--inspect`/`--inspect-brk` actually pause and let you step; and `uncaughtException`/`unhandledRejection` handlers are the last line of defense once something has already gone wrong. Reach for the cheapest tool that answers your question.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `console.log`/`console.trace` | Zero setup, works everywhere including production logs | No breakpoints, no live variable inspection, easy to forget and leave in code |
+| `node --inspect` + DevTools/VS Code | Full breakpoints, step-through, live scope inspection, heap snapshots | Requires a GUI client and, for a remote/containerized process, port forwarding |
+| `node inspect` (CLI) | Works over SSH, no forwarded port beyond the shell itself | Slower to navigate, no visual variable tree |
+| Handling `uncaughtException`/`unhandledRejection` | A chance to log context and shut down cleanly instead of an abrupt crash | Handling it wrong (resuming normal operation) hides real bugs and risks corrupted state — the safe move is still to exit |
+
+## Common Misconceptions
+
+- **"An unhandled promise rejection just prints a warning, it doesn't crash the process"** — fact: since Node 15, an unhandled rejection terminates the process by default, exactly like an uncaught synchronous exception.
+- **"Adding a `process.on('uncaughtException', ...)` handler makes it safe to keep running"** — fact: the callback that threw stopped executing at the `throw` — whatever it still had to do did not happen. The documented safe use of the handler is synchronous cleanup followed by exit, not resuming normal operation.
+- **"console.log's default depth shows the whole object"** — fact: `util.inspect` (which `console.log` uses) stops at depth 2 by default; deeper levels print as `[Object]` unless you pass `{ depth: null }` or a higher number.
+- **"--trace-warnings and --trace-uncaught do the same thing"** — fact: `--trace-warnings` adds a stack to process warnings (deprecations, etc.); `--trace-uncaught` adds a second stack — where the exception was actually *thrown* — for uncaught exceptions whose throw site differs from where the `Error` was constructed.
+
+## Reading AI-generated code
+
+- Does a `process.on('uncaughtException', ...)` or `process.on('unhandledRejection', ...)` handler just log and continue, with no `process.exit()`/`process.exitCode` and no shutdown of open resources (servers, DB connections, timers)? That is exactly the "swallow and keep going" anti-pattern — the safe default is to clean up and exit.
+- Does debugging code leave `console.trace()` or verbose `NODE_DEBUG`-style logging active on a path that also handles real user data? Stack traces and debug logs can leak internals or credentials into production logs.
+- Is a `debugger;` statement present in code heading toward a commit or deploy? It's inert without an attached inspector, but it is also a sign the code was never cleaned up after a debugging session.
+- Does error-handling code assume `err.stack` always has full context, without accounting for `--stack-trace-limit` or the possibility the `Error` was created far from where it was thrown (exactly what `--trace-uncaught` exists to reveal)?
+
+<SpotTheBug code={`import http from 'node:http';
+
+const server = http.createServer((req, res) => {
+  res.end('ok');
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('caught an error, continuing:', err.message);
+});
+
+server.listen(3000);`}>
+This handler logs the error and returns -- there is no `process.exit()`, no `server.close()`, nothing that stops the process. Whatever request handler was running when the exception was thrown never finished (the response may never be sent, and the connected client just hangs until its own timeout). Every *future* request is served by a process whose internal state is now unknown: was a database transaction left open? A lock never released? A counter left half-updated? The Node.js docs are explicit that the correct use of `uncaughtException` is synchronous cleanup followed by letting the process exit -- not swallowing the error and serving more traffic. The fix: log with full context, close the server to stop accepting new connections, finish or abort in-flight work, and call `process.exit(1)` (or set `process.exitCode = 1` and let pending work drain) so an orchestrator restarts the process into a known-good state.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+An unhandled exception or rejection crashing the process is the safety mechanism, not the bug — catch it to log and shut down cleanly, never just to keep the process alive with unknown state.
+</Callout>
+
 export const debuggingQuiz = [
   {
     q: 'What is the difference between `node --inspect` and `node --inspect-brk`?',
@@ -150,6 +392,7 @@ export const debuggingQuiz = [
       '--inspect runs the code; --inspect-brk disables the inspector',
     ],
     answer: 1,
+    explain: 'node --inspect starts the process immediately and the inspector listens passively; --inspect-brk halts execution on the very first line so you have time to attach and set breakpoints first.',
   },
   {
     q: 'What happens to a `debugger;` statement when no inspector is connected?',
@@ -160,6 +403,7 @@ export const debuggingQuiz = [
       'It prints a warning to stderr',
     ],
     answer: 2,
+    explain: 'With no attached inspector, debugger; is a no-op -- execution continues straight through it.',
   },
   {
     q: 'Which `console` method prints an array of objects as a formatted table?',
@@ -170,6 +414,7 @@ export const debuggingQuiz = [
       'console.group',
     ],
     answer: 2,
+    explain: 'console.table renders an array of objects (or any collection) as an ASCII table with one column per property.',
   },
   {
     q: 'Which port does the Node.js inspector listen on by default?',
@@ -180,6 +425,40 @@ export const debuggingQuiz = [
       '4000',
     ],
     answer: 2,
+    explain: '9229 is the default inspector port for both --inspect and --inspect-brk; override it with --inspect=<port>.',
+  },
+  {
+    q: 'What does Node do by default when a Promise rejection has no .catch() anywhere in the chain?',
+    options: [
+      'Nothing — it silently ignores the rejection',
+      'It prints a warning but keeps running',
+      'It terminates the process with a non-zero exit code, same as an uncaught synchronous exception',
+      'It retries the promise automatically',
+    ],
+    answer: 2,
+    explain: 'Since Node 15, an unhandled rejection crashes the process by default -- treated the same severity as an uncaught throw, not merely logged.',
+  },
+  {
+    q: 'What does this print, and does the process exit 0 or non-zero?\n\nprocess.on(\'uncaughtException\', (err) => {\n  console.error(\'caught:\', err.message);\n});\nthrow new Error(\'x\');\nconsole.log(\'after throw\');',
+    options: [
+      '"caught: x" then "after throw", exit 0',
+      'Only "caught: x" is printed -- the line after the throw never runs, and the process exits 0 by default since the handler ran without setting process.exitCode',
+      'The process ignores the handler entirely and crashes with exit 1',
+      'It hangs forever waiting for more input',
+    ],
+    answer: 1,
+    explain: 'A synchronous throw stops the enclosing script immediately -- console.log(\'after throw\') is on the same synchronous path and never runs. The handler runs, but exit code stays 0 unless the handler itself sets process.exitCode or calls process.exit() with a non-zero code -- an easy way to accidentally report success after a real crash.',
+  },
+  {
+    q: 'A codebase adds `process.on(\'uncaughtException\', () => {})` (empty handler) to "stop the app from crashing." What is the real effect?',
+    options: [
+      'It makes the app more resilient with no downside',
+      'It only affects logging, not behavior',
+      'Whatever code was running when the exception was thrown stops mid-execution, and the process keeps serving requests in a potentially corrupted state',
+      'Node ignores empty handlers and crashes anyway',
+    ],
+    answer: 2,
+    explain: 'The throwing function never completes its remaining logic. An empty (or log-only) handler hides that a bug occurred while doing nothing to guarantee the process is still in a consistent state -- Node\'s docs recommend synchronous cleanup and exit, not resuming normal operation.',
   },
 ];
 

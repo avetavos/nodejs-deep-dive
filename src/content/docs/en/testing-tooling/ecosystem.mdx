@@ -5,13 +5,27 @@ sidebar:
   order: 5
 ---
 
+import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Running TypeScript in Node.js
 
 Since Node 22.18 — and on every Node 24 and 26 release — Node strips TypeScript types itself. You only need a tool when your code uses syntax that must be *transformed*, not just erased. You have three main options:
+
+export const runnerDecisionMermaid = `flowchart TB
+  Start["I need to run a .ts file"] --> Q1{"Only type annotations, interfaces, import type?"}
+  Q1 -->|"yes"| Native["node file.ts -- built-in stripping, no install"]
+  Q1 -->|"no -- enum, decorators, parameter properties"| Q2{"Node 26, or --experimental-transform-types?"}
+  Q2 -->|"yes"| Native
+  Q2 -->|"no"| Q3{"Need fast local dev loop?"}
+  Q3 -->|"yes"| Tsx["tsx -- esbuild-based, milliseconds to start"]
+  Q3 -->|"no, need mature config/plugins"| TsNode["ts-node"]`;
+
+<Mermaid code={runnerDecisionMermaid} title="Reach for the built-in first; only add tsx/ts-node for syntax Node cannot erase" />
 
 ### Option 1: built-in type stripping (Node 22.18+ / 24 — no flag)
 
@@ -29,6 +43,36 @@ npx tsc --noEmit
 ```
 
 Only *erasable* syntax is supported: type annotations, interfaces, type aliases, `import type`. Syntax that needs generated JavaScript — `enum`, a `namespace` with runtime code, parameter properties such as `constructor(private x: number)`, `import =` — is rejected. Node 24 transforms those too if you pass `--experimental-transform-types`; in Node 26 the transform is built in and the flag is gone. TypeScript's own `--erasableSyntaxOnly` option (5.8+) makes `tsc` reject the same constructs, so your editor warns before Node does.
+
+### Verifying "on by default" instead of trusting the flag name
+
+The flag is still named `--experimental-strip-types` in `node --help` on Node 24 — that name alone would suggest you need to opt in. Checking what actually happens settles it:
+
+```bash
+node --help | grep -i strip
+```
+
+```text
+  --experimental-strip-types, --no-strip-types
+                              Type-stripping for TypeScript files.
+```
+
+The paired `--no-strip-types` flag is the tell: a `--no-` counterpart only exists for something that is **on** by default. Confirmed by actually running a `.ts` file both ways:
+
+```bash
+node strip.ts                      # runs fine, prints the computed value, no flag needed
+node --no-experimental-strip-types strip.ts   # SyntaxError: Unexpected identifier 'Point'
+```
+
+```text
+# node strip.ts
+3
+
+# node --no-experimental-strip-types strip.ts
+SyntaxError: Unexpected identifier 'Point'
+```
+
+Type stripping is **on by default on Node 24** for a plain `.ts` file with only erasable syntax — no flag required, and no `ExperimentalWarning` printed either. The `--experimental-` prefix in the flag's name is a leftover from when it needed opting into; explicitly passing `--no-experimental-strip-types` (or `--no-strip-types`) is the only way to turn it back off.
 
 ### Option 2: tsx — fast TypeScript runner
 
@@ -88,6 +132,35 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
 );
 ```
+
+### eslint-plugin-n — Node-specific rules ESLint doesn't know on its own
+
+`eslint-plugin-n` (formerly `eslint-plugin-node`) adds rules that check against Node's actual runtime and API surface — things plain ESLint has no way to know. Running it against a deliberately buggy file shows exactly what it catches:
+
+```js
+// @skip-verify CLI/flag: needs eslint-plugin-n installed as a devDependency — not part of this repo
+// eslint.config.mjs
+import n from 'eslint-plugin-n';
+
+export default [
+  n.configs['flat/recommended'],
+];
+```
+
+```bash
+npx eslint bad.js
+```
+
+```text
+bad.js
+   2:24  error  Can't resolve './does-not-exist.js' in '/project'    n/no-missing-require
+   3:13  error  'new Buffer()' was deprecated since v6.0.0. Use 'Buffer.alloc()' or 'Buffer.from()' instead  n/no-deprecated-api
+  15:1   error  Don't use process.exit(); throw an error instead     n/no-process-exit
+
+✖ 3 problems (3 errors, 0 warnings)
+```
+
+Three real Node-specific findings a generic ESLint config would miss entirely: `n/no-missing-require` catches a `require()` of a file that does not exist on disk, `n/no-deprecated-api` flags runtime APIs deprecated by Node itself (like `new Buffer()`), and `n/no-process-exit` flags `process.exit()` calls outside of an actual CLI entry point (it skips over silently returning from a function, which usually hides bugs rather than fixing them).
 
 ### Prettier — opinionated code formatter
 
@@ -165,17 +238,21 @@ node --env-file=.env --env-file=.env.local src/app.js
 
 Inside a program, `process.loadEnvFile()` does the same without a flag:
 
-```js
+export const loadEnvFileCode = `
 import { loadEnvFile } from 'node:process';
 import { writeFileSync, unlinkSync } from 'node:fs';
 
-writeFileSync('.env', 'GREETING=hello-from-dotenv\n'); // demo fixture
+writeFileSync('.env', 'GREETING=hello-from-dotenv\\n'); // demo fixture
 
 loadEnvFile('.env'); // populates process.env; throws if the file is missing
 console.log(process.env.GREETING);
 
 unlinkSync('.env');
-```
+`;
+
+export const loadEnvFileOut = `hello-from-dotenv`;
+
+<NodeRunner client:visible code={loadEnvFileCode} node expected={loadEnvFileOut} />
 
 ### dotenv — the classic
 
@@ -225,6 +302,64 @@ For scripts that execute code you do not fully trust, Node 24 stabilised the fla
 node --permission --allow-fs-read=./data --allow-fs-write=./tmp src/app.js
 ```
 
+## corepack and pnpm
+
+Corepack ships **with** Node itself (verified here: `corepack --version` prints `0.34.5` on this course's Node 24.13, no separate install) and manages the package manager version your project declares, the same way `nvm`/`.nvmrc` manages the Node version:
+
+```bash
+# Pin the package manager version in package.json
+# "packageManager": "pnpm@9.12.0"
+
+corepack enable        # one-time, makes `pnpm`/`yarn` resolve through corepack
+pnpm install            # corepack downloads and runs the exact pinned pnpm version
+```
+
+`pnpm` itself uses a content-addressable store and hard links instead of copying `node_modules` per project — multiple projects on the same machine share one copy of each package version on disk, and installs are usually faster than npm's. It also enforces stricter dependency resolution by default (a package cannot `require()` something it did not declare as its own dependency, even if some other package hoisted it into `node_modules`), which surfaces "phantom dependency" bugs that npm's flatter `node_modules` hides.
+
+## Docker: a production-appropriate Node image
+
+```dockerfile
+FROM node:24-slim
+
+WORKDIR /app
+
+# Only copy manifests first -- layer caching skips the install step
+# when only application code changed, not dependencies.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY . .
+
+# node:*-slim images already ship a non-root "node" user -- use it
+USER node
+
+# Exec form (not shell form) so SIGTERM reaches the Node process directly,
+# not a shell wrapping it -- required for graceful shutdown to actually run.
+CMD ["node", "src/server.js"]
+```
+
+Three details that separate a production-appropriate image from one that merely works: `npm ci --omit=dev` (not `npm install`) — reproducible from the lockfile, and skips devDependencies entirely; `USER node` — runs as the image's built-in unprivileged user instead of root; and the JSON-array (`exec` form) `CMD` — a shell-form `CMD node src/server.js` runs Node as a child of `/bin/sh`, and `SIGTERM` from `docker stop`/Kubernetes goes to the shell, not to Node, so your `process.on('SIGTERM', ...)` handler never fires and the orchestrator ends up waiting out the full grace period before `SIGKILL`.
+
+## Structured logging instead of console.log
+
+`console.log` is fine for a script running on your own terminal. In a service running in a container behind a log aggregator, plain text loses the ability to filter or query by field. A structured logger (`pino` is the fastest common choice in the Node ecosystem) writes one JSON object per line instead:
+
+```bash
+npm install pino
+```
+
+```js
+// @skip-verify CLI/flag: needs the pino package installed — not part of this repo
+import pino from 'pino';
+
+const logger = pino();
+
+logger.info({ userId: 42, action: 'login' }, 'user logged in');
+// {"level":30,"time":...,"userId":42,"action":"login","msg":"user logged in"}
+```
+
+Every log line becomes a queryable record (filter by `userId`, alert on `level >= 50`) instead of a string a human has to grep. `pino` in particular is built to add minimal overhead per call, which matters on a hot request path where `console.log` itself can become a measurable cost.
+
 ## package.json scripts — the glue
 
 ```json
@@ -244,6 +379,47 @@ node --permission --allow-fs-read=./data --allow-fs-write=./tmp src/app.js
 Since Node 22.18 (and every 24+ release) `node src/app.ts` just works for erasable syntax, so most projects need no build step to run. Keep `tsc --noEmit` for type-checking, and add tsx only when you rely on `enum`, decorators, bundling, or multi-environment targeting.
 </Callout>
 
+## Mental Model
+
+Everything in this lesson is a layer you add only after confirming Node's built-in behavior does not already cover it: type stripping before reaching for `tsx`, `--env-file`/`--watch` before `dotenv`/`nodemon`, `node --run` before assuming you need `npm`, `node:test`'s own coverage before a third-party reporter. The pattern repeats because Node's built-ins keep absorbing what used to require a dependency — checking "does the flag name's `--no-` counterpart exist" or "does `--help` actually mention it" is a faster way to find out than assuming last year's answer still holds.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Built-in type stripping | Zero install, zero config, works the instant you run the file | No type-checking, no support for `enum`/decorators/parameter properties without an extra flag |
+| `tsx`/`ts-node` | Full TypeScript feature support, mature ecosystem | A dependency to install, pin, and keep updated |
+| `npm ci --omit=dev` in Docker | Reproducible build from the lockfile, smaller image, faster install | Requires a committed, up-to-date lockfile — `npm ci` fails outright if `package.json` and the lockfile disagree |
+| `pino`/structured logging | Queryable, filterable logs; lower per-call overhead than `console.log` in a hot path | Output is no longer human-readable directly in a terminal without a formatter (`pino-pretty` in dev) |
+
+## Common Misconceptions
+
+- **"TypeScript on Node still needs tsx or ts-node in 2026"** — fact: on Node 22.18+/24/26, plain type-annotation syntax runs with zero tooling; you only need a transformer for `enum`/decorators/parameter properties (or use `--experimental-transform-types` on 24).
+- **"The --experimental- prefix on --experimental-strip-types means it's opt-in"** — fact: the flag's *name* is a holdover; the behavior itself is on by default on Node 24, confirmed by `--no-strip-types` existing as a way to turn it off, not on.
+- **"npm install and npm ci do the same thing, just different names"** — fact: `npm ci` requires an existing, matching lockfile and fails if it's out of date; it deletes `node_modules` first and installs exactly what's locked — the reproducibility a Docker build needs, which `npm install` does not guarantee.
+- **"A shell-form Dockerfile CMD and the exec-form JSON array behave the same"** — fact: shell form runs your process as a child of `/bin/sh`, so `SIGTERM` from `docker stop` hits the shell, not your Node process — your `SIGTERM` handler never runs.
+
+## Reading AI-generated code
+
+- Does a generated project add `ts-node`, `nodemon`, or `dotenv` as dependencies without checking whether the target Node version's built-ins (type stripping, `--watch`, `--env-file`) already cover the same need?
+- Does a Dockerfile use `npm install` instead of `npm ci` in a build step meant to be reproducible, or use shell-form `CMD node server.js` instead of the exec-form JSON array?
+- Does a Dockerfile skip `USER node` (or an equivalent non-root user), leaving the container running as root by default?
+- Is `console.log` used throughout a service meant to run in production, with no structured logger, making log fields impossible to query at scale?
+
+<SpotTheBug code={`FROM node:24-slim
+
+WORKDIR /app
+COPY . .
+RUN npm install
+
+CMD node src/server.js`}>
+Two separate problems here. First, `npm install` (not `npm ci`) can silently update dependency versions relative to the lockfile during the Docker build -- the image you build today may not match the image you build tomorrow from the identical source, and there's no `USER node` line, so the container runs as root the whole time. Second, `CMD node src/server.js` is shell form -- Docker runs it as `/bin/sh -c "node src/server.js"`, which makes `node` a child process of the shell. When `docker stop` sends `SIGTERM`, it goes to the shell (PID 1), not to `node`, and the shell does not forward it by default -- so any `process.on('SIGTERM', ...)` graceful-shutdown handler in the app never fires, and the container sits until Docker's grace period expires and sends `SIGKILL`. The fix: `RUN npm ci --omit=dev`, add `USER node` before the `CMD`, and use the exec form `CMD ["node", "src/server.js"]` so Node receives signals directly as PID 1.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Check what Node's current built-ins already do (type stripping, --env-file, --watch, node --run) before reaching for a dependency, and in Docker use npm ci, a non-root user, and exec-form CMD so SIGTERM actually reaches your process.
+</Callout>
+
 export const ecosystemQuiz = [
   {
     q: 'What happens when you run `node src/app.ts` on Node 24?',
@@ -254,6 +430,7 @@ export const ecosystemQuiz = [
       'It fails — Node needs a flag or tsx to run TypeScript',
     ],
     answer: 2,
+    explain: 'Node 24 erases type annotations at load time and runs the remaining JavaScript. It never type-checks -- keep tsc --noEmit as a separate step for that.',
   },
   {
     q: 'What is the key difference between Prettier and ESLint?',
@@ -264,6 +441,7 @@ export const ecosystemQuiz = [
       'They are identical tools with different names',
     ],
     answer: 1,
+    explain: 'Prettier is purely a formatter (spacing, quotes, line width); ESLint (with plugins like eslint-plugin-n) catches actual logic and API-usage problems.',
   },
   {
     q: 'Which Node.js flag enables built-in watch mode (no nodemon needed)?',
@@ -274,6 +452,7 @@ export const ecosystemQuiz = [
       '--live',
     ],
     answer: 2,
+    explain: '--watch has been stable since Node 22 -- no third-party watcher required for a basic restart-on-change workflow.',
   },
   {
     q: 'Which Node flag loads a `.env` file without the `dotenv` package?',
@@ -284,6 +463,40 @@ export const ecosystemQuiz = [
       '--process-env=.env',
     ],
     answer: 2,
+    explain: '--env-file=.env has been stable since 22.21/24.10 -- no ExperimentalWarning, no dotenv dependency needed.',
+  },
+  {
+    q: '`node --help` on Node 24 shows: `--experimental-strip-types, --no-strip-types`. What does the existence of the --no- counterpart tell you?',
+    options: [
+      'Nothing -- --no- flags exist for every feature regardless of default state',
+      'That type stripping is off by default and --experimental-strip-types must be passed to enable it',
+      'That type stripping is ON by default -- a --no- flag only exists to turn OFF something already active',
+      'That the feature is being removed in the next release',
+    ],
+    answer: 2,
+    explain: 'A --no-<flag> counterpart is Node\'s convention for disabling a default-on behavior. Running a plain .ts file confirms it: node file.ts strips types with no flag, while node --no-experimental-strip-types file.ts throws a SyntaxError on type syntax.',
+  },
+  {
+    q: 'What does eslint-plugin-n\'s `n/no-deprecated-api` rule catch that plain ESLint cannot?',
+    options: [
+      'Unused variables',
+      'Missing semicolons',
+      'Calls to Node runtime APIs that Node itself has deprecated, like new Buffer()',
+      'TypeScript type errors',
+    ],
+    answer: 2,
+    explain: 'Plain ESLint has no knowledge of Node\'s own API deprecations. eslint-plugin-n checks call sites against Node\'s actual deprecated-API list (e.g. new Buffer(), which was deprecated in favor of Buffer.from()/Buffer.alloc()).',
+  },
+  {
+    q: 'A Dockerfile ends with `CMD node src/server.js` (shell form) instead of `CMD ["node", "src/server.js"]` (exec form). What breaks?',
+    options: [
+      'Nothing -- both forms are functionally identical',
+      'The app fails to start entirely',
+      'SIGTERM from docker stop / Kubernetes goes to the wrapping shell (PID 1), not to the Node process, so a graceful-shutdown handler never runs',
+      'Environment variables are no longer passed to the process',
+    ],
+    answer: 2,
+    explain: 'Shell form runs the command as a child of /bin/sh, which becomes PID 1 and receives signals. Node itself never sees SIGTERM, so process.on(\'SIGTERM\', ...) never fires -- the orchestrator ends up waiting out the grace period and SIGKILLs the container.',
   },
 ];
 

@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## node:test — batteries included
 
@@ -82,6 +84,52 @@ test('fetch-like async test', async function() {
 });
 ```
 
+## Lifecycle hooks — before / after / beforeEach / afterEach
+
+`before` and `after` run once per `describe` block (or once for the whole file at the top level); `beforeEach`/`afterEach` run around every single test inside their scope:
+
+```js
+import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+
+describe('a resource pool', () => {
+  let pool;
+  before(() => { pool = []; console.log('before: pool created once'); });
+  after(() => { console.log('after: pool torn down once'); });
+  beforeEach(() => { pool.push('conn'); console.log('beforeEach: connection added'); });
+  afterEach(() => { pool.pop(); console.log('afterEach: connection removed'); });
+
+  it('has one connection during the test', () => {
+    assert.equal(pool.length, 1);
+  });
+  it('still has exactly one connection in the next test', () => {
+    assert.equal(pool.length, 1);
+  });
+});
+```
+
+```text
+before: pool created once
+beforeEach: connection added
+afterEach: connection removed
+beforeEach: connection added
+afterEach: connection removed
+after: pool torn down once
+▶ a resource pool
+  ✔ has one connection during the test
+  ✔ still has exactly one connection in the next test
+✔ a resource pool
+ℹ tests 2
+ℹ suites 1
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+`before`/`after` run exactly once regardless of how many tests are in the block; `beforeEach`/`afterEach` reset shared state so tests never leak into each other — notice the pool goes back to length 1 for the *second* test too, because `afterEach` popped the connection the first test added.
+
 ## node:assert/strict cheat sheet
 
 ```js
@@ -127,6 +175,8 @@ test('async: resolves to correct value', async function() {
 
 <NodeRunner client:visible code={nodeTestCode} node />
 
+This one has no "verified output" panel on purpose: `node:test`'s default reporter prints a `duration_ms` on every line, which is different on every run — pasting one real run's numbers into `expected` would make the panel misleadingly precise. The demos further down use `mock`/`assert` directly (without `test()`) specifically so their output is 100% deterministic and safe to show as verified.
+
 <Callout title="Node has a built-in test runner since v18 — no dependency needed">
 You do not need Jest, Mocha, or Vitest to write tests in Node.js. `node:test` + `node:assert` cover unit tests, async tests, and grouped suites out of the box. Mocking and snapshot testing are built in too; add a third-party runner only when you need a coverage UI, browser-environment simulation, or a plugin ecosystem.
 </Callout>
@@ -135,11 +185,117 @@ You do not need Jest, Mocha, or Vitest to write tests in Node.js. `node:test` + 
 
 | Feature | Status in Node 24 / 26 |
 |---------|------------------------|
-| `mock.fn()`, `mock.method()`, `mock.timers`, `mock.module()` | Stable |
+| `mock.fn()`, `mock.method()`, `mock.timers` | Stable |
+| `mock.module()` | **Experimental** — needs `--experimental-test-module-mocks`, prints a warning |
 | Snapshot testing — `t.assert.snapshot(value)` | Stable since 23.4 |
 | Code coverage | Experimental — `--experimental-test-coverage` |
 | `--watch` for tests | Stable — no flag or warning |
 | Test tags — `--experimental-test-tag-filter` | Early development (26.2+) |
+
+### mock.fn — call tracking without a library
+
+`mock.fn(implementation)` wraps a function and records every call — arguments, return value, and count — on `.mock`. It works standalone, outside of `test()`, which is useful for a quick check right in this page:
+
+export const mockFnCode = `
+import { mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+const add = (a, b) => a + b;
+const tracked = mock.fn(add);
+
+console.log('result:', tracked(2, 3));
+console.log('call count:', tracked.mock.callCount());
+console.log('first call args:', tracked.mock.calls[0].arguments);
+
+assert.equal(tracked.mock.callCount(), 1);
+console.log('assertion passed: called exactly once');
+
+mock.reset();
+`;
+
+export const mockFnOut = `result: 5
+call count: 1
+first call args: [ 2, 3 ]
+assertion passed: called exactly once`;
+
+<NodeRunner client:visible code={mockFnCode} node expected={mockFnOut} />
+
+### mock.method — the trap of mocking the wrong reference
+
+`mock.method(object, 'methodName', impl)` replaces `object.methodName` in place. It only affects call sites that look the property up on `object` **at call time** — a reference captured earlier by destructuring is a separate binding the mock never touches:
+
+export const mockMethodTrapCode = `
+import { mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+const db = {
+  save(record) { return { id: 1, ...record }; },
+};
+
+// service.js style: destructure the method out at import time
+const { save } = db;
+function createUser(name) {
+  return save({ name }); // calls the destructured reference, not db.save
+}
+
+// BUG: mocking db.save does not affect the already-destructured 'save'
+// reference that createUser closed over.
+mock.method(db, 'save', () => ({ id: 999, mocked: true }));
+
+const result = createUser('Ada');
+console.log('result:', result);
+console.log('mock was actually called:', db.save.mock.callCount());
+assert.equal(db.save.mock.callCount(), 0); // proves the mock was never hit
+console.log('assertion passed: mocking db.save missed the real call site entirely');
+
+mock.reset();
+`;
+
+export const mockMethodTrapOut = `result: { id: 1, name: 'Ada' }
+mock was actually called: 0
+assertion passed: mocking db.save missed the real call site entirely`;
+
+<NodeRunner client:visible code={mockMethodTrapCode} node expected={mockMethodTrapOut} />
+
+<Callout title="Mock the object your code actually calls through">
+`mock.method` patches a property slot, not every variable that ever pointed at the original function. If the code under test imported the function directly (`import { save } from './db.js'`) or destructured it before the mock ran, patch that same binding — or restructure the code to call through the object (`db.save(...)`) so there is only one place to mock.
+</Callout>
+
+### mock.module — still experimental on Node 24
+
+`mock.module()` replaces an entire module's exports, ESM included — but on Node 24 it is gated behind `--experimental-test-module-mocks` and prints an `ExperimentalWarning`:
+
+```js
+// @skip-verify needs --experimental-test-module-mocks, not passed by default here
+import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('mock.module replaces a module', async () => {
+  mock.module('node:os', {
+    namedExports: { hostname: () => 'fake-host' },
+  });
+  const os = await import('node:os');
+  assert.equal(os.hostname(), 'fake-host');
+});
+```
+
+```bash
+node --experimental-test-module-mocks mock-os.test.mjs
+```
+
+```text
+✔ mock.module replaces a module
+(node:12345) ExperimentalWarning: Module mocking is an experimental feature and might change at any time
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+Without the flag, `mock.module` is not a function at all (`TypeError: mock.module is not a function`) — it does not silently no-op, so a missing flag fails loudly in CI rather than producing a false pass.
 
 Fake timers let you test retry and timeout logic without waiting:
 
@@ -174,6 +330,354 @@ test('retries call the fetcher twice', async function(t) {
 
 The `setTimeout` call above happens inside a `.then()` callback, which only runs as a microtask — it has not been registered yet at the moment `tick()` is called synchronously on the next line. `await null` yields once so that pending microtask runs and schedules the timer before `tick()` looks for it; skip it and this test **hangs forever**, because `node:test` has no default per-test timeout. Always pass `--test-timeout=<ms>` (e.g. `node --test --test-timeout=2000`) so a mistake like this fails fast instead of hanging CI.
 
+Proof that skipping `await null` really does leave the fake clock with nothing to advance — no test wrapper, no hang, just the fake timer state:
+
+export const missingAwaitNullCode = `
+import { mock } from 'node:test';
+
+const fetcher = mock.fn(async function() { throw new Error('flaky'); });
+mock.timers.enable({ apis: ['setTimeout'] });
+
+function retry(fn, options) {
+  return fn().catch(function(err) {
+    return new Promise(function(resolve) { setTimeout(resolve, options.delayMs); })
+      .then(function() { return 'retried'; });
+  });
+}
+
+const pending = retry(fetcher, { delayMs: 1000 });
+// BUG: no 'await null' here -- the setTimeout inside .then() has not been
+// registered with the fake clock yet, so tick() advances nothing.
+mock.timers.tick(1000);
+console.log('tick() returned -- fake clock advanced, but nothing was scheduled yet');
+
+mock.timers.reset();
+`;
+
+export const missingAwaitNullOut = `tick() returned -- fake clock advanced, but nothing was scheduled yet`;
+
+<NodeRunner client:visible code={missingAwaitNullCode} node expected={missingAwaitNullOut} />
+
+Inside an actual `test()`, that `pending` promise from above would never settle, `await assert.rejects(pending, ...)` would wait on it forever, and — with no `--test-timeout` set — the whole test run simply never ends.
+
+## Tests that pass while wrong
+
+The most dangerous test is not the one that fails — it's the one that reports green while testing nothing. `node:test` will not catch these for you; you have to know what to look for when reading a test file (yours or AI-generated).
+
+### No assertion at all
+
+```js
+import { test } from 'node:test';
+
+test('checks that createUser sets a default role', async () => {
+  const user = { name: 'Ada' }; // BUG: forgot to call createUser() and check user.role
+  // no assert.* call at all -- the test body just runs to completion
+});
+```
+
+```bash
+node --test no-assertion.test.mjs
+```
+
+```text
+✔ checks that createUser sets a default role
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+A test that never calls `assert.*` (or `t.assert.*`) cannot fail — it "passes" by doing nothing. Reading a test file, always check that every `it`/`test` body ends in at least one assertion on the actual behavior it claims to check.
+
+### Async work that outlives the test — Node 24 actually catches this one
+
+```js
+// @expect-throw file exits non-zero -- Node 24 reports the leaked async assertion as a whole-file failure
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('rejects an invalid user (BUG: missing await/return)', () => {
+  // BUG: no `return` and no `await` in front of the async work below --
+  // the test function itself returns undefined synchronously, so node:test
+  // considers it "passed" before the promise below ever settles.
+  Promise.resolve().then(() => {
+    assert.equal(1, 2); // this failure is never seen by the test runner directly
+  });
+});
+```
+
+```bash
+node --test missing-await.test.mjs
+```
+
+```text
+✔ rejects an invalid user (BUG: missing await/return)
+ℹ Error: Test "rejects an invalid user (BUG: missing await/return)" at missing-await.test.mjs:4:1 generated asynchronous activity after the test ended. This activity created the error "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+1 !== 2
+" and would have caused the test to fail, but instead triggered an unhandledRejection event.
+✖ missing-await.test.mjs
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+```
+
+The individual test still shows a ✔ — node:test already returned control before that `.then()` ran. But Node 24's runner tracks async activity per test and notices work happening *after* the test ended; it reports the whole file as failed instead of silently swallowing it, which is safer than older Node releases. Do not rely on this safety net, though — always `return`/`await` the promise a test body creates, so the failure is attributed to the right test and does not depend on this detection:
+
+```js
+// fixed
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('rejects an invalid user', async () => {
+  await assert.rejects(async () => { throw new Error('invalid'); });
+});
+```
+
+### mock.method on the wrong reference
+
+Covered above in detail — mocking `db.save` never affects a `save` that was destructured out before the mock ran. The test can still pass (it may assert the *real* `db.save` was never called, expecting the mock) while actually proving the mock had zero effect on the code under test.
+
+## test.only, --test-only, and t.skip/t.todo
+
+```js
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('this one is skipped without --test-only handling', () => {
+  assert.equal(1, 1);
+});
+
+test.only('only this one runs when --test-only is set', () => {
+  assert.equal(2, 2);
+});
+```
+
+```bash
+# without --test-only: .only has NO effect, both tests run
+node --test only.test.mjs
+
+# with --test-only: only the marked test runs, the rest are skipped
+node --test --test-only only.test.mjs
+```
+
+```text
+# without --test-only
+✔ this one is skipped without --test-only handling
+✔ only this one runs when --test-only is set
+ℹ 'only' and 'runOnly' require the --test-only command-line option.
+ℹ tests 2
+ℹ pass 2
+
+# with --test-only
+✔ only this one runs when --test-only is set
+ℹ tests 1
+ℹ pass 1
+```
+
+`test.only` is inert unless the runner is told to honor it. That is exactly why it is dangerous: a CI script that always passes `--test-only` will silently run fewer tests forever if someone forgets to remove a debugging `.only`, and the run still reports success.
+
+`t.skip` (or `{ skip: true }`) and `t.todo` (or `{ todo: true }`) are the intentional, visible versions of "don't run this normally":
+
+```js
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+test('skipped test', { skip: true }, () => {
+  assert.fail('never runs');
+});
+
+test('todo test', { todo: true }, () => {
+  assert.fail('reported as todo, does not fail the run');
+});
+
+test('a normal passing test', () => {
+  assert.ok(true);
+});
+```
+
+```bash
+node --test skip-todo.test.mjs
+```
+
+```text
+﹣ skipped test # SKIP
+✖ todo test # TODO
+✔ a normal passing test
+ℹ tests 3
+ℹ pass 1
+ℹ skipped 1
+ℹ todo 1
+```
+
+A `todo` test that fails is still reported (with a `✖` and `# TODO`) but does **not** fail the overall run — the exit code stays `0`. Unlike a silently-passing bug, `skip`/`todo` show up explicitly in the summary counts, so a reviewer can see how many tests are not actually being enforced.
+
+## Reporters and coverage
+
+`--test-reporter` controls the output format. `spec` (the default, shown throughout this page) is human-readable; `tap` is the raw TAP13 protocol other tools can parse; `dot` is a compact one-character-per-test summary; `junit` produces CI-friendly XML. Combine with `--test-reporter-destination` to write to a file:
+
+```bash
+node --test --test-reporter=dot small.test.mjs
+```
+
+```text
+.
+```
+
+```bash
+node --test --test-reporter=tap small.test.mjs
+```
+
+```text
+TAP version 13
+# Subtest: adds
+ok 1 - adds
+  ---
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+```
+
+Coverage is still `--experimental-test-coverage` on Node 24 and 26 — it works, but the flag name is the honest signal that its output format can still change:
+
+```bash
+node --test --experimental-test-coverage --test-coverage-functions=100 partial.test.mjs
+```
+
+```text
+✔ only uses one function
+ℹ tests 1
+ℹ pass 1
+ℹ Error: 50.00% function coverage does not meet threshold of 100%.
+ℹ start of coverage report
+------------------------------------------------------------
+file        | line % | branch % | funcs % | uncovered lines
+------------------------------------------------------------
+partial.mjs | 100.00 |   100.00 |   50.00 |
+------------------------------------------------------------
+all files   | 100.00 |   100.00 |   50.00 |
+------------------------------------------------------------
+end of coverage report
+```
+
+That run exits non-zero: `--test-coverage-functions=100` (there are matching `--test-coverage-lines` and `--test-coverage-branches` thresholds) fails the whole process when actual coverage falls short — useful as a CI gate once you decide coverage numbers are worth enforcing.
+
+## Snapshot testing
+
+`t.assert.snapshot(value)` compares a value against a stored `.snapshot` file next to the test, serialized with `util.inspect`. The first run (or any run with `--test-update-snapshots`) writes the file; every later run compares against it:
+
+```js
+// @skip-verify needs a pre-recorded .snapshot file (or --test-update-snapshots first) to pass
+import { test } from 'node:test';
+
+test('snapshot demo', (t) => {
+  t.assert.snapshot({ a: 1, b: [1, 2, 3] });
+});
+```
+
+```bash
+# first time, or after an intentional change: record the snapshot
+node --test --test-update-snapshots snapshot.test.mjs
+```
+
+```text
+exports[`snapshot demo 1`] = `
+{
+  "a": 1,
+  "b": [
+    1,
+    2,
+    3
+  ]
+}
+`;
+```
+
+```bash
+# every later run: compare against the recorded snapshot, fail on drift
+node --test snapshot.test.mjs
+```
+
+Commit the generated `*.snapshot` file to version control and review diffs to it exactly like you would review any other code change — a snapshot update is only safe once a human has confirmed the new value is correct, not merely different.
+
+## Test lifecycle, end to end
+
+export const testLifecycleMermaid = `flowchart TB
+  Discover["node --test discovers *.test.js, *-test.*, *_test.*, test-*.*, and everything under test/"] --> Before["before() -- once per file/describe"]
+  Before --> Loop{"For each test"}
+  Loop --> BE["beforeEach()"]
+  BE --> Run["test body runs (assert.* / t.assert.*)"]
+  Run --> AE["afterEach()"]
+  AE --> Loop
+  Loop -->|"all tests done"| After["after() -- once per file/describe"]
+  After --> Report["reporter (spec/tap/dot/junit) + coverage + exit code"]`;
+
+<Mermaid code={testLifecycleMermaid} title="Discovery, hooks around every test, then one reporter pass at the end" />
+
+## Mental Model
+
+`node:test` is not a mini-framework bolted onto Node — it is a thin, honest layer: `test()`/`describe()`/`it()` register work, hooks wrap it, `mock`/`assert` are plain objects you can use with or without a `test()` wrapper, and the reporter is the very last thing that runs. Nothing here is magic: a test "passes" purely because its function returned (or resolved) without throwing and without an unhandled rejection — which is exactly why an unawaited assertion or a missing `assert.*` call slips through silently.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `node:test` over Jest/Vitest | Zero dependency, ships with every Node install, no config file | No built-in coverage UI, no snapshot review tool, no DOM/browser environment simulation |
+| `--test-timeout` set explicitly | A hung test (missing `await null`, unresolved promise) fails fast in CI instead of hanging the pipeline | One more flag every CI script has to remember to pass |
+| `mock.module()` | Can replace even built-in modules like `node:os` for a test | Experimental — behind a flag, prints a warning, and its behavior is not guaranteed stable release to release |
+| Snapshot testing | Fast to write for complex output shapes | A rubber-stamped `--test-update-snapshots` after a change is a snapshot test that stops catching anything |
+
+## Common Misconceptions
+
+- **"A test that shows a green check mark actually tested something"** — fact: a test with no `assert.*` call, or one whose assertion runs after the test function already returned, reports as passed regardless.
+- **"mock.method(obj, 'name', fn) affects every reference to that function anywhere in the codebase"** — fact: it only patches the property slot on `obj`. A destructured or otherwise pre-captured reference to the original function is untouched.
+- **"Node's built-in mocking, coverage, and snapshot support are all equally stable"** — fact: `mock.fn`/`mock.method`/`mock.timers` and snapshots are stable; `mock.module()` and `--experimental-test-coverage` are both still explicitly experimental on Node 24 and 26.
+- **"test.only is a safe way to focus on one test while debugging"** — fact: it is safe locally, but only because `--test-only` is (usually) off there. In a CI script that always passes `--test-only`, a forgotten `.only` silently drops every other test from the run.
+
+## Reading AI-generated code
+
+- Does a test body end without a single `assert.*`/`t.assert.*` call? It will pass no matter what the code under test actually does.
+- Is an async test's inner work started with `.then()`/a bare `Promise` call instead of `await`ed or `return`ed? The test can finish and report a pass before that work — or its assertion — has run.
+- Does a `mock.method` target an object property, while the code under test imported or destructured that same function directly? The mock and the real call site may not be the same binding.
+- Is there a `test.only` left in a test file with no comment explaining why, right before a commit? It is either harmless (no `--test-only` in CI) or is silently disabling every sibling test (if there is).
+- Does a `mock.timers` test drive `tick()` immediately after starting async work, with no `await null` (or equivalent yield) in between? The timer may not be registered yet, and the test can hang forever with no default timeout.
+
+<SpotTheBug code={`import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
+
+const emailer = {
+  send(to, body) { /* real network call */ },
+};
+
+import { send } from './emailer.js'; // destructured at module load time
+
+async function notifyUser(user) {
+  return send(user.email, 'Welcome!');
+}
+
+test('notifyUser sends an email', async () => {
+  mock.method(emailer, 'send', () => Promise.resolve('sent'));
+
+  await notifyUser({ email: 'ada@example.com' });
+
+  assert.equal(emailer.send.mock.callCount(), 1);
+});`}>
+`notifyUser` calls the `send` that was imported (destructured) directly from `./emailer.js` — a separate binding from `emailer.send`. Mocking `emailer.send` replaces the property on the `emailer` object, but `notifyUser`'s `send(...)` call never looks at that object at all, so the mock is never hit. Depending on what the real `send` does, this test either throws (a real network call runs during "testing") or, worse, passes for the wrong reason if `send` happens to return something `assert.equal(emailer.send.mock.callCount(), 1)` still fails on — in which case the bug is at least caught, just confusingly. The fix: either mock the actual imported binding (`mock.method(emailerModule, 'send', ...)` against the module namespace, or restructure `notifyUser` to call `emailer.send(...)`) so there is exactly one place to mock.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A green node:test run only proves that every test function returned without an unhandled rejection — it says nothing about whether an assertion actually ran, so read for a real `assert.*` call on the real code path before trusting the checkmark.
+</Callout>
+
 ## Beyond the basics
 
 ```bash
@@ -200,6 +704,7 @@ export const nodeTestQuiz = [
       "import { test } from 'mocha'",
     ],
     answer: 1,
+    explain: 'node:test is a built-in core module — no package.json dependency required.',
   },
   {
     q: 'How do you run all `*.test.js` files in the current project recursively?',
@@ -210,6 +715,7 @@ export const nodeTestQuiz = [
       'node run-tests',
     ],
     answer: 2,
+    explain: 'With no path argument, node --test recursively discovers *.test.{js,mjs,cjs}, *-test.*, *_test.*, test-*.*, and every file inside any directory named test/.',
   },
   {
     q: 'What happens when an async test function rejects its promise?',
@@ -220,6 +726,7 @@ export const nodeTestQuiz = [
       'The rejection is swallowed and the test passes',
     ],
     answer: 2,
+    explain: 'node:test awaits the promise returned by an async test function; a rejection fails that specific test and its reason is included in the report.',
   },
   {
     q: 'Why should you prefer `node:assert/strict` over `node:assert`?',
@@ -230,16 +737,40 @@ export const nodeTestQuiz = [
       'It is the only version available in Node 24+',
     ],
     answer: 1,
+    explain: 'The strict variant makes assert.equal behave like === instead of ==, removing a whole class of coercion-related false passes.',
   },
   {
-    q: 'Which `node:test` feature still needs an `--experimental-` flag in Node 24 and 26?',
+    q: 'Which `node:test` feature still needs an `--experimental-` flag on Node 24?',
     options: [
       'Mocking with `mock.fn()`',
       'Snapshot testing',
-      'Code coverage',
+      'mock.module() and code coverage',
       '`describe` / `it` grouping',
     ],
     answer: 2,
+    explain: 'mock.fn/mock.method/mock.timers and snapshots (t.assert.snapshot) are stable. mock.module() needs --experimental-test-module-mocks and coverage needs --experimental-test-coverage; both print an ExperimentalWarning.',
+  },
+  {
+    q: 'What does this print, and does the test pass?\n\ntest(\'checks role\', async () => {\n  const user = { name: \'Ada\' };\n});',
+    options: [
+      'It fails because there is no assertion',
+      'It passes -- a test with no assert.* call cannot fail, it just runs to completion',
+      'It throws a TypeError at runtime',
+      'It is automatically marked todo',
+    ],
+    answer: 1,
+    explain: 'A test body that never calls assert.*/t.assert.* has nothing that can fail it. It reports as passed regardless of what the code actually does -- one of the most common "green but meaningless" test bugs.',
+  },
+  {
+    q: 'A test does `mock.method(db, \'save\', fn)`, but the code under test runs `const { save } = db;` at import time and calls the bare `save(...)`. What happens when the test runs?',
+    options: [
+      'The mock intercepts the call normally, since db.save was patched',
+      'It throws ERR_INVALID_ARG_TYPE',
+      'The mock is never triggered -- the destructured save is a separate reference to the original function',
+      'Node automatically rewrites the destructured reference to point at the mock',
+    ],
+    answer: 2,
+    explain: 'mock.method patches the property slot on the object. A reference already destructured out of that object before the mock ran keeps pointing at the original function -- the mock and the real call site are different bindings.',
   },
 ];
 
