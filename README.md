@@ -67,7 +67,7 @@ frontmatter (`title`, `description`, `sidebar.order`) → imports → concept in
 > - **`<NodeRunner code={...} />`** runs JS in the browser (editable, click Run). **`<NodeRunner code={...} node />`** is for snippets needing the Node runtime (process/Buffer/fs/http/streams/require/npm) — code + "Open in StackBlitz", no in-browser run.
 > - **In `export const` snippets, prefer string concatenation over template literals** to avoid escaping. If you must use a template literal, escape interpolation as `\${...}` and backticks as `` \` ``.
 > - **Never put a bare `{...}` in prose or headings** — keep object/destructuring examples in backtick code spans or fenced ```js blocks.
-> - **Internal links must include the base path**, e.g. `/nodejs-deep-dive/en/event-loop-async/`.
+> - **Internal links must include the base path**, e.g. `/nodejs/en/event-loop-async/`.
 > - **Do NOT run a `\n`/`\t`-doubling escaping codemod** on this content — it corrupts indentation. Verify by building + browser-testing instead.
 
 ## How the Hybrid Runner Works
