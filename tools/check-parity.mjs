@@ -324,11 +324,14 @@ for (const enPath of files) {
   }
 
   // 6. no Thai characters inside a fenced ```js block or code literal in TH file
-  fencedJsBlocks(thSrc).forEach((block, i) => {
-    if (THAI_RE.test(block)) {
-      report(`${thPath}: Thai characters inside fenced \`\`\`ts block #${i}`);
-    }
-  });
+  {
+    const enFences = fencedJsBlocks(enSrc);
+    fencedJsBlocks(thSrc).forEach((block, i) => {
+      if (THAI_RE.test(block) && block !== enFences[i]) {
+        report(`${thPath}: Thai characters inside fenced \`\`\`js block #${i}`);
+      }
+    });
+  }
   // (a literal byte-identical to EN is exempt: Thai string data is legitimate when EN carries the same bytes)
   for (const [name, code] of Object.entries(thCode)) {
     if (THAI_RE.test(code) && code !== enCode[name]) {
