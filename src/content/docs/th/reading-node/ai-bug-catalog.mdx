@@ -656,7 +656,7 @@ async function save(data) {
 
 export const catalogQuiz = [
   {
-    q: 'Which of these 24 patterns produces no crash and no warning at all, only a silently wrong value?',
+    q: 'ใน 24 pattern นี้ ข้อไหนที่ไม่มีทั้ง crash และไม่มี warning เลย มีแค่ค่าที่ผิดแบบเงียบ ๆ เท่านั้น?',
     options: [
       'Double res.end()',
       'ลืม await (pattern 1) -- ผู้เรียกได้ Promise object แทนค่าที่ resolve แล้ว โดยไม่มี error ใด ๆ',
@@ -667,7 +667,7 @@ export const catalogQuiz = [
     explain: 'await ที่หายไปไม่ throw -- โค้ดแค่ได้รับ Promise ที่ยังไม่ resolve ในที่ที่คาดหวังค่า และการอ่าน property จากมัน (เช่น .name) จะคืน undefined แทนที่จะเกิด error ใด ๆ',
   },
   {
-    q: 'Why does eslint-plugin-promise\'s catch-or-return rule catch pattern 3 (a floating promise that later rejects) but not pattern 2 (forEach(async ...))?',
+    q: 'ทำไมกฎ catch-or-return ของ eslint-plugin-promise ถึงจับ pattern 3 (floating promise ที่ reject ทีหลัง) ได้ แต่จับ pattern 2 (forEach(async ...)) ไม่ได้?',
     options: [
       'มันไม่จับทั้งสองแบบเลย',
       'catch-or-return ตรวจจับ expression statement ที่คืน promise โดยไม่มี .catch/.then แนบไว้เลย -- forEach(async fn) เป็นการเรียก forEach ไม่ใช่ floating promise expression ตรง ๆ ดังนั้นกฎจึงไม่มีอะไรให้ตรวจจับที่จุดเรียกนั้น',
@@ -678,7 +678,7 @@ export const catalogQuiz = [
     explain: 'กฎนี้ดูที่ expression statement โดยตรง saveRecord(record); เป็นรูปแบบนั้นพอดี ส่วน ids.forEach(async fn) เป็นการเรียก Array.prototype.forEach -- floating promise ถูกสร้างและทิ้งข้างในตัว forEach เอง ห่างออกไปหนึ่งชั้นจากสิ่งที่กฎนี้ตรวจสอบโดยตรง',
   },
   {
-    q: 'A server accepts a `Promise.all(items.map(fetchOne))` call for a list of 10 items in testing and a list of 50,000 items in production. What is the concrete risk that only shows up in production?',
+    q: 'server ตัวหนึ่งรับการเรียก `Promise.all(items.map(fetchOne))` กับลิสต์ 10 รายการตอน testing และลิสต์ 50,000 รายการตอน production ความเสี่ยงที่เป็นรูปธรรมที่โผล่มาเฉพาะตอน production คืออะไร?',
     options: [
       'Promise.all จะ throw เสมอสำหรับ array ที่ยาวเกิน 1,000 รายการ',
       'ทั้ง 50,000 call ยิงพร้อมกันหมดในทันที ซึ่งอาจทำให้ socket, memory, หรือ rate limit ปลายทางหมดไปพร้อมกัน -- สิ่งที่ 10 call พร้อมกันจะไม่มีวันทำได้',
@@ -689,7 +689,7 @@ export const catalogQuiz = [
     explain: 'Promise.all เริ่มทุก promise ใน array ทันทีโดยไม่มีการจำกัด concurrency ในตัวเลย สิบ call พร้อมกันแทบมองไม่เห็น แต่ห้าหมื่นคือความเสี่ยงจริงของการทำให้ทรัพยากรหมด ซึ่ง test ขนาดเล็กจะไม่มีวันเปิดเผยได้',
   },
   {
-    q: 'Inside an fs.readFile callback, why does `setImmediate(fn)` reliably run before `setTimeout(fn, 0)`, even though the timeout was scheduled with a 0ms delay?',
+    q: 'ข้างใน callback ของ fs.readFile ทำไม `setImmediate(fn)` ถึงรันก่อน `setTimeout(fn, 0)` ได้อย่างแน่นอน ทั้งที่ timeout ถูกตั้งไว้ที่ delay 0ms?',
     options: [
       'setImmediate รันแบบ synchronous เสมอ ก่อนที่ callback จะ return ด้วยซ้ำ',
       'ข้างใน I/O callback เฟส check (ที่ setImmediate callback ทำงาน) รับประกันว่าจะทำงานก่อนเฟส timers ถัดไปเสมอ ไม่ว่าจะจัดลำดับไว้อย่างไรหรือ delay ที่ขอไว้จะเป็นเท่าไร',
@@ -700,7 +700,7 @@ export const catalogQuiz = [
     explain: 'เฟสของ event loop ใน libuv รันตามลำดับที่แน่นอนในแต่ละรอบ: timers จากนั้น (ในที่สุด) poll แล้วจึง check (setImmediate) เมื่อถูกจัดลำดับจากข้างใน I/O callback (ระหว่างเฟส poll) เฟส check จะมาถัดไปเสมอ ก่อนที่ loop จะกลับไปที่ timers อีกครั้ง',
   },
   {
-    q: 'Why does `res.end()` called a second time crash the process by default, instead of just being a harmless no-op?',
+    q: 'ทำไมการเรียก `res.end()` ครั้งที่สองถึงทำให้โปรเซส crash โดยดีฟอลต์ แทนที่จะเป็นแค่ no-op ที่ไม่มีอันตราย?',
     options: [
       'Node.js เพิกเฉยต่อการเรียก res.end() ทุกครั้งหลังครั้งแรกโดยอัตโนมัติ',
       'การเรียกครั้งที่สอง throw ERR_STREAM_WRITE_AFTER_END ซึ่งถูกส่งเป็น event "error" บน response stream -- และ event "error" ที่ไม่ถูกจัดการถือเป็นเรื่องร้ายแรงโดยการออกแบบใน Node.js',
@@ -711,7 +711,7 @@ export const catalogQuiz = [
     explain: 'stream ที่ end ไปแล้วเขียนซ้ำไม่ได้อีก -- การพยายามทำเช่นนั้นจะยก ERR_STREAM_WRITE_AFTER_END เป็น event "error" และ EventEmitter ถือว่า event "error" ที่ไม่มี listener เลยเป็นเรื่องร้ายแรง โดย throw มันเป็น uncaught exception',
   },
   {
-    q: 'Why does `naive === full.toString(\'utf8\')` come back false in the chunk-decoding pattern, when both chunks together contain exactly the original bytes?',
+    q: 'ทำไม `naive === full.toString(\'utf8\')` ถึงได้ false ใน pattern การ decode ข้าม chunk ทั้งที่ทั้งสอง chunk รวมกันมี byte ตรงกับต้นฉบับเป๊ะ ๆ?',
     options: [
       'Buffer.subarray ทิ้ง byte ไปอย่างเงียบ ๆ',
       'การ decode แต่ละ chunk เป็น string แยกกันอาจตัดตัวอักษร UTF-8 แบบ multi-byte คาบกลาง boundary กลายเป็นอักขระ replacement (U+FFFD) ทั้งสองฝั่งของรอยตัด',
@@ -722,7 +722,7 @@ export const catalogQuiz = [
     explain: 'byte ยังคงครบถ้วนอยู่ในทั้งสอง chunk -- bug คือการ decode มันแยกกัน ตัวอักษร UTF-8 แบบ multi-byte ที่ถูกตัดกลางลำดับจะไม่ถูกต้องในแต่ละฝั่งเดี่ยว ๆ ดังนั้นครึ่งที่ไม่สมบูรณ์แต่ละฝั่งจึง decode เป็นอักขระ replacement แทนที่จะรอ byte ที่เหลือ',
   },
   {
-    q: 'In the exec-injection pattern, why does execFileSync(\'echo\', [\'start\', userInput]) treat `hi; echo INJECTED` as inert data, when execSync(\'echo start && echo \' + userInput) treats the same string as two commands?',
+    q: 'ใน pattern exec-injection ทำไม execFileSync(\'echo\', [\'start\', userInput]) ถึงปฏิบัติกับ `hi; echo INJECTED` เป็นข้อมูลเฉย ๆ ในขณะที่ execSync(\'echo start && echo \' + userInput) ปฏิบัติกับ string เดียวกันเป็นสองคำสั่ง?',
     options: [
       'execFileSync ลบ shell metacharacter ออกจาก argument ให้อัตโนมัติ',
       'execFileSync รันโปรแกรมที่ระบุโดยตรงพร้อม argument ที่ให้มา โดยไม่มี shell เข้ามาตีความ ; หรือ && เลย -- ส่วน execSync ผ่าน shell จริงเสมอ ซึ่งตีความสิ่งเหล่านั้น',
@@ -733,7 +733,7 @@ export const catalogQuiz = [
     explain: 'execSync (เหมือน exec) ส่ง string ทั้งก้อนให้ shell ซึ่งเป็นโปรแกรมที่รู้ความหมายของ ; และ && พอดี execFileSync เรียก executable เป้าหมายโดยตรงพร้อม argument array -- ไม่มี shell อยู่ในเส้นทางที่จะตีความ argument ใด ๆ เป็นคำสั่งแยกต่างหาก',
   },
   {
-    q: 'A test suite reports 100% passing after a reviewer\'s AI assistant "wrote tests" for a buggy add(a, b) function that returns a - b. What is the most likely explanation, based on pattern 22?',
+    q: 'test suite รายงานว่าผ่าน 100% หลังจาก AI assistant ของ reviewer "เขียน test" ให้ฟังก์ชัน add(a, b) ที่มี bug และคืนค่า a - b คำอธิบายที่เป็นไปได้มากที่สุดคืออะไร โดยอิงจาก pattern 22?',
     options: [
       'test suite เป็นไปไม่ได้ที่จะรันเลยด้วยซ้ำ',
       'มีอย่างน้อยหนึ่ง test ที่เรียก add() โดยไม่เคย assert ค่าที่คืนกลับมาเลย ทำให้ test ผ่านไม่ว่า add() จะคืนอะไรจริง ๆ ก็ตาม',

@@ -137,7 +137,7 @@ chargeCustomer(currentOrder); // BUG: floating promise -- not forEach-shaped, so
 
 export const checklistQuiz = [
   {
-    q: 'The one-line grep in this lesson would find `readFileSync` and `process.exit(` in a diff. Which of the AI bug catalog\'s 24 patterns would it never find on its own, no matter how carefully the regex is tuned?',
+    q: 'grep บรรทัดเดียวในบทนี้จะหา `readFileSync` และ `process.exit(` เจอใน diff pattern ไหนใน 24 pattern ของ AI bug catalog ที่มันจะไม่มีวันหาเจอด้วยตัวเอง ไม่ว่าจะปรับ regex ให้ละเอียดแค่ไหนก็ตาม?',
     options: [
       'Double res.end() call',
       'floating promise ที่เกิดจากการเรียกฟังก์ชันธรรมดา ไม่มี forEach, .then, หรือรูปแบบอื่นที่ grep ได้เลย',
@@ -148,7 +148,7 @@ export const checklistQuiz = [
     explain: 'floating promise เป็นแค่การเรียกฟังก์ชันธรรมดาที่ไม่มี await -- ไม่มี string ที่เด่นชัดให้ grep แบบที่ res.end( หรือ exec( มี การหามันต้องอ่านจริงว่าผลลัพธ์ของ call ถูก await หรือจัดการหรือไม่',
   },
   {
-    q: 'Why does this lesson provide both a full six-group checklist and a six-line short version?',
+    q: 'ทำไมบทนี้ถึงมีทั้ง checklist เต็มหกกลุ่มและเวอร์ชันสั้นหกบรรทัด?',
     options: [
       'เวอร์ชันสั้นแทนที่เวอร์ชันเต็มไปเลยเมื่อจำได้แล้ว',
       'เวอร์ชันเต็มโยงแต่ละข้อกลับไปยังบทที่อธิบายว่าทำไมมันสำคัญ ส่วนเวอร์ชันสั้นแลกคำอธิบายนั้นเพื่อความเร็วที่วางลงใน PR ได้จริงทุกครั้ง',
@@ -159,7 +159,7 @@ export const checklistQuiz = [
     explain: 'ทั้งสองเช็กความกังวลพื้นฐานเดียวกันทั้ง 24 ข้อ เวอร์ชันเต็มเป็นเอกสารอ้างอิงพร้อมลิงก์ ส่วนเวอร์ชันสั้นเป็นสิ่งที่ใช้ซ้ำได้จริงในทางปฏิบัติ ตั้งใจให้ถูกใช้จริงภายใต้แรงกดดันด้านเวลา',
   },
   {
-    q: '```js\nasync function chargeCustomer(order) {\n  return billingClient.charge(order.customerId, order.total);\n}\nchargeCustomer(order);\n```\nWhich checklist item from the "Event loop & async" group catches this file, even though it contains none of the one-line grep\'s ten strings?',
+    q: '```js\nasync function chargeCustomer(order) {\n  return billingClient.charge(order.customerId, order.total);\n}\nchargeCustomer(order);\n```\nchecklist ข้อไหนจากกลุ่ม "Event loop & async" ที่จับไฟล์นี้ได้ ทั้งที่มันไม่มี string ใดเลยในสิบ string ของ grep บรรทัดเดียว?',
     options: [
       '"ไฟล์นี้ปน require()/import กัน หรืออ้างอิง __dirname ข้างในไฟล์ ESM หรือไม่?"',
       '"ทุก call ที่คืน Promise ถูก await หรือมี .catch() ที่ชัดเจนแนบไว้หรือไม่?"',
@@ -170,7 +170,7 @@ export const checklistQuiz = [
     explain: 'chargeCustomer(order); เป็น floating promise -- ตรงกับรูปแบบที่ checklist ข้อ "await หรือมี .catch() แนบไว้" ถูกเขียนขึ้นมาเพื่อจับพอดี ไม่ว่าไฟล์นั้นจะมี string จาก grep ปรากฏอยู่หรือไม่ก็ตาม',
   },
   {
-    q: 'Why is "the grep pass found nothing" not the same claim as "this diff has no bugs from the catalog"?',
+    q: 'ทำไม "รอบ grep ไม่เจออะไรเลย" ถึงไม่ใช่คำกล่าวเดียวกันกับ "diff นี้ไม่มี bug จากแคตตาล็อกเลย"?',
     options: [
       'รอบ grep ครอบคลุมทุกอย่างจริง ๆ อยู่แล้ว -- นี่เป็นคำถามหลอก',
       'ประมาณหนึ่งในสามของ 24 pattern ในแคตตาล็อก (เช่น floating promise ธรรมดา หรือ Promise.all ที่ไม่มีขอบเขตให้เห็น) ไม่มี string เดียวที่เสถียรพอให้ grep ได้เลย',
@@ -181,7 +181,7 @@ export const checklistQuiz = [
     explain: 'string ทั้งสิบตัวของ grep ยึดกับ pattern ที่บังเอิญมีลายเซ็นข้อความที่ชัดเจนและเสถียร pattern ที่นิยามด้วยการ "ไม่มี" (ไม่มี await, ไม่มีขอบเขต, ไม่มี assertion) หรือด้วยโครงสร้างแทนที่จะเป็นข้อความ ไม่มีลายเซ็นแบบนั้น',
   },
   {
-    q: 'A reviewer checks off every item in the six-line short version for a diff in under a minute, without reading the diff itself first. What does a clean checklist result actually prove?',
+    q: 'reviewer คนหนึ่งติ๊กครบทุกข้อในเวอร์ชันสั้นหกบรรทัดสำหรับ diff หนึ่งภายในเวลาไม่ถึงนาที โดยไม่ได้อ่าน diff จริงก่อนเลย ผล checklist ที่สะอาดแบบนี้พิสูจน์อะไรได้จริง ๆ บ้าง?',
     options: [
       'diff นี้ปลอดจาก bug ทุกตัวใน AI bug catalog อย่างพิสูจน์ได้',
       'diff นี้ไม่แสดง pattern เฉพาะที่ checklist ระบุไว้เท่านั้น -- มันไม่ได้บอกอะไรเกี่ยวกับ bug นอกลิสต์นั้น หรือเกี่ยวกับข้อที่ reviewer ติ๊กเร็วเกินกว่าจะตรวจสอบอย่างจริงจัง',

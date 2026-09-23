@@ -348,7 +348,7 @@ test('applies a discount', function () {
 
 export const toolsQuiz = [
   {
-    q: 'The eslint run in this lesson fires 7 distinct rules on an 18-line file, but says nothing about `fs.readFileSync(\'/etc/hosts\')` on line 3. Why not?',
+    q: 'การรัน eslint ในบทนี้ยิงกฎที่ต่างกัน 7 ข้อบนไฟล์ 18 บรรทัด แต่ไม่พูดถึง `fs.readFileSync(\'/etc/hosts\')` บนบรรทัดที่ 3 เลย ทำไมถึงเป็นแบบนั้น?',
     options: [
       'eslint-plugin-n ไม่มีกฎสำหรับ synchronous fs call เลย',
       'การที่ synchronous call จะอันตรายหรือไม่ขึ้นอยู่กับว่ามันรันข้างใน hot path ที่รับ request พร้อมกันหรือเปล่า -- บริบทที่ linter ซึ่งดูแค่ไฟล์เดียวไม่มีทางรู้',
@@ -359,7 +359,7 @@ export const toolsQuiz = [
     explain: 'linter ตรวจ pattern เชิง syntax และโครงสร้างภายในไฟล์ ส่วนการที่ readFileSync ตัวหนึ่งจะเป็นปัญหาจริงหรือไม่ขึ้นอยู่กับบริบท runtime (ไฟล์นี้รันต่อ request หรือเปล่า) ซึ่ง static analysis ของไฟล์เดียวไม่สามารถระบุได้',
   },
   {
-    q: 'Why do `npm audit` and `osv-scanner`, run against the same lockfile pinned to lodash@4.17.4, report the same underlying vulnerabilities but with some different details?',
+    q: 'ทำไม `npm audit` และ `osv-scanner` ที่รันกับ lockfile เดียวกันซึ่งตรึง lodash@4.17.4 ไว้ ถึงรายงานช่องโหว่ชุดเดียวกันแต่มีรายละเอียดบางอย่างต่างกัน?',
     options: [
       'เครื่องมือตัวใดตัวหนึ่งรายงาน false positive',
       'ทั้งคู่ query ฐานข้อมูลช่องโหว่ที่ต่างกัน (advisory feed ของ npm เองเทียบกับ aggregator ของ OSV) จึงอาจต่างกันได้ในรายละเอียดเสริมอย่างคะแนน CVSS แม้จะเห็นตรงกันในชุด advisory หลัก',
@@ -370,7 +370,7 @@ export const toolsQuiz = [
     explain: 'ทั้งสองเครื่องมือสแกนหาช่องโหว่ที่รู้จักใน dependency แต่ดึงข้อมูลจากแหล่งต่างกัน การเห็นตรงกันในชุด advisory หลักพร้อม metadata เสริมที่ต่างกัน (เช่นคะแนน CVSS) เป็นเรื่องคาดหวังได้ ไม่ใช่สัญญาณว่าเครื่องมือตัวไหนผิด',
   },
   {
-    q: 'According to the pattern-to-rung table, which of these AI bug catalog patterns is the ONLY one caught by an eslint rule directly, rather than being "none -- only a human"?',
+    q: 'ตามตาราง pattern-to-rung pattern ไหนใน AI bug catalog ที่เป็นข้อเดียวเท่านั้นที่ถูกกฎ eslint จับได้โดยตรง แทนที่จะเป็น "ไม่มี -- ต้องใช้คนเท่านั้น"?',
     options: [
       'Pattern 7 (double res.end())',
       'Pattern 3 (floating promise ที่ reject ในภายหลัง) ผ่านกฎ catch-or-return ของ eslint-plugin-promise',
@@ -381,7 +381,7 @@ export const toolsQuiz = [
     explain: 'จาก 24 pattern มีแค่ pattern 3 เท่านั้นที่มีกฎ eslint จับตรง ๆ (promise/catch-or-return); pattern 12 ถูกจับด้วย --trace-warnings และ pattern 22 ด้วย node --test เมื่อมี assertion จริง -- ทั้งสองอย่างนี้ไม่ใช่กฎ eslint',
   },
   {
-    q: 'The autocannon run against the Production Server\'s /health route reports roughly 60k-75k requests/second on this machine. What does this number NOT tell you?',
+    q: 'การรัน autocannon กับ route /health ของ Production Server รายงานตัวเลขประมาณ 60k-75k request ต่อวินาทีบนเครื่องนี้ ตัวเลขนี้ไม่ได้บอกอะไรกับเราบ้าง?',
     options: [
       'route /health เองรับ traffic พร้อมกันจริงได้หรือไม่',
       'route อื่นใน server เดียวกัน -- ตัวที่ query database จริงหรือทำงาน CPU แบบ synchronous -- จะทำงานได้ใกล้เคียงกันหรือไม่',
@@ -392,7 +392,7 @@ export const toolsQuiz = [
     explain: 'load test วัดแค่ route, payload, และ concurrency เฉพาะที่ใช้รันตอนนั้น health check ที่ไม่มีงานจริงเลยไม่ได้บอกอะไรว่า route ที่ทำ I/O หรืองาน CPU จริง ๆ จะทำงานได้อย่างไรภายใต้ load เดียวกัน',
   },
   {
-    q: 'A reviewer sees a PR with a `node --test` run that reports "1 passed, 0 failed" for a new function, and treats this as proof the function is correct. Based on this lesson and the AI bug catalog, what is the gap in that reasoning?',
+    q: 'reviewer คนหนึ่งเห็น PR ที่มีผลรัน `node --test` รายงานว่า "1 passed, 0 failed" สำหรับฟังก์ชันใหม่ตัวหนึ่ง แล้วถือว่านี่เป็นหลักฐานว่าฟังก์ชันนั้นถูกต้อง จากบทนี้และ AI bug catalog ช่องโหว่ในเหตุผลนั้นคืออะไร?',
     options: [
       'node --test ไม่ได้รันโค้ดจริงเลย เช็กแค่ syntax เท่านั้น',
       'test ที่ผ่านพิสูจน์แค่ว่า assertion ที่ test นั้นมีอยู่จริงไม่ล้มเหลว -- ถ้า test ไม่มี assertion เลย (หรือ assert ผิดสิ่ง) การผ่านก็ไม่ได้พิสูจน์อะไรเกี่ยวกับความถูกต้องเลย',
