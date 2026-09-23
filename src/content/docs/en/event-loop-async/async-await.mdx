@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## async functions
 
@@ -70,22 +71,123 @@ function fetchB() { return Promise.resolve('B'); }
 var [a, b] = await Promise.all([fetchA(), fetchB()]);
 ```
 
-## Carrying context across awaits: AsyncLocalStorage
+## forEach(async ...) does not do what it looks like it does
 
-A request ID set at the top of a handler is gone by the time a nested `await` resumes — unless you keep it in `AsyncLocalStorage`. Node 24 rebuilt it on **AsyncContextFrame**, which propagates the store through every `await`, timer, and callback with far less overhead than the old async-hooks implementation:
+`Array.prototype.forEach` was designed for synchronous callbacks — it does not look at what the callback returns, and it does not wait for anything. Passing it an `async` function does not change that: `forEach` fires all the callbacks, ignores the Promise each one returns, and moves on immediately.
 
-```js
-import { AsyncLocalStorage } from 'node:async_hooks';
-
-const requestContext = new AsyncLocalStorage();
-
-async function handle(req) {
-  await requestContext.run({ id: req.id }, async function() {
-    await save(req);                        // any depth of awaits…
-    console.log(requestContext.getStore()); // …still sees { id: req.id }
+export const forEachAsyncCode = `function fakeSave(item) {
+  return new Promise(function (resolve) {
+    setTimeout(function () { resolve('saved ' + item); }, 0);
   });
 }
-```
+
+var items = ['a', 'b', 'c'];
+
+console.log('forEach(async ...) starting');
+items.forEach(async function (item) {
+  var result = await fakeSave(item);
+  console.log('forEach saw:', result);
+});
+console.log('forEach(async ...) already "finished" — none of the awaits above have resolved yet');
+`;
+
+<NodeRunner client:visible code={forEachAsyncCode} />
+
+The "finished" line prints **before** any `forEach saw:` line — `forEach` itself returns synchronously once it has fired all three callbacks, long before any of their `await`s settle. Now watch what happens when one of those ignored Promises rejects:
+
+export const forEachAsyncBugCode = `// @expect-throw
+function fakeSave(item) {
+  return new Promise(function (resolve, reject) {
+    setTimeout(function () {
+      if (item === 'bad') reject(new Error('save failed: ' + item));
+      else resolve('saved ' + item);
+    }, 0);
+  });
+}
+
+var items = ['a', 'bad', 'c'];
+
+console.log('forEach(async ...) starting');
+items.forEach(async function (item) {
+  var result = await fakeSave(item);
+  console.log('forEach saw:', result);
+});
+console.log('forEach(async ...) already "finished" — none of the awaits above have resolved yet');
+`;
+
+<NodeRunner client:visible code={forEachAsyncBugCode} />
+
+Click Run: in this sandboxed browser tab, the rejection is swallowed — you see `saved a`, then nothing for `bad`, and the tab keeps running (a real browser would fire a silent `unhandledrejection` event you would only see by opening devtools). Run the exact same code as a plain Node script and it is far less forgiving: an unhandled rejection crashes the process by default before `item === 'c'` even gets a chance to run — one bad item takes down the whole batch, not just its own iteration.
+
+For comparison, `for...of` with `await` waits for each step (sequential, and errors propagate through a normal `try/catch`), and `Promise.all(items.map(fn))` runs everything concurrently and genuinely waits for all of it:
+
+export const forOfVsAllCode = `function fakeSave(item) {
+  return new Promise(function (resolve) {
+    setTimeout(function () { resolve('saved ' + item); }, 0);
+  });
+}
+
+async function runSequential(items) {
+  console.log('for...of starting');
+  for (const item of items) {
+    var result = await fakeSave(item);
+    console.log('for...of saw:', result);
+  }
+  console.log('for...of really finished — every item is saved');
+}
+
+async function runConcurrent(items) {
+  console.log('Promise.all(map) starting');
+  var results = await Promise.all(items.map(fakeSave));
+  console.log('Promise.all(map) really finished:', results.join(', '));
+}
+
+async function main() {
+  await runSequential(['a', 'b']);
+  await runConcurrent(['a', 'b']);
+}
+
+main();
+`;
+
+<NodeRunner client:visible code={forOfVsAllCode} />
+
+Both `for...of` and `Promise.all(map)` genuinely wait — the "really finished" line only prints after every item is done, and a rejection inside either one is a normal, catchable rejection instead of a silently ignored one.
+
+## Carrying context across awaits: AsyncLocalStorage
+
+A request ID set at the top of a handler is gone by the time a nested `await` resumes — unless you keep it in `AsyncLocalStorage`. Node 24 rebuilt it on **AsyncContextFrame**, which propagates the store through every `await`, timer, and callback with far less overhead than the old async-hooks implementation. The demo below runs two concurrent "requests" with different IDs and different delays, and confirms neither one ever sees the other's context:
+
+export const asyncLocalStorageCode = `import { AsyncLocalStorage } from 'node:async_hooks';
+
+const als = new AsyncLocalStorage();
+
+function log(msg) {
+  const store = als.getStore();
+  console.log('[' + (store ? store.id : 'no-context') + ']', msg);
+}
+
+async function handleRequest(id, delayMs) {
+  await als.run({ id: id }, async function () {
+    log('start');
+    await new Promise(function (resolve) { setTimeout(resolve, delayMs); });
+    log('after await, still has the right id');
+  });
+}
+
+await Promise.all([handleRequest('req-1', 20), handleRequest('req-2', 5)]);
+console.log('all requests finished');
+`;
+
+export const asyncLocalStorageOut = `[req-1] start
+[req-2] start
+[req-2] after await, still has the right id
+[req-1] after await, still has the right id
+all requests finished`;
+
+<NodeRunner client:visible code={asyncLocalStorageCode} node expected={asyncLocalStorageOut} />
+
+Even though `req-2`'s callback resumes first (its 5 ms timer fires before `req-1`'s 20 ms one), each request's `getStore()` always returns its own `{ id }` — the context follows the `await` chain it started in, not the order callbacks happen to fire in.
 
 ## Runnable demo
 
@@ -125,6 +227,37 @@ Output: `Sequential: A then B`, then `Parallel: A and B`.
 Using `await` inside a `for` loop runs each iteration one after another. To run operations concurrently, collect the Promises in an array and pass them to `Promise.all`.
 </Callout>
 
+## Mental Model
+
+`async`/`await` is sugar over Promises, not a different mechanism — `await expr` is "pause this function here, resume with `expr`'s resolved value once it settles, and let everything else run meanwhile." Because it is still Promises underneath, anything that expects a Promise callback (`.then`, `Array.prototype.forEach`, `.map` without a following `Promise.all`) still receives a Promise from an `async` function and will not automatically wait for it — `await` only pauses the function that contains it, never the caller of a function it forgot to hand a Promise back to.
+
+## Trade-offs
+
+`async`/`await` makes async code read top-to-bottom like synchronous code, which is exactly why it hides two things you have to reintroduce deliberately: concurrency (sequential `await`s are simple to read but slow — you must opt into `Promise.all` for speed) and iteration shape (a `for...of` loop reads identically whether or not the body is async, so nothing visually warns you that `items.forEach(async fn)` silently breaks that assumption). The readability win is real; it just moves the burden of "does this actually wait?" onto you reading the iteration method, not the `await` keyword.
+
+## Common Misconceptions
+
+- **"If a function is async, calling it always waits for it to finish."** Only if the caller `await`s the call (or chains `.then`). Calling an async function without `await` just starts it and immediately continues — exactly like calling any other function that returns a Promise.
+- **"`forEach` is just a for loop, so `await` inside it works the same way."** It does not — `forEach` never looks at what its callback returns, so an `async` callback's Promise (and any rejection inside it) is completely disconnected from the `forEach` call itself.
+- **"AsyncLocalStorage is global state, so concurrent requests can leak into each other's context."** The opposite is true by design — each `als.run(store, fn)` call creates an isolated context that follows only its own `await` chain, which is exactly what the demo above proves for two requests running at once.
+
+## Reading AI-generated code
+
+The single most common bug in AI-generated async code is a missing `await` on a call that returns a Promise — the code still runs (nothing throws at the call site), it just does not wait for the result, so bugs show up later as "the data wasn't saved yet" or "the response came back empty," far from the missing keyword itself.
+
+<SpotTheBug code={`async function saveUser(user) {
+  validateUser(user); // synchronous, fine
+  db.save(user);      // BUG: db.save returns a Promise — this call is not awaited
+  return { ok: true };
+}
+`}>
+`db.save(user)` returns a Promise, but nothing awaits it or returns it. `saveUser` returns `{ ok: true }` immediately — possibly before the save has even reached the database, and definitely before you would know if it failed, since a rejection from `db.save` becomes an unhandled rejection instead of a caught error. The fix is `await db.save(user);` (or `return db.save(user).then(() => ({ ok: true }))` if you need to keep it non-async) — anything that returns a Promise and matters for correctness must be awaited or returned.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+async/await is Promises with better syntax, not a new kind of waiting — `await` only pauses the function it is written in, so anything that ignores the Promise an async callback returns (forEach, an un-awaited call) will not wait for it either, no matter how the code reads.
+</Callout>
+
 export const asyncAwaitQuiz = [
   {
     q: 'What does an async function always return?',
@@ -135,6 +268,7 @@ export const asyncAwaitQuiz = [
       'undefined',
     ],
     answer: 1,
+    explain: 'Even a plain return value is automatically wrapped in a resolved Promise — async functions never return their raw value directly.',
   },
   {
     q: 'What is the correct way to handle a rejection from an awaited Promise?',
@@ -145,6 +279,7 @@ export const asyncAwaitQuiz = [
       'Use an if/else after the await',
     ],
     answer: 2,
+    explain: 'A rejected awaited Promise throws at the await expression, so a surrounding try/catch is the idiomatic way to handle it inside an async function.',
   },
   {
     q: 'Which pattern runs two async operations concurrently rather than sequentially?',
@@ -155,6 +290,29 @@ export const asyncAwaitQuiz = [
       'fetchA().then(function() { return fetchB(); });',
     ],
     answer: 1,
+    explain: 'Starting both Promises first (by calling fetchA() and fetchB() before awaiting) lets them run concurrently; Promise.all then waits for both together.',
+  },
+  {
+    q: 'What does this print?\n```js\nfunction fakeSave(item) {\n  return new Promise(function (resolve) {\n    setTimeout(function () { resolve(item); }, 0);\n  });\n}\nconsole.log(\'start\');\n[\'a\', \'b\'].forEach(async function (item) {\n  var r = await fakeSave(item);\n  console.log(\'saved\', r);\n});\nconsole.log(\'end\');\n```',
+    options: [
+      'start, saved a, saved b, end',
+      'start, end, saved a, saved b',
+      'saved a, saved b, start, end',
+      'start, end — the forEach callbacks never run because forEach does not support async',
+    ],
+    answer: 1,
+    explain: 'forEach fires both async callbacks and returns immediately without waiting for either — "end" prints synchronously right after, and the "saved" lines only appear once their awaited Promises resolve on a later tick.',
+  },
+  {
+    q: 'A function does `db.save(user);` without await, then immediately `return { ok: true };`. If db.save eventually rejects, what happens?',
+    options: [
+      'saveUser throws the rejection synchronously, so the caller\'s try/catch handles it',
+      'The rejection becomes an unhandled rejection, disconnected from anything the caller can catch — meanwhile { ok: true } was already returned',
+      'JavaScript automatically retries db.save() once',
+      'Nothing — Promises that are not awaited can never reject',
+    ],
+    answer: 1,
+    explain: 'Without await or a returned Promise, saveUser has no connection to db.save\'s eventual outcome — its rejection surfaces later as an unhandled rejection, and the caller already believes the save succeeded.',
   },
 ];
 

@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Two queues, one loop
 
@@ -91,6 +92,53 @@ setTimeout(function() {
 
 If "one macrotask per iteration" were true, `timer 2` would already be queued for a *later* iteration and could not observe anything queued inside `timer 1`. Instead, both timers run in the **same** timers-phase pass, and the drain happens after every callback — not once per phase.
 
+## All four scheduling APIs together
+
+`process.nextTick`, `queueMicrotask`/Promises, `setImmediate`, and `setTimeout(fn, 0)` are four different ways to say "later" — with four different priorities. At the very top of a script (the "main module"), this snippet schedules all four and prints which one actually goes first:
+
+export const topLevelOrderCode = `setTimeout(function () { console.log('setTimeout(0)'); }, 0);
+setImmediate(function () { console.log('setImmediate'); });
+Promise.resolve().then(function () { console.log('Promise microtask'); });
+process.nextTick(function () { console.log('process.nextTick'); });
+console.log('sync');
+`;
+
+export const topLevelOrderOut = `sync
+Promise microtask
+process.nextTick
+setTimeout(0)
+setImmediate`;
+
+<NodeRunner client:visible code={topLevelOrderCode} node expected={topLevelOrderOut} />
+
+Notice `process.nextTick` did **not** win here, even though `process.nextTick` queues are documented to drain before the microtask queue in general. At the very top of a module, before any real task has run, the exact interleaving of the module system's own bookkeeping with these queues is not something Node's documentation promises — and it is genuinely fragile: the same four lines wrapped in a `require('node:module')`-style CommonJS file instead of an ES module can print `process.nextTick` before `Promise microtask` here. **Do not rely on the order you observe at the top level of a script.**
+
+What Node's docs *do* guarantee is the order inside a real I/O callback — run the same four scheduling calls from inside an `fs.readFile` callback and the order is stable:
+
+export const ioCallbackOrderCode = `import { readFile, writeFileSync } from 'node:fs';
+
+writeFileSync('scratch.txt', 'hello');
+
+readFile('scratch.txt', 'utf8', function (err, data) {
+  console.log('io callback: read', data.length, 'bytes');
+
+  setTimeout(function () { console.log('  setTimeout(0)'); }, 0);
+  setImmediate(function () { console.log('  setImmediate'); });
+  Promise.resolve().then(function () { console.log('  Promise microtask'); });
+  process.nextTick(function () { console.log('  process.nextTick'); });
+});
+`;
+
+export const ioCallbackOrderOut = `io callback: read 5 bytes
+  process.nextTick
+  Promise microtask
+  setImmediate
+  setTimeout(0)`;
+
+<NodeRunner client:visible code={ioCallbackOrderCode} node expected={ioCallbackOrderOut} />
+
+Inside the `readFile` callback, `process.nextTick` reliably wins, then the Promise microtask, then `setImmediate` — and `setImmediate` reliably beats `setTimeout(0)` specifically because an I/O callback runs in the **poll** phase, and libuv's **check** phase (where `setImmediate` callbacks live) is the very next phase, before the loop comes back around to **timers**. This exact ordering — `nextTick` → microtasks → `setImmediate` → `setTimeout` — is what Node's own documentation calls out as guaranteed *specifically* from inside an I/O cycle, which is precisely why the top-level result above should not be trusted as a general rule.
+
 ## Runnable ordering demo
 
 This demo prints four lines. Predict the order before running:
@@ -130,6 +178,40 @@ The output is always in this order:
 After **every individual callback** completes — not just once per phase — Node drains `process.nextTick` and then the entire microtask queue, including any new microtasks added during draining, before running the next callback.
 </Callout>
 
+## Mental Model
+
+Think of the four scheduling APIs as four different lines at the same counter, checked in a strict order every single time the counter becomes free: `process.nextTick`'s line first, then the microtask (Promise/`queueMicrotask`) line — both checked until completely empty — and only once both are empty does the counter serve one item from the macrotask side, where `setImmediate` (check phase) and `setTimeout` (timers phase) sit in different rooms visited in a fixed order per loop pass. Code running "for the first time" at the top of a script is not yet standing at that counter in the usual way — the module system itself is still doing setup — which is exactly why ordering there is not something to depend on.
+
+## Trade-offs
+
+Four scheduling primitives sound like unnecessary choice, but each answers a different question: `process.nextTick` for "before literally anything else, even other microtasks" (dangerous if overused — it can starve I/O entirely); `queueMicrotask`/Promises for "after this synchronous work, before any I/O or timer"; `setImmediate` for "after I/O callbacks in this same loop pass"; `setTimeout(fn, 0)` for "on the next timers phase, whenever that is." Reaching for the wrong one either delays something that needed to run sooner, or — with `nextTick` especially — a recursive misuse can monopolize the JS thread and never let I/O callbacks run at all.
+
+## Common Misconceptions
+
+- **"The order I see when I run this once at the top of my script is guaranteed."** It is not — as shown above, this exact course found `process.nextTick` losing to a Promise microtask at the top level, which contradicts the general nextTick-first rule and is not something Node's documentation promises at that point in a program's life.
+- **"setImmediate always runs before setTimeout(fn, 0), full stop."** Only guaranteed inside an I/O callback. At the top level or inside a plain timer callback, whichever of the two libuv actually reaches first in a given run can vary.
+- **"queueMicrotask and process.nextTick are just two names for the same queue."** They are two separate queues with a fixed priority between them — Node always fully drains the `nextTick` queue first, then the microtask queue, every single time either one is checked.
+
+## Reading AI-generated code
+
+AI-generated code sometimes reaches for `Array.prototype.forEach` with an `async` callback to "process each item and wait for it," which quietly breaks in the same way an ignored macrotask ordering assumption does: the outer code moves on immediately, having queued work it will never wait for.
+
+<SpotTheBug code={`async function importAll(records) {
+  console.log('importing', records.length, 'records');
+  records.forEach(async function (record) {
+    await saveRecord(record);
+    console.log('saved', record.id);
+  });
+  console.log('import finished');
+}
+`}>
+`importAll` logs `'import finished'` synchronously, right after `forEach` returns — which happens immediately, because `forEach` never looks at (or waits for) the Promise each async callback returns. None of the `saveRecord` calls are guaranteed to have completed, or even started their I/O, by the time `'import finished'` prints, and any caller that awaits `importAll(records)` is misled into thinking every record was saved. The fix is a shape that actually waits: a `for...of` loop with `await` for sequential saves, or `await Promise.all(records.map(saveRecord))` for concurrent ones — either way, `importAll` needs `await` in front of whichever one it uses before its own `console.log('import finished')`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Four different scheduling APIs mean four different priorities — nextTick, then microtasks, then setImmediate/setTimeout in phase order — and that priority is only a guarantee inside a real callback (like an I/O callback), never at the very top of a script.
+</Callout>
+
 export const microMacroQuiz = [
   {
     q: 'Given this code — what prints first: the Promise .then callback or the setTimeout callback?',
@@ -140,6 +222,7 @@ export const microMacroQuiz = [
       'It depends on the timer delay value',
     ],
     answer: 1,
+    explain: 'Microtasks (Promise reactions) always drain completely before the event loop moves on to the next macrotask, regardless of registration order.',
   },
   {
     q: 'What does queueMicrotask(fn) do?',
@@ -150,6 +233,7 @@ export const microMacroQuiz = [
       'Schedules fn after all pending setTimeout callbacks',
     ],
     answer: 2,
+    explain: 'queueMicrotask puts fn on the same microtask queue Promise reactions use — drained after the current task, before any macrotask.',
   },
   {
     q: 'If a microtask callback itself calls queueMicrotask, when does the new microtask run?',
@@ -160,6 +244,29 @@ export const microMacroQuiz = [
       'It is silently dropped',
     ],
     answer: 1,
+    explain: 'The microtask queue keeps draining until it is empty, including microtasks added while draining is in progress — so a chain of queueMicrotask calls all finish before any macrotask runs.',
+  },
+  {
+    q: 'What does this print?\n```js\nreadFile(\'x\', \'utf8\', function (err, data) {\n  setTimeout(function () { console.log(\'timeout\'); }, 0);\n  setImmediate(function () { console.log(\'immediate\'); });\n  process.nextTick(function () { console.log(\'nextTick\'); });\n});\n```\n(assume the file exists and this runs inside a real fs.readFile callback)',
+    options: [
+      'timeout, immediate, nextTick',
+      'nextTick, immediate, timeout',
+      'immediate, nextTick, timeout',
+      'The order is different every time this runs',
+    ],
+    answer: 1,
+    explain: 'process.nextTick always drains before anything else; and inside an I/O callback specifically, Node\'s docs guarantee setImmediate (check phase, which runs right after poll) fires before setTimeout (timers phase, the next loop pass) — this exact order is deterministic, unlike the same code at the top level of a script.',
+  },
+  {
+    q: 'An AI-written function does `records.forEach(async function (r) { await saveRecord(r); })` followed immediately by `console.log(\'done\')`. What is guaranteed about the timing of "done" relative to the saves?',
+    options: [
+      '"done" only prints after every saveRecord call has resolved',
+      '"done" prints synchronously, right after forEach returns — before any saveRecord await has resolved',
+      '"done" and the saves are guaranteed to interleave one at a time',
+      'forEach throws a TypeError because its callback is async',
+    ],
+    answer: 1,
+    explain: 'forEach does not inspect or wait for what its callback returns, so it returns synchronously the moment all callbacks have been fired (not finished) — "done" is guaranteed to print before any of the awaited saves complete.',
   },
 ];
 

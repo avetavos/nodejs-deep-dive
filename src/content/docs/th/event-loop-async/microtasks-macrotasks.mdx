@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## สองคิว หนึ่งลูป
 
@@ -91,6 +92,53 @@ setTimeout(function() {
 
 ถ้า "หนึ่ง macrotask ต่อหนึ่งรอบ" เป็นจริง `timer 2` จะถูกจัดคิวไว้สำหรับรอบ**ถัดไป**และไม่ควรเห็นอะไรที่จัดคิวไว้ข้างใน `timer 1` แต่ในความเป็นจริง timer ทั้งสองตัวรันใน pass ของ timers-phase **เดียวกัน** และการระบายเกิดขึ้นหลังทุก callback — ไม่ใช่แค่ครั้งเดียวต่อ phase
 
+## API จัดคิวทั้งสี่ตัวมารวมกัน
+
+`process.nextTick`, `queueMicrotask`/Promise, `setImmediate` และ `setTimeout(fn, 0)` คือสี่วิธีที่ต่างกันในการพูดว่า "เดี๋ยวค่อยทำ" — โดยมีลำดับความสำคัญต่างกันสี่แบบ ที่บนสุดของสคริปต์ ("main module") สนิปเป็ตนี้จัดคิวทั้งสี่ตัวแล้วพิมพ์ว่าตัวไหนทำงานก่อนจริง ๆ:
+
+export const topLevelOrderCode = `setTimeout(function () { console.log('setTimeout(0)'); }, 0);
+setImmediate(function () { console.log('setImmediate'); });
+Promise.resolve().then(function () { console.log('Promise microtask'); });
+process.nextTick(function () { console.log('process.nextTick'); });
+console.log('sync');
+`;
+
+export const topLevelOrderOut = `sync
+Promise microtask
+process.nextTick
+setTimeout(0)
+setImmediate`;
+
+<NodeRunner client:visible code={topLevelOrderCode} node expected={topLevelOrderOut} />
+
+สังเกตว่า `process.nextTick` **ไม่ได้**ชนะในที่นี้ ทั้งที่โดยทั่วไปคิวของ `process.nextTick` ถูกบันทึกไว้ว่าระบายก่อน microtask queue เสมอ ที่บนสุดของ module ก่อนที่ task จริงตัวไหนจะรันเลย การสอดประสานที่แน่ชัดระหว่าง bookkeeping ของ module system เองกับคิวเหล่านี้ไม่ใช่สิ่งที่เอกสารของ Node สัญญาไว้ ณ จุดนั้นของโปรแกรม — และมันเปราะบางจริง ๆ ด้วย: โค้ดสี่บรรทัดเดียวกันนี้ถ้าห่อในไฟล์ CommonJS แบบ `require('node:module')` แทนที่จะเป็น ES module ก็สามารถพิมพ์ `process.nextTick` ก่อน `Promise microtask` ได้ **อย่าพึ่งพาลำดับที่คุณเห็นที่บนสุดของสคริปต์**
+
+สิ่งที่เอกสารของ Node *รับประกัน* จริง ๆ คือลำดับข้างใน I/O callback จริง — ลองเรียก scheduling ทั้งสี่ตัวจากข้างใน callback ของ `fs.readFile` แล้วลำดับจะนิ่ง:
+
+export const ioCallbackOrderCode = `import { readFile, writeFileSync } from 'node:fs';
+
+writeFileSync('scratch.txt', 'hello');
+
+readFile('scratch.txt', 'utf8', function (err, data) {
+  console.log('io callback: read', data.length, 'bytes');
+
+  setTimeout(function () { console.log('  setTimeout(0)'); }, 0);
+  setImmediate(function () { console.log('  setImmediate'); });
+  Promise.resolve().then(function () { console.log('  Promise microtask'); });
+  process.nextTick(function () { console.log('  process.nextTick'); });
+});
+`;
+
+export const ioCallbackOrderOut = `io callback: read 5 bytes
+  process.nextTick
+  Promise microtask
+  setImmediate
+  setTimeout(0)`;
+
+<NodeRunner client:visible code={ioCallbackOrderCode} node expected={ioCallbackOrderOut} />
+
+ข้างใน callback ของ `readFile` `process.nextTick` ชนะเสมอ ตามด้วย Promise microtask แล้วค่อย `setImmediate` — และ `setImmediate` ชนะ `setTimeout(0)` เสมอ เพราะ callback ของ I/O รันอยู่ใน phase **poll** และ phase **check** ของ libuv (ที่ callback ของ `setImmediate` อยู่) คือ phase ถัดไปทันที ก่อนที่ loop จะวนกลับไปที่ **timers** ลำดับนี้ — `nextTick` → microtask → `setImmediate` → `setTimeout` — คือสิ่งที่เอกสารของ Node เองระบุว่ารับประกัน *เฉพาะ*จากข้างใน I/O cycle เท่านั้น ซึ่งเป็นเหตุผลว่าทำไมผลลัพธ์ระดับบนสุดข้างต้นถึงไม่ควรถูกมองว่าเป็นกฎทั่วไป
+
 ## เดโมจัดลำดับที่รันได้
 
 เดโมนี้พิมพ์สี่บรรทัด ลองทายลำดับก่อนรัน:
@@ -130,6 +178,40 @@ queueMicrotask(function() {
 หลัง**ทุก callback แต่ละตัว** ทำเสร็จ — ไม่ใช่แค่ครั้งเดียวต่อ phase — Node จะระบาย `process.nextTick` แล้วตามด้วย microtask queue ทั้งหมด รวมถึง microtask ใหม่ที่เพิ่มเข้ามาระหว่างการระบาย ก่อนจะรัน callback ถัดไป
 </Callout>
 
+## Mental Model
+
+ให้นึกภาพ scheduling API ทั้งสี่ตัวเป็นสี่แถวที่เคาน์เตอร์เดียวกัน ถูกเช็กตามลำดับตายตัวทุกครั้งที่เคาน์เตอร์ว่าง: แถวของ `process.nextTick` ก่อน แล้วตามด้วยแถว microtask (Promise/`queueMicrotask`) — เช็กทั้งสองแถวจนว่างสนิท และต่อเมื่อทั้งสองแถวว่างแล้วเท่านั้นเคาน์เตอร์ถึงจะให้บริการฝั่ง macrotask หนึ่งคิว ที่ซึ่ง `setImmediate` (check phase) กับ `setTimeout` (timers phase) อยู่คนละห้องที่ถูกเยี่ยมตามลำดับตายตัวต่อหนึ่งรอบ loop โค้ดที่ "รันครั้งแรก" ที่บนสุดของสคริปต์ยังไม่ได้ยืนอยู่ที่เคาน์เตอร์นั้นแบบปกติ — module system เองยังทำ setup อยู่ — นี่คือเหตุผลว่าทำไมลำดับตรงนั้นถึงไม่ใช่สิ่งที่พึ่งพาได้
+
+## Trade-offs
+
+Scheduling primitive สี่ตัวฟังดูเป็นตัวเลือกที่ไม่จำเป็น แต่แต่ละตัวตอบคำถามต่างกัน: `process.nextTick` สำหรับ "ก่อนอะไรทั้งหมดเลย แม้แต่ microtask อื่น" (อันตรายถ้าใช้เกินจำเป็น — มันทำให้ I/O อดตายได้ทั้งหมด); `queueMicrotask`/Promise สำหรับ "หลังงาน synchronous นี้ ก่อน I/O หรือ timer ใด ๆ"; `setImmediate` สำหรับ "หลัง callback ของ I/O ใน loop pass เดียวกันนี้"; `setTimeout(fn, 0)` สำหรับ "ที่ timers phase ถัดไป ไม่ว่าจะเป็นเมื่อไหร่" การเลือกผิดตัวจะทำให้บางอย่างที่ควรรันเร็วกว่าถูกเลื่อนออกไป หรือ — โดยเฉพาะ `nextTick` — การใช้แบบ recursive ผิด ๆ อาจครอบครองเธรด JS จนไม่ให้ I/O callback ได้ทำงานเลย
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ลำดับที่ผมเห็นตอนรันครั้งเดียวที่บนสุดของสคริปต์คือสิ่งที่รับประกันได้"** ไม่ใช่ — ตามที่แสดงข้างบน คอร์สนี้พบว่า `process.nextTick` แพ้ Promise microtask ที่ระดับบนสุด ซึ่งขัดกับกฎทั่วไปที่ว่า nextTick ชนะก่อนเสมอ และไม่ใช่สิ่งที่เอกสารของ Node สัญญาไว้ ณ จุดนั้นในชีวิตของโปรแกรม
+- **"setImmediate ชนะ setTimeout(fn, 0) เสมอ ไม่มีข้อยกเว้น"** รับประกันเฉพาะข้างใน I/O callback เท่านั้น ที่ระดับบนสุดหรือข้างใน timer callback ธรรมดา ตัวไหนที่ libuv ไปถึงก่อนจริง ๆ ในแต่ละรอบอาจต่างกันได้
+- **"queueMicrotask กับ process.nextTick เป็นแค่ชื่ออื่นของคิวเดียวกัน"** ทั้งสองเป็นคิวแยกกันที่มีลำดับความสำคัญตายตัวระหว่างกัน — Node ระบายคิว `nextTick` จนหมดก่อนเสมอ แล้วค่อยระบาย microtask queue ทุกครั้งที่มีการเช็กคิวใดคิวหนึ่ง
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างบางครั้งใช้ `Array.prototype.forEach` พร้อม callback แบบ `async` เพื่อ "ประมวลผลแต่ละ item แล้วรอ" ซึ่งพังแบบเดียวกับการเข้าใจผิดเรื่องลำดับ macrotask ที่ถูกมองข้าม: โค้ดข้างนอกทำงานต่อทันที ทั้งที่จัดคิวงานที่มันจะไม่มีวันรอเลย
+
+<SpotTheBug code={`async function importAll(records) {
+  console.log('importing', records.length, 'records');
+  records.forEach(async function (record) {
+    await saveRecord(record);
+    console.log('saved', record.id);
+  });
+  console.log('import finished');
+}
+`}>
+`importAll` log `'import finished'` แบบ synchronous ทันทีหลัง `forEach` return — ซึ่งเกิดขึ้นทันที เพราะ `forEach` ไม่เคยดู (หรือรอ) Promise ที่ callback แบบ async แต่ละตัวคืนมาเลย ไม่มีการเรียก `saveRecord` ตัวไหนที่รับประกันว่าจะเสร็จ หรือแม้แต่เริ่ม I/O ของมัน ตอนที่ `'import finished'` พิมพ์ออกมา และผู้เรียกที่ await `importAll(records)` ก็จะถูกหลอกให้คิดว่าทุก record ถูกบันทึกแล้ว วิธีแก้คือใช้รูปแบบที่รอจริง ๆ: ลูป `for...of` พร้อม `await` สำหรับบันทึกทีละตัว หรือ `await Promise.all(records.map(saveRecord))` สำหรับบันทึกพร้อมกัน — ไม่ว่าจะเลือกแบบไหน `importAll` ต้องมี `await` นำหน้าตัวที่เลือก ก่อน `console.log('import finished')` ของมันเอง
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Scheduling API สี่ตัวแปลว่าลำดับความสำคัญสี่แบบ — nextTick แล้วตามด้วย microtask แล้วตามด้วย setImmediate/setTimeout ตามลำดับ phase — และลำดับความสำคัญนั้นรับประกันได้ก็ต่อเมื่ออยู่ข้างใน callback จริง (เช่น I/O callback) เท่านั้น ไม่ใช่ที่บนสุดของสคริปต์
+</Callout>
+
 export const microMacroQuiz = [
   {
     q: 'จากโค้ดนี้ — อะไรพิมพ์ก่อน: callback ของ Promise .then หรือ callback ของ setTimeout?',
@@ -140,6 +222,7 @@ export const microMacroQuiz = [
       'ขึ้นอยู่กับค่า delay ของ timer',
     ],
     answer: 1,
+    explain: 'Microtask (Promise reaction) ระบายจนหมดเสมอก่อนที่ event loop จะไปทำ macrotask ถัดไป ไม่ว่าจะลงทะเบียนตามลำดับใด',
   },
   {
     q: 'queueMicrotask(fn) ทำอะไร?',
@@ -150,6 +233,7 @@ export const microMacroQuiz = [
       'จัดคิว fn หลัง callback ของ setTimeout ที่ค้างอยู่ทั้งหมด',
     ],
     answer: 2,
+    explain: 'queueMicrotask ใส่ fn ลงคิวเดียวกับที่ Promise reaction ใช้ — ระบายหลัง task ปัจจุบัน ก่อน macrotask ใด ๆ',
   },
   {
     q: 'ถ้า callback ของ microtask เรียก queueMicrotask เอง microtask ใหม่นั้นทำงานเมื่อใด?',
@@ -160,6 +244,29 @@ export const microMacroQuiz = [
       'ถูกทิ้งเงียบ ๆ',
     ],
     answer: 1,
+    explain: 'Microtask queue ระบายต่อไปจนว่างสนิท รวมถึง microtask ที่ถูกเพิ่มเข้ามาระหว่างที่กำลังระบายอยู่ — ดังนั้น chain ของ queueMicrotask จะเสร็จทั้งหมดก่อนที่ macrotask ใดจะรัน',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n```js\nreadFile(\'x\', \'utf8\', function (err, data) {\n  setTimeout(function () { console.log(\'timeout\'); }, 0);\n  setImmediate(function () { console.log(\'immediate\'); });\n  process.nextTick(function () { console.log(\'nextTick\'); });\n});\n```\n(สมมติว่าไฟล์มีอยู่จริง และนี่รันข้างใน callback ของ fs.readFile จริง ๆ)',
+    options: [
+      'timeout, immediate, nextTick',
+      'nextTick, immediate, timeout',
+      'immediate, nextTick, timeout',
+      'ลำดับต่างกันทุกครั้งที่รัน',
+    ],
+    answer: 1,
+    explain: 'process.nextTick ระบายก่อนเสมอ และข้างใน I/O callback โดยเฉพาะ เอกสารของ Node รับประกันว่า setImmediate (check phase ที่รันทันทีหลัง poll) ทำงานก่อน setTimeout (timers phase รอบถัดไป) — ลำดับนี้ deterministic ต่างจากโค้ดเดียวกันที่บนสุดของสคริปต์',
+  },
+  {
+    q: 'ฟังก์ชันที่ AI เขียนทำ `records.forEach(async function (r) { await saveRecord(r); })` ตามด้วย `console.log(\'done\')` ทันที อะไรคือสิ่งที่รับประกันได้เกี่ยวกับเวลาของ "done" เทียบกับการบันทึก?',
+    options: [
+      '"done" พิมพ์ก็ต่อเมื่อ saveRecord ทุกตัว resolve แล้วเท่านั้น',
+      '"done" พิมพ์แบบ synchronous ทันทีหลัง forEach return — ก่อนที่ await ของ saveRecord ตัวไหนจะเสร็จ',
+      '"done" กับการบันทึกรับประกันว่าจะสลับกันทำงานทีละตัว',
+      'forEach throw TypeError เพราะ callback ของมันเป็น async',
+    ],
+    answer: 1,
+    explain: 'forEach ไม่ตรวจสอบหรือรอสิ่งที่ callback ของมัน return จึง return แบบ synchronous ทันทีที่ callback ทุกตัวถูกยิงออกไปแล้ว (ไม่ใช่ทำเสร็จ) — "done" รับประกันว่าจะพิมพ์ก่อนที่การบันทึกตัวไหนจะเสร็จ',
   },
 ];
 

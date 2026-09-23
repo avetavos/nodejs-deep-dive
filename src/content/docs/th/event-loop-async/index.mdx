@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Event Loop คืออะไร?
 
@@ -30,8 +32,9 @@ JavaScript ใน Node.js ทำงานบน **เธรดเดียว** 
 | Callbacks | รูปแบบ async ดั้งเดิมและขนบ error-first ของ Node |
 | Promises | สถานะ, การ chain และ combinator |
 | Async/Await | อ่านโค้ด async ได้เหมือนโค้ด synchronous |
+| Timers | `setTimeout`, `setInterval` และ API `timers/promises` |
 | Microtasks & Macrotasks | ลำดับความสำคัญของคิวและลำดับการระบาย |
-| Timers | `setTimeout`, `setInterval` และความแม่นยำของ timer |
+| libuv & Threadpool | ตัวจริงว่าอะไรทำงานอยู่ที่ไหน ใต้ชั้น JavaScript |
 
 ## เดโม async ตัวแรก
 
@@ -56,8 +59,62 @@ setTimeout(function() { console.log('C — macrotask (setTimeout)'); }, 0);
 
 ผลลัพธ์จะเป็น `A` แล้วตามด้วย `B` แล้ว `C` เสมอ — event loop รับประกันลำดับนี้
 
-<Callout title="เธรดเดียว ไม่บล็อก">
-Node.js รัน JavaScript ของคุณบนเธรดเดียว แต่ยังตอบสนองได้ตลอดเพราะมอบงาน I/O ให้ OS จัดการและประมวลผลผลลัพธ์แบบ asynchronous
+## อะไรทำงานอยู่ที่ไหน
+
+"Async" ไม่ได้แปลว่า "รันบนอีกเธรด" การทำงานแบบ async แต่ละแบบถูกจัดการด้วยกลไกที่ต่างกันโดยสิ้นเชิง การรู้ว่ากำลังดูกลไกไหนอยู่ช่วยอธิบาย benchmark ที่น่าแปลกใจหลายอย่างในโมดูลนี้:
+
+| การทำงาน | ทำงานอยู่ที่ไหนจริง ๆ |
+|---|---|
+| `Promise`, `async`/`await`, `queueMicrotask` | microtask queue ของ JS — ยังเป็นเธรด JS เธรด**เดียว** |
+| `setTimeout`, `setImmediate`, network socket | event loop ของ libuv หนุนหลังด้วย async I/O ของ kernel (epoll/kqueue/IOCP) — ไม่ใช้เธรดเพิ่ม |
+| `fs.readFile`, `crypto.pbkdf2`/`scrypt`/`randomBytes`, `dns.lookup`, `zlib` | **threadpool** ขนาดคงที่ของ libuv (ค่าเริ่มต้น 4 เธรด) |
+| loop แบบ synchronous, `JSON.parse` บนสตริงยักษ์, `fs.readFileSync` | call stack — บล็อกทุกอย่าง รวมถึงตัว loop เองด้วย |
+
+<Mermaid title="เมื่อเรียก async หนึ่งครั้ง มันไปที่ไหนจริง ๆ" code={`flowchart LR
+  Code["Your JS code"] --> Stack["Call stack (one thread)"]
+  Stack -->|Promise / await| Micro["Microtask queue"]
+  Stack -->|fs, crypto, dns.lookup, zlib| Pool["libuv threadpool (4 threads)"]
+  Stack -->|sockets, timers, signals| Kernel["OS kernel async I/O"]
+  Pool --> Loop["Event loop"]
+  Kernel --> Loop
+  Micro --> Loop
+  Loop --> Stack
+`} />
+
+บทเรียน *libuv & Threadpool* ท้ายโมดูลนี้จะวัด threadpool ด้วยตัวเลขจริงและไล่ดู 6 phase ของ libuv แบบละเอียด
+
+## Mental Model
+
+ให้นึกว่า event loop คือคนงานคนเดียว (เธรด JS) ที่มีกล่องจดหมายสองกล่องให้เช็กระหว่างทุก task: **กล่อง microtask** (เทออกจนหมดทุกครั้ง เป็นอันดับแรกเสมอ) และ **กล่อง macrotask** (รับของหนึ่ง phase ต่อรอบ) งานที่คนงานคนนี้ทำเองแบบไม่บล็อกไม่ได้ — อ่านไฟล์, hash รหัสผ่าน, resolve ชื่อโดเมน — จะถูกส่งต่อไปให้เธรดผู้ช่วยกลุ่มเล็ก ๆ (threadpool ของ libuv) หรือส่งตรงให้ kernel ของ OS (socket) แล้วกลับมาเป็น callback ที่ต่อคิวไว้เมื่อเสร็จ
+
+## Trade-offs
+
+เธรด JS เดียวแปลว่าไม่มี data race ในโค้ดของคุณเอง — ไม่ต้องใช้ lock ล้อมรอบ state ของ JavaScript ที่แชร์กัน ต้นทุนคืองาน CPU-bound แบบ synchronous **ใดก็ตาม** (loop ใหญ่, `JSON.parse` บนข้อความหลายเมกะไบต์, crypto แบบ synchronous) จะบล็อก request อื่นทุกตัวในโปรเซส Node ไม่เหมาะกับงานที่กิน CPU หนักเว้นแต่จะย้ายงานนั้นออกจาก main thread (`worker_threads`, คิวงาน, service แยก) — จุดแข็งของมันคืองานที่หนัก I/O และมี connection พร้อมกันจำนวนมากที่ส่วนใหญ่ว่างรอ
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"Node เป็น single-threaded เลยรองรับ I/O พร้อมกันไม่ได้"** ผิด — เธรดเดียวมีไว้สำหรับ *JavaScript ของคุณ* เท่านั้น kernel และ threadpool ของ libuv เป็นคนรอจริง ๆ พร้อมกัน เธรด JS แค่ถูกแจ้งเตือนเมื่อแต่ละอันเสร็จ
+- **"Async แปลว่ารันบน CPU core อื่น"** ไม่ใช่สำหรับ `Promise`/`await` — สองอย่างนี้ไม่เคยออกจากเธรด JS มีแค่การทำงานที่ใช้ threadpool หรือ kernel เท่านั้นที่ใช้อะไรอื่นนอกจากเธรด JS
+- **"หนึ่งรอบ event loop ประมวลผลหนึ่ง macrotask"** Node ประมวลผล callback ที่ครบกำหนดทั้ง phase ต่อหนึ่งรอบ (ดูบท *Microtasks & Macrotasks* สำหรับการพิสูจน์ที่รันได้จริง)
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ด Node.js ที่ AI สร้างมักติดป้ายฟังก์ชันว่า `async` แล้วสมมติว่าแค่นั้นทำให้โค้ดข้างในไม่บล็อก ซึ่งไม่จริง — `async` เปลี่ยนแค่ค่าที่ฟังก์ชัน *return* (เป็น Promise) statement แบบ synchronous ข้างในยังรันบน call stack และยังบล็อกทุกอย่างจนกว่าจะเสร็จ
+
+<SpotTheBug code={`async function computeReport(rows) {
+  // "It's async, so this won't block other requests" — comment left by the AI
+  let total = 0;
+  for (let i = 0; i < rows.length; i++) {
+    total += heavySyncTransform(rows[i]); // synchronous, CPU-bound, no await anywhere
+  }
+  return total;
+}
+`}>
+การติดป้าย `async` ให้ฟังก์ชันไม่ได้ย้าย body ของมันออกจาก call stack `heavySyncTransform` ยังรันแบบ synchronous ทุกแถวโดยไม่มี `await` เลย ทั้ง loop เลยบล็อก event loop — request, timer, และ I/O callback อื่นทุกตัวต้องรอจนกว่าจะเสร็จ `async` แปลว่า "ฟังก์ชันนี้ return Promise" เท่านั้น ไม่ได้บอกอะไรเลยว่าโค้ดข้างใน *รันยังไง* วิธีแก้คือให้มัน yield จริง ๆ (แบ่งงานเป็นก้อนแล้ว `setImmediate`/await คั่นระหว่างก้อน) หรือย้ายไปที่ `worker_thread`
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Node.js รัน JavaScript ของคุณบนเธรดเดียวและมอบ I/O ให้ kernel กับ threadpool เล็ก ๆ จัดการ — แต่โค้ดแบบ synchronous ที่คุณเขียนเองยังบล็อกเธรดเดียวนั้นเต็ม ๆ
 </Callout>
 
 export const indexQuiz = [
@@ -70,6 +127,7 @@ export const indexQuiz = [
       'Microtask กับ macrotask สลับกันทีละอัน',
     ],
     answer: 1,
+    explain: 'หลังจากทุก callback Node จะระบาย process.nextTick แล้วตามด้วย microtask queue ทั้งหมดก่อนไปยัง macrotask ถัดไป',
   },
   {
     q: 'ข้อใดต่อไปนี้ถูกใส่ลงใน microtask queue?',
@@ -80,6 +138,40 @@ export const indexQuiz = [
       'handler ของ DOM click event',
     ],
     answer: 2,
+    explain: 'Promise reaction (.then/.catch/.finally) และ callback ของ queueMicrotask เป็น microtask ส่วน timer เป็น macrotask',
+  },
+  {
+    q: 'ข้อใดต่อไปนี้ไม่เคยออกจากเธรด JS เดี่ยวเลย ทั้งที่ดูเหมือน async?',
+    options: [
+      'fs.readFile',
+      'crypto.pbkdf2',
+      'await Promise.resolve(1)',
+      'dns.lookup',
+    ],
+    answer: 2,
+    explain: 'Promise และ await เป็น microtask ของเธรด JS ล้วน ๆ ส่วน fs.readFile, crypto.pbkdf2 และ dns.lookup ถูกส่งไปที่ threadpool ของ libuv',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n```js\nasync function work() {\n  for (let i = 0; i < 3e8; i++) {} // no await\n  console.log(\'done\');\n}\nconsole.log(\'before\');\nwork();\nconsole.log(\'after\');\n```',
+    options: [
+      'before, after, done — loop จะ yield เพราะ work() เป็น async',
+      'before, done, after',
+      'before, after — แล้วหยุดนาน ๆ แล้วค่อย done',
+      'done, before, after',
+    ],
+    answer: 2,
+    explain: 'การติดป้าย work() ว่า async ไม่ได้ทำให้ loop แบบ synchronous ไม่บล็อก "before" พิมพ์ก่อน แล้ว work() บล็อกเธรดตลอดทั้ง loop จากนั้น "after" กับ "done" พิมพ์หลังจาก call stack ว่าง — "after" มาก่อนเพราะยังเป็นสคริปต์ synchronous ที่พิมพ์ทันทีหลัง work() คืนการควบคุม (คืน Promise ไม่ใช่ค่า)',
+  },
+  {
+    q: 'เหตุผลนี้ผิดตรงไหน: "ผมใส่การ hash ไฟล์ไว้ในฟังก์ชัน async แล้ว มันจะไม่บล็อก request อื่น"?',
+    options: [
+      'ไม่ผิด — ฟังก์ชัน async รันนอก main thread เสมอ',
+      'async แค่ห่อค่า return เป็น Promise; loop แบบ synchronous ข้างในยังบล็อก call stack',
+      'ถูกต้องแล้วตราบใดที่ใช้ crypto.pbkdf2 แทน loop',
+      'เป็นปัญหาก็ต่อเมื่อฟังก์ชันนั้นถูก export เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'async/await ควบคุมแค่วิธีส่งผลลัพธ์ของฟังก์ชัน (เป็น Promise) และจุดที่มันหยุดพักได้ (ที่ await) มันไม่ได้ย้ายโค้ด synchronous ข้างในไปเธรดอื่น',
   },
 ];
 

@@ -1,0 +1,216 @@
+---
+title: 'libuv & the Threadpool'
+description: 'The six phases of the libuv event loop, and measuring the fixed-size threadpool with real numbers.'
+sidebar:
+  order: 8
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## The six phases of the event loop
+
+Everything this module has covered so far — timers, microtasks, `setImmediate` — happens inside a C library called **libuv**, which every Node process runs one instance of. Each pass through libuv's loop visits six phases, always in the same order:
+
+<Mermaid title="libuv's event loop phases" code={`flowchart LR
+  Timers["timers\nexpired setTimeout/setInterval callbacks"] --> Pending["pending callbacks\nsome deferred system callbacks (e.g. certain TCP errors)"]
+  Pending --> Idle["idle, prepare\ninternal libuv bookkeeping"]
+  Idle --> Poll["poll\nfetch new I/O events; run I/O callbacks (e.g. fs, sockets)"]
+  Poll --> Check["check\nsetImmediate callbacks"]
+  Check --> Close["close callbacks\nsocket.on('close'), etc."]
+  Close --> Timers
+`} />
+
+The **poll** phase is the one that actually waits: if there is nothing else to do, it blocks until an I/O event arrives or a timer is due. This is also why `setImmediate` and `setTimeout(fn, 0)` behave differently depending on where they are scheduled from — inside an I/O callback (already in the poll phase), `check` is the very next phase, so `setImmediate` reliably fires before a timer does (see the *Microtasks & Macrotasks* lesson for a runnable proof).
+
+## What actually uses the threadpool
+
+libuv keeps a small, fixed-size pool of worker threads (default **4**, controlled by the `UV_THREADPOOL_SIZE` environment variable, which must be set before the pool is first used) for work that cannot be done with the OS kernel's native async I/O:
+
+| Uses the threadpool | Uses the kernel's async I/O directly (no threadpool) |
+|---|---|
+| `fs` async methods (`fs.readFile`, `fs.stat`, ...) | TCP/UDP sockets, `net`/`http` servers and clients |
+| `crypto.pbkdf2`, `crypto.scrypt`, `crypto.randomBytes` (async forms) | `setTimeout`/`setInterval`/`setImmediate` |
+| `dns.lookup` (not `dns.resolve*`, which use c-ares directly) | Most of `dns.resolve*` |
+| `zlib` async methods | — |
+
+This split matters because the threadpool is a genuinely scarce, shared resource — only 4 things from *any* of the left column can run at true hardware parallelism at once, no matter how many you `await` concurrently — while the right column scales with the OS's own I/O multiplexing (epoll/kqueue/IOCP), which handles thousands of concurrent sockets on a single thread just fine.
+
+## Measuring the pool with real numbers
+
+`crypto.pbkdf2` is threadpool-bound, so running more of them concurrently than the pool has threads should make the slowest one take noticeably longer. The demo below times a single `pbkdf2` call, then 4 concurrent calls, then 8 (twice the default pool size), and reports each batch's slowest call as a multiple of the single-call baseline:
+
+export const threadpoolSizeCode = `import { pbkdf2 } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+
+function hashOnce() {
+  return new Promise(function (resolve) {
+    const start = performance.now();
+    pbkdf2('password', 'salt', 200000, 64, 'sha512', function () {
+      resolve(performance.now() - start);
+    });
+  });
+}
+
+function runBatch(n) {
+  return Promise.all(Array.from({ length: n }, hashOnce)).then(function (durations) {
+    return Math.max.apply(null, durations);
+  });
+}
+
+function bucket(ms, baseline) {
+  const ratio = ms / baseline;
+  if (ratio < 1.7) return '~1x a single hash (all fit in the pool at once)';
+  return '~2x a single hash (some calls queued behind the rest)';
+}
+
+const single = await hashOnce();
+console.log('1 pbkdf2 call: baseline');
+console.log('4 concurrent pbkdf2 calls:', bucket(await runBatch(4), single));
+console.log('8 concurrent pbkdf2 calls (default UV_THREADPOOL_SIZE=4):', bucket(await runBatch(8), single));
+`;
+
+export const threadpoolSizeOut = `1 pbkdf2 call: baseline
+4 concurrent pbkdf2 calls: ~1x a single hash (all fit in the pool at once)
+8 concurrent pbkdf2 calls (default UV_THREADPOOL_SIZE=4): ~2x a single hash (some calls queued behind the rest)`;
+
+<NodeRunner client:visible code={threadpoolSizeCode} node expected={threadpoolSizeOut} />
+
+4 concurrent calls all fit in the pool and finish in roughly the time of one; 8 concurrent calls need two full rounds through 4 threads, so the slowest one takes roughly twice as long — the batch of 8 is really two batches of 4, one queued behind the other. `UV_THREADPOOL_SIZE` is read once, when libuv first creates the pool — set it (as an actual environment variable, or via `process.env.UV_THREADPOOL_SIZE` *before* any threadpool-using call) and the same 8 concurrent calls no longer queue:
+
+export const threadpoolResizeCode = `process.env.UV_THREADPOOL_SIZE = '8'; // must be set before the first threadpool-using call
+
+import { pbkdf2 } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+
+function hashOnce() {
+  return new Promise(function (resolve) {
+    const start = performance.now();
+    pbkdf2('password', 'salt', 200000, 64, 'sha512', function () {
+      resolve(performance.now() - start);
+    });
+  });
+}
+
+function runBatch(n) {
+  return Promise.all(Array.from({ length: n }, hashOnce)).then(function (durations) {
+    return Math.max.apply(null, durations);
+  });
+}
+
+function bucket(ms, baseline) {
+  const ratio = ms / baseline;
+  if (ratio < 1.7) return '~1x a single hash';
+  return '~2x a single hash (some calls queued behind the rest)';
+}
+
+const single = await hashOnce();
+console.log('UV_THREADPOOL_SIZE=8, 8 concurrent pbkdf2 calls:', bucket(await runBatch(8), single));
+`;
+
+export const threadpoolResizeOut = `UV_THREADPOOL_SIZE=8, 8 concurrent pbkdf2 calls: ~1x a single hash`;
+
+<NodeRunner client:visible code={threadpoolResizeCode} node expected={threadpoolResizeOut} />
+
+There is no single "correct" pool size — a bigger pool means more true parallelism for threadpool-bound work, at the cost of more OS threads (memory, context-switching) doing CPU-bound work that competes with your main JS thread's own CPU needs on a busy machine.
+
+## Mental Model
+
+Picture four workbenches in a back room (the threadpool) behind one storefront counter (the JS thread). The person at the counter (your JS code) can hand off certain kinds of work — hashing, a file read, a DNS lookup — to whichever workbench is free, and gets notified (via a callback) when it is done. But there are only four benches: a fifth job waits for a bench to free up, no matter how many customers are waiting at the counter. Meanwhile, sockets and timers are not handled at the workbenches at all — the storefront has a direct line to the building's own utilities (the OS kernel), which can juggle thousands of live connections without needing a bench per connection.
+
+## Trade-offs
+
+A shared, fixed-size threadpool means predictable resource usage — Node will not spawn an unbounded number of OS threads no matter how much `fs`/`crypto`/`dns.lookup`/`zlib` work you throw at it — but it also means all of that work competes for the same four slots, whether or not the calls are logically related. Raising `UV_THREADPOOL_SIZE` trades memory and OS scheduling overhead for more true parallelism; it is a blunt, process-wide knob, not something you can scope to "just this one heavy operation." For genuinely CPU-bound work that does not fit the threadpool's supported operation list (your own synchronous computation, not `fs`/`crypto`/`dns`/`zlib`), `worker_threads` is the right tool — it does not share the libuv threadpool at all.
+
+## Common Misconceptions
+
+- **"Node's threadpool handles all async work."** It only handles the specific operations in the left-hand column above. Sockets, HTTP, and timers never touch it — they are the OS kernel's async I/O, which is a completely separate mechanism with no fixed thread count to exhaust.
+- **"`await`ing many Promises means they all run at true parallel speed."** Only up to the threadpool's size (4 by default) for threadpool-bound operations. `Promise.all` starts all the underlying operations concurrently, but the pool itself still serializes anything beyond 4 at a time.
+- **"Increasing UV_THREADPOOL_SIZE has no downside."** More threads means more OS-level context switching and memory, and on a machine also running CPU-bound JS work, more contention for actual CPU cores — it is a trade-off, not a free upgrade.
+
+## Reading AI-generated code
+
+AI-generated code that hashes passwords or reads many files "in parallel" with `Promise.all` often assumes Node's concurrency is unlimited — it is not, for anything that goes through the threadpool, and mixing heavy threadpool consumers with unrelated I/O can starve that unrelated I/O.
+
+<SpotTheBug code={`// AI-written password check middleware, called on every login request
+async function checkPassword(candidate, storedHash) {
+  return new Promise(function (resolve, reject) {
+    crypto.pbkdf2(candidate, 'salt', 200000, 64, 'sha512', function (err, derivedKey) {
+      if (err) reject(err); else resolve(derivedKey.toString('hex') === storedHash);
+    });
+  });
+}
+// Comment left by the AI: "async, so this scales to as many concurrent logins as needed"
+`}>
+`crypto.pbkdf2` runs on libuv's threadpool, which has only 4 threads by default — it does **not** scale to "as many concurrent logins as needed." Under a burst of login attempts, the 5th and later concurrent `checkPassword` calls queue behind the first 4, adding real latency. Worse, if the same process also does async `fs` reads, `dns.lookup`, or `zlib` compression anywhere else, those share the exact same 4 threads — a burst of login checks can measurably slow down unrelated file or DNS operations elsewhere in the app. The fix is not a code change to this function so much as capacity planning: raise `UV_THREADPOOL_SIZE` if the workload justifies it, rate-limit concurrent hashing, or move it to `worker_threads` if it needs to be isolated from other threadpool consumers.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Only fs, certain crypto functions, dns.lookup, and zlib share Node's fixed 4-thread pool — sockets and timers use the kernel's own async I/O instead — so "async" does not mean "unlimited concurrency" for anything in that first group.
+</Callout>
+
+export const libuvQuiz = [
+  {
+    q: 'Which phase of the libuv event loop runs setImmediate callbacks?',
+    options: [
+      'timers',
+      'poll',
+      'check',
+      'close callbacks',
+    ],
+    answer: 2,
+    explain: 'setImmediate callbacks are specifically documented to run in the check phase, which comes right after poll.',
+  },
+  {
+    q: 'What is the default size of libuv\'s threadpool?',
+    options: [
+      '1 (single-threaded)',
+      '4',
+      'One per CPU core',
+      'Unlimited — it grows with demand',
+    ],
+    answer: 1,
+    explain: 'The default is 4 threads, configurable via the UV_THREADPOOL_SIZE environment variable, which must be set before the pool is created.',
+  },
+  {
+    q: 'Which of these does NOT use libuv\'s threadpool?',
+    options: [
+      'fs.readFile',
+      'crypto.pbkdf2',
+      'A TCP socket connection',
+      'zlib.gzip (async)',
+    ],
+    answer: 2,
+    explain: 'TCP/UDP sockets are handled by the OS kernel\'s native async I/O (epoll/kqueue/IOCP) directly — no threadpool involved. fs, certain crypto functions, and zlib\'s async methods do use the threadpool.',
+  },
+  {
+    q: 'What does this measure, and what would you expect?\n```js\nconst t0 = performance.now();\nawait Promise.all(Array.from({ length: 8 }, () => hashOnce()));\nconsole.log(performance.now() - t0);\n```\nwhere hashOnce() is a threadpool-bound crypto.pbkdf2 call, and the pool is left at its default size.',
+    options: [
+      'All 8 calls run at true parallel speed — total time is about the same as 1 call',
+      'The 8 calls run in two waves of 4 (the pool has only 4 threads) — total time is roughly double a single call',
+      'It throws — Promise.all cannot be used with more than 4 threadpool operations',
+      'Exactly 4 of the calls silently fail',
+    ],
+    answer: 1,
+    explain: 'With the default UV_THREADPOOL_SIZE of 4, only 4 pbkdf2 calls can run truly concurrently — the other 4 wait for a thread to free up, roughly doubling the slowest call\'s duration compared to a batch of 4 or fewer.',
+  },
+  {
+    q: 'An AI comment claims a pbkdf2-based password check is "async, so it scales to as many concurrent logins as needed." Why is that wrong?',
+    options: [
+      'pbkdf2 is actually synchronous despite its callback-style API',
+      'crypto.pbkdf2 runs on the fixed 4-thread libuv threadpool, shared with fs/dns.lookup/zlib — beyond 4 concurrent calls, work queues and can slow down unrelated I/O too',
+      'Node cannot run pbkdf2 more than once per process',
+      'It is actually correct — async operations in Node have no concurrency limit',
+    ],
+    answer: 1,
+    explain: 'Being async only means it does not block the JS thread — it does not mean unlimited hardware parallelism. pbkdf2 competes for the same 4 threadpool slots as any other fs/crypto/dns.lookup/zlib work in the process.',
+  },
+];
+
+<Quiz client:visible id="event-loop-async/libuv-and-threadpool" questions={libuvQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/libuv-and-threadpool" />

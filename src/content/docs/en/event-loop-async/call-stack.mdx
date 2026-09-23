@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is the call stack?
 
@@ -87,6 +88,98 @@ In a server, this means every incoming request waits during that block. Keep syn
 A long synchronous operation on the call stack prevents any I/O callbacks, timers, or other events from being processed. Keep synchronous handlers short.
 </Callout>
 
+## Measuring lag instead of guessing
+
+"Keep synchronous handlers short" is easy to say and hard to enforce without a number. Node's `perf_hooks.monitorEventLoopDelay()` samples how long the loop takes to get back to a timer check, so you can measure lag instead of guessing at it. The demo below schedules a 200 ms synchronous busy-loop 50 ms in, then reports the worst delay it observed:
+
+export const eventLoopLagCode = `import { monitorEventLoopDelay } from 'node:perf_hooks';
+
+const h = monitorEventLoopDelay();
+h.enable();
+
+setTimeout(function () {
+  const maxMs = h.max / 1e6;
+  const bucket = Math.round(maxMs / 100) * 100;
+  console.log('busy loop finished');
+  console.log('max event loop delay (rounded): ~' + bucket + 'ms');
+  h.disable();
+}, 300);
+
+setTimeout(function () {
+  const start = Date.now();
+  while (Date.now() - start < 200) {
+    // synchronous CPU work — the event loop cannot process anything else
+  }
+}, 50);
+`;
+
+export const eventLoopLagOut = `busy loop finished
+max event loop delay (rounded): ~200ms`;
+
+<NodeRunner client:visible code={eventLoopLagCode} node expected={eventLoopLagOut} />
+
+Numbers are rounded to the nearest 100 ms here so the demo prints the same thing on any machine; the real API returns nanosecond-precision `h.min`, `h.max`, `h.mean`, and percentiles (`h.percentile(99)`) — enough to wire a "loop lag" metric into a health check.
+
+## process.exit() does not wait for anything
+
+`process.exit()` terminates the process immediately — synchronously, mid-instruction. It does not run pending `finally` blocks, does not drain `process.nextTick`, and does not fire queued timers or I/O callbacks:
+
+export const exitSkipsQueueCode = `console.log('before exit');
+
+setTimeout(function () {
+  console.log('this timer never fires');
+}, 0);
+
+process.nextTick(function () {
+  console.log('this nextTick never fires either');
+});
+
+try {
+  process.exit(0);
+} finally {
+  console.log('finally never runs');
+}
+`;
+
+export const exitSkipsQueueOut = `before exit`;
+
+<NodeRunner client:visible code={exitSkipsQueueCode} node expected={exitSkipsQueueOut} />
+
+Only `before exit` prints. The `finally`, the `nextTick`, and the timer are all still on the stack or in a queue when the process image tears down — none of them get a turn.
+
+## Mental Model
+
+Picture the call stack as a single desk with one worker and exactly one in-tray. Every synchronous statement — yours, a callback's, a Promise reaction's — has to sit on that desk until it finishes; nothing else on the desk moves while it is there. `monitorEventLoopDelay` is a stopwatch taped to that desk: it tells you how long the worker was buried in one task instead of checking the in-tray. `process.exit()` is the worker standing up and walking out mid-sentence — whatever was queued behind them, including their own `finally` block, simply never gets said.
+
+## Trade-offs
+
+A single call stack means you never need locks around your own JavaScript state — but it also means there is zero tolerance for long synchronous work: one slow `JSON.parse` or crypto call stalls every other request in the process, not just the one that triggered it. Measuring lag with `monitorEventLoopDelay` costs almost nothing and is worth wiring into a health check or `/metrics` endpoint before you need it in an incident. `process.exit()` trades a graceful, drained shutdown for an immediate, blunt one — reasonable for a CLI script that has already written everything it needs to, dangerous inside a server process that might still have a response, a log line, or a database write in flight.
+
+## Common Misconceptions
+
+- **"A `while` loop that finishes in under a second is fine."** Fine compared to what? A 200 ms synchronous block delays every other pending request, timer, and I/O callback in the process by 200 ms — that is easily a failed SLA on a busy server, even though nothing "hung" in the traditional sense.
+- **"I logged the result, so `process.exit()` right after is safe cleanup."** Only sometimes. `process.exit()` does not wait for anything queued — not a `finally`, not a `nextTick`, and (see the SpotTheBug below) not necessarily even the `console.log` call you just made.
+- **"The call stack and the event loop are the same thing."** They are related but distinct: the call stack is where synchronous frames run one at a time; the event loop is the mechanism that decides what gets pushed onto that stack next, from which queue, in what order.
+
+## Reading AI-generated code
+
+AI-generated scripts routinely call `process.exit()` right after a final `console.log`, treating it as "print the result, then clean up immediately." That is safe when output goes to a terminal (writes there are synchronous), but the same script piped to a file or another process (`node report.js > out.txt`, or run under a process manager, Docker, or CI where stdout is a pipe) can have its final output silently truncated, because writes to a non-TTY stdout can be asynchronous — and `process.exit()` does not wait for pending writes to finish.
+
+<SpotTheBug code={`function main() {
+  const report = generateReport(); // a large string
+  console.log(report); // AI comment: "print the report, then exit cleanly"
+  process.exit(0);
+}
+
+main();
+`}>
+This looks correct in a terminal, where `stdout` writes are synchronous. Redirect the same script to a file or a pipe (`node report.js > out.txt`, `node report.js | gzip > out.gz`, a Docker container's log driver, a CI runner) and `stdout` becomes non-blocking — the write can still be in flight when `process.exit()` tears the process down, silently dropping part or all of `report`. The fix is to not call `process.exit()` at all here: set `process.exitCode = 0` and let the script return naturally, so Node waits for the event loop (and any pending writes) to drain before exiting on its own.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+The call stack runs one synchronous frame at a time for everyone sharing the process — measure how long you occupy it with `monitorEventLoopDelay`, and never assume `process.exit()` will wait for anything queued behind it, including your own last `console.log`.
+</Callout>
+
 export const callStackQuiz = [
   {
     q: 'What data structure describes how the call stack processes function calls?',
@@ -97,6 +190,7 @@ export const callStackQuiz = [
       'Circular buffer',
     ],
     answer: 1,
+    explain: 'The most recently pushed frame is always the next one to run and be popped — Last In, First Out.',
   },
   {
     q: 'What happens to a setTimeout callback while a long synchronous loop is running?',
@@ -107,6 +201,7 @@ export const callStackQuiz = [
       'It fires immediately after the loop starts',
     ],
     answer: 2,
+    explain: 'Timers are macrotasks; a macrotask callback cannot start until the call stack is empty, no matter how long that takes.',
   },
   {
     q: 'When does a function frame get removed from the call stack?',
@@ -117,6 +212,40 @@ export const callStackQuiz = [
       'At the end of each event loop iteration',
     ],
     answer: 1,
+    explain: 'A frame stays on the stack for the function\'s entire execution and is popped only when it returns a value or an exception unwinds through it.',
+  },
+  {
+    q: 'What does this print?\n```js\nfunction a() { throw new Error(\'boom\'); }\nfunction b() { a(); }\nfunction c() {\n  try { b(); } catch (e) { console.log(\'caught:\', e.message); }\n}\nc();\nconsole.log(\'after\');\n```',
+    options: [
+      'caught: boom, then after',
+      'The process crashes before printing anything',
+      'after, then caught: boom',
+      'Nothing prints — the error is silently swallowed',
+    ],
+    answer: 0,
+    explain: 'The exception unwinds the stack from a() through b() until it hits the try/catch in c(), which handles it and lets execution continue normally to the next line.',
+  },
+  {
+    q: 'What does this print?\n```js\nconsole.log(\'before exit\');\nprocess.nextTick(function () { console.log(\'nextTick\'); });\ntry {\n  process.exit(0);\n} finally {\n  console.log(\'finally\');\n}\n```',
+    options: [
+      'before exit, finally, nextTick',
+      'before exit, nextTick, finally',
+      'before exit',
+      'finally, before exit, nextTick',
+    ],
+    answer: 2,
+    explain: 'process.exit() tears the process down immediately and synchronously — it never returns control to run the finally block, and the nextTick callback is still queued when the process image is gone.',
+  },
+  {
+    q: 'Why might a script\'s final console.log output go missing when its output is piped to a file, but never when run directly in a terminal?',
+    options: [
+      'console.log is disabled automatically when stdout is not a TTY',
+      'Writes to a non-TTY stdout can be asynchronous, and process.exit() right after does not wait for them to flush',
+      'Pipes have a smaller buffer than terminals and always truncate long output',
+      'This can never actually happen on any platform',
+    ],
+    answer: 1,
+    explain: 'stdout writes are synchronous to a TTY but can be asynchronous to a file, pipe, or other non-TTY destination; calling process.exit() immediately after a write does not guarantee that write has completed.',
   },
 ];
 

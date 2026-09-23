@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## รูปแบบ callback
 
@@ -113,6 +114,81 @@ step1(function(err, dataA) {
 API ในตัวของ Node ส่ง error เป็นอาร์กิวเมนต์ตัวแรกของ callback ตรวจ `err` ก่อนใช้ `data` เสมอ — ถ้า `err` เป็นค่า truthy ให้จัดการแล้ว return ออกตั้งแต่เนิ่น ๆ
 </Callout>
 
+## รอ event โดยไม่ต้องซ้อน: events.once กับ events.on
+
+`EventEmitter` เกิดก่อน Promise แต่ตอนนี้ `node:events` มี helper สองตัวที่เปลี่ยน callback ของ event ให้เป็นโค้ด async สมัยใหม่โดยไม่ต้องเปลี่ยนวิธีทำงานของ `EventEmitter` เอง `once(emitter, name)` คืน Promise ที่ resolve ด้วยอาร์กิวเมนต์ของ event ตอนที่มันยิงครั้งแรก — มีประโยชน์เมื่อต้องการ "รอเหตุการณ์นี้ครั้งเดียว" แทนที่จะลงทะเบียนแล้วต้องมาถอด listener เองทีหลัง `on(emitter, name)` คืน **async iterator** ทำให้ event ที่ยิงซ้ำ ๆ ถูกอ่านได้ด้วย `for await` แทน callback ที่ทำงานตลอดไป:
+
+export const eventsOnceCode = `import { EventEmitter, once, on } from 'node:events';
+
+const emitter = new EventEmitter();
+
+setTimeout(function () {
+  emitter.emit('ready', 'payload-A');
+}, 0);
+
+const [value] = await once(emitter, 'ready');
+console.log('once() resolved with:', value);
+
+async function consumeTicks() {
+  for await (const [n] of on(emitter, 'tick')) {
+    console.log('on() saw tick', n);
+    if (n === 2) break;
+  }
+}
+
+const ticks = consumeTicks();
+
+let i = 0;
+const iv = setInterval(function () {
+  i++;
+  emitter.emit('tick', i);
+  if (i >= 2) clearInterval(iv);
+}, 0);
+
+await ticks;
+console.log('done');
+`;
+
+export const eventsOnceOut = `once() resolved with: payload-A
+on() saw tick 1
+on() saw tick 2
+done`;
+
+<NodeRunner client:visible code={eventsOnceCode} node expected={eventsOnceOut} />
+
+ทั้งสอง helper ยังใช้ `EventEmitter` ตัวเดิมอยู่ข้างใต้ — `once`/`on` แค่ห่อการลงทะเบียน callback ด้วย Promise หรือ async iterator เพื่อให้โค้ดที่เหลือ `await` มันได้แทนที่จะซ้อน handler
+
+## Mental Model
+
+Callback แบบ error-first คือสัญญา ไม่ใช่คำแนะนำ: ฟังก์ชันที่คุณได้รับจะถูกเรียกครั้งเดียวเท่านั้น โดยมี `err` อยู่ในช่องแรกเสมอ ทุกอย่างที่ต่อจากนั้น — การ retry, การ log, ขั้นตอนถัดไปใน pipeline — ขึ้นอยู่กับว่าทุกจุดที่เรียกใช้ทำตามสัญญานี้ทุกครั้ง รวมถึงตอนที่มันไม่สะดวก (การ `return` ทันทีหลังจัดการ `err` แทนที่จะปล่อยให้ไหลต่อไปใช้ `data`) `events.once`/`events.on` ไม่ได้มาแทนสัญญานี้ มันแค่อยู่ทับข้างบน โดยเปลี่ยน "ลงทะเบียน callback แล้วอย่าลืมถอดออก" ให้กลายเป็น "await Promise" หรือ "iterate stream" สำหรับกรณีทั่วไปที่ต้องรอ event หนึ่งหรือหลายตัวของ `EventEmitter`
+
+## Trade-offs
+
+Callback ไม่มีกลไก compose ในตัว — การต่อ callback แบบ 3 ขั้นตอนหมายถึงการซ้อน 3 ระดับ, การจัดการ error แยกกัน 3 จุด และการลืม `return` แค่ครั้งเดียวก็ทำให้ callback ถูกเรียกซ้ำได้ นี่คือพีระมิดแห่งความหายนะที่ Promise และ async/await ถูกออกแบบมาให้แก้ (สองบทถัดไป) Callback ยังคงเป็นเครื่องมือที่ถูกต้องสำหรับสิ่งที่ยิง **มากกว่าหนึ่งครั้ง** ตามเวลา — event ของข้อมูลใน stream, timer ที่ยิงซ้ำ — ซึ่งโมเดล "settle ครั้งเดียว" ของ Promise ไม่เข้ากัน async iterator ของ `events.on` คือวิธีสมัยใหม่ในการอ่าน event ที่ยิงซ้ำแบบนี้โดยไม่ต้องเขียนขั้นตอน listener/cleanup เอง
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"การลืม `return` หลังจัดการ `err` เป็นแค่เรื่อง style"** มันคือ bug ที่ผิดจริง: ถ้าไม่มี `return` โค้ดจะไหลต่อไปใช้ `data` — ซึ่งเป็น `undefined` บน error path — มักทำให้เกิด `TypeError` ที่งงงวยและดูไม่เกี่ยวกับสาเหตุจริงเลย
+- **"`events.once` กับ listener method `.once()` เป็นสิ่งเดียวกัน"** เกี่ยวข้องกันแต่ต่างกัน: `emitter.once(name, fn)` ลงทะเบียน listener ที่ถอดตัวเองอัตโนมัติหลังยิงครั้งเดียว (ยังเป็นสไตล์ callback) ส่วน `once(emitter, name)` (import จาก `node:events`) คืน **Promise** สำหรับการรอครั้งเดียวแบบเดียวกัน
+- **"API แบบ callback ช้าหรือแย่กว่า API แบบ Promise โดยธรรมชาติ"** ประสิทธิภาพไม่ใช่ความต่าง — ergonomics ต่างหาก ทั้งคู่สุดท้ายก็คืนการควบคุมให้ event loop เหมือนกัน แค่ callback ต้องจัดการการซ้อน, การส่งต่อ error และ cleanup ด้วยมือเอง
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างเพื่อ "ทำให้ทันสมัย" มัก wrap ฟังก์ชันที่ return Promise อยู่แล้วด้วย `new Promise(...)` อีกชั้น — เป็นสัญชาตญาณตกค้างจากการแปลง callback API ที่ถูกเอามาใช้กับสิ่งที่ไม่เคยเป็น callback ตั้งแต่แรก
+
+<SpotTheBug code={`function loadConfig() {
+  return new Promise(function (resolve, reject) {
+    fetchConfigFromApi().then(resolve, reject); // fetchConfigFromApi() already returns a Promise
+  });
+}
+`}>
+`fetchConfigFromApi()` return Promise อยู่แล้ว การ wrap มันด้วย `new Promise(...)` จึงเพิ่มชั้นที่ไม่จำเป็น — นี่คือ "Promise constructor anti-pattern" (บางทีเรียก "deferred anti-pattern") มันไม่ใช่แค่ซ้ำซ้อน: ถ้า executor ลืมต่อ `reject` (เช่น `.then(resolve)` ตัวเดียวไม่มีอาร์กิวเมนต์ error ซึ่งพิมพ์ผิดได้ง่าย) การ reject จาก `fetchConfigFromApi()` จะถูกกลืนไปเงียบ ๆ แทนที่จะส่งต่อ วิธีแก้คือตัด wrapper ทิ้งไปเลย — `return fetchConfigFromApi();` — เพราะฟังก์ชันที่ return Promise อยู่แล้วไม่ต้องมี `new Promise` ครอบ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Callback แบบ error-first คือสัญญาที่ต้องทำตามทุก code path รวมถึง `return` ทันทีหลังจัดการ `err` — และเมื่อพบว่าตัวเอง wrap สิ่งที่ return Promise อยู่แล้วด้วย `new Promise(...)` ให้ลบ wrapper แล้ว return Promise นั้นตรง ๆ
+</Callout>
+
 export const callbacksQuiz = [
   {
     q: 'signature ที่ถูกต้องของ callback แบบ error-first ใน Node.js คือข้อใด?',
@@ -123,6 +199,7 @@ export const callbacksQuiz = [
       'function(status, data, err)',
     ],
     answer: 1,
+    explain: 'ขนบของ Node ใส่ error ไว้ในอาร์กิวเมนต์แรกเสมอ เพื่อให้เช็ก "if (err)" จุดเดียวด้านบนดักทุก error path ได้',
   },
   {
     q: 'ในรูปแบบ callback แบบ error-first เมื่อสำเร็จ err มีค่าเป็นอะไร?',
@@ -133,6 +210,7 @@ export const callbacksQuiz = [
       '0',
     ],
     answer: 2,
+    explain: 'ตามขนบ err จะเป็น null อย่างชัดเจน (ไม่ใช่แค่ undefined ที่บังเอิญ falsy) เมื่องานสำเร็จ',
   },
   {
     q: '"callback hell" คืออะไร?',
@@ -143,6 +221,29 @@ export const callbacksQuiz = [
       'การเรียก callback เดิมมากกว่าหนึ่งครั้ง',
     ],
     answer: 1,
+    explain: 'แต่ละขั้นตอน async ที่ขึ้นกับขั้นก่อนหน้าจะซ้อนลึกไปอีกระดับ กลายเป็น "พีระมิดแห่งความหายนะ" ที่ Promise และ async/await ถูกออกแบบมาให้แก้',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n```js\nfunction readConfig(cb) {\n  fs.readFile(\'config.json\', \'utf8\', function (err, data) {\n    if (err) console.error(err); // missing return\n    cb(null, JSON.parse(data));\n  });\n}\n```\nถ้าไฟล์ไม่มีอยู่จริง จะเกิดอะไรขึ้น?',
+    options: [
+      'cb ถูกเรียกครั้งเดียวด้วย error เท่านั้น',
+      'error ถูก log แล้ว cb ก็ยังรัน JSON.parse(undefined) ต่อจน throw TypeError',
+      'Node ข้ามส่วนที่เหลือของ callback ให้อัตโนมัติหลัง console.error',
+      'cb ถูกเรียกสองครั้ง — ครั้งแรกด้วย error ครั้งที่สองด้วยข้อมูลที่ parse แล้ว',
+    ],
+    answer: 1,
+    explain: 'เพราะไม่มี `return` หลัง `console.error(err)` โค้ดจึงไหลต่อไปที่ `JSON.parse(data)` ซึ่ง `data` เป็น undefined บน error path — ทำให้เกิด TypeError ที่ดูไม่เกี่ยวกับสาเหตุจริง แทนที่จะโชว์ error ของ fs ตรง ๆ',
+  },
+  {
+    q: 'ทำไมการ wrap ฟังก์ชันที่ return Promise อยู่แล้วด้วย `new Promise((resolve, reject) => fn().then(resolve, reject))` ถึงถือเป็น anti-pattern?',
+    options: [
+      'มันช้ากว่าการเรียก fn() ตรง ๆ',
+      'มันซ้ำซ้อน และถ้าลืมใส่ reject ใน .then() การ reject จะถูกกลืนไปเงียบ ๆ แทนที่จะส่งต่อ',
+      'new Promise() ใช้ข้างในฟังก์ชันอื่นไม่ได้',
+      'มันไม่ใช่ anti-pattern — เป็นวิธีที่แนะนำสำหรับแปลง callback เป็น Promise',
+    ],
+    answer: 1,
+    explain: 'fn() return Promise อยู่แล้ว จึงไม่ต้องมี wrapper — แค่ return fn() ตรง ๆ wrapper มีแต่เพิ่มความเสี่ยง เพราะความผิดพลาดใด ๆ ในการต่อ resolve/reject ใหม่ (ซึ่งเกิดขึ้นบ่อย) จะทำให้การส่งต่อ error พัง',
   },
 ];
 

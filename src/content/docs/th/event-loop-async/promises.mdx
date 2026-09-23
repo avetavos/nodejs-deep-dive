@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Promise คืออะไร?
 
@@ -83,6 +84,160 @@ p1.then(function(data) {
 ตั้งแต่ Node 15 unhandled promise rejection จะ**ทำให้โปรเซสหยุดทำงานทันทีโดยค่าเริ่มต้น** (`--unhandled-rejections=throw`) พฤติกรรมแบบเดิมที่แค่ log คำเตือนถูก deprecate แล้ว (DEP0018) จง chain `.catch()` หรือใช้ try/catch กับ async/await เสมอ
 </Callout>
 
+ปรับพฤติกรรมนี้ได้ด้วย flag `--unhandled-rejections` ถ้าจำเป็น แต่ `throw` (ค่าเริ่มต้น) มักเป็นตัวเลือกที่ถูกต้องสำหรับโค้ดใหม่แทบทุกครั้ง:
+
+| โหมด | พฤติกรรม |
+|---|---|
+| `throw` (ค่าเริ่มต้นตั้งแต่ Node 15) | ยก uncaught exception และทำให้โปรเซส crash |
+| `strict` | เหมือน `throw` แต่ rejection ที่เกิดระหว่างโปรเซสกำลังปิดตัวก็ทำให้ crash ด้วย |
+| `warn` | log คำเตือนไปที่ stderr ไม่ crash — ค่าเริ่มต้นเดิมก่อน 15 ตอนนี้ไม่แนะนำแล้ว |
+| `none` | ปิดคำเตือนไปเลย |
+
+## Promise.all ไม่ยกเลิกงานที่เหลือ
+
+เมื่อ Promise ตัวหนึ่งที่ส่งให้ `Promise.all` reject ตัว `Promise.all` เอง settle (reject) ทันที — แต่มัน**ไม่**ยกเลิกหรือหยุดงานที่อยู่หลัง Promise ตัวอื่น การทำงานที่แท้จริงของมัน (timer, fetch, database query) ยังทำงานต่อจนเสร็จ แค่ไม่มีใครฟังผลลัพธ์แล้วตอนที่มันเสร็จ:
+
+export const noCancelCode = `function slowTask(label, ms) {
+  return new Promise(function (resolve) {
+    setTimeout(function () {
+      console.log(label + ' finished — still ran after Promise.all had already rejected');
+      resolve(label);
+    }, ms);
+  });
+}
+
+var fast = Promise.reject(new Error('fast task failed'));
+var slow = slowTask('slow task', 30);
+
+Promise.all([fast, slow]).catch(function (err) {
+  console.log('Promise.all rejected immediately:', err.message);
+});
+`;
+
+export const noCancelOut = `Promise.all rejected immediately: fast task failed
+slow task finished — still ran after Promise.all had already rejected`;
+
+<NodeRunner client:visible code={noCancelCode} node expected={noCancelOut} />
+
+`Promise.all` reject ทันทีที่ input ตัวแรก reject แต่ `setTimeout` ของ `slowTask` ถูกตั้งไปแล้ว — มันยิงอีก 30 ms ต่อมาไม่ว่าจะยังไง และการเรียก `resolve` ของมันก็ไม่มีผลอะไร (Promise รวมตัวนั้น settle ไปแล้ว) ถ้าต้องการทั้งผลลัพธ์**และ**ทั้งสถานะของทุกตัวแทนที่จะออกก่อนกำหนด ใช้ `Promise.allSettled` ซึ่งไม่เคย reject และให้ออบเจ็กต์ `{ status, value }` หรือ `{ status, reason }` ต่อหนึ่งอินพุต เมื่อทุกตัวเสร็จแล้ว:
+
+```js
+// @skip-verify illustrative — taskA/taskB/taskC are placeholders for your own Promise-returning functions
+Promise.allSettled([taskA(), taskB(), taskC()]).then(function (results) {
+  results.forEach(function (r) {
+    if (r.status === 'fulfilled') console.log('ok:', r.value);
+    else console.log('failed:', r.reason.message);
+  });
+});
+```
+
+## race กับ any และการยกเลิกด้วย AbortController
+
+`Promise.race` settle — ไม่ว่า fulfilled หรือ rejected — ด้วย input ตัวไหนก็ตามที่ settle ก่อน `Promise.any` เพิกเฉยต่อการ reject และ resolve ด้วย**การ fulfilled ตัวแรก** จะ reject ก็ต่อเมื่อทุกตัว reject เท่านั้น:
+
+export const raceAnyCode = `var fast = Promise.reject(new Error('fast rejection'));
+var slow = new Promise(function (resolve) {
+  setTimeout(function () { resolve('slow fulfillment'); }, 20);
+});
+
+Promise.race([fast, slow]).then(
+  function (v) { console.log('race resolved:', v); },
+  function (err) { console.log('race rejected:', err.message); }
+);
+
+Promise.any([fast, slow]).then(function (v) {
+  console.log('any resolved:', v);
+});
+`;
+
+export const raceAnyOut = `race rejected: fast rejection
+any resolved: slow fulfillment`;
+
+<NodeRunner client:visible code={raceAnyCode} node expected={raceAnyOut} />
+
+`race` settle ด้วยสิ่งที่เสร็จก่อน — ในที่นี้คือ `fast` ที่ reject ไปแล้ว — แม้ว่าจะมี fulfillment กำลังมาก็ตาม `any` ข้ามการ reject นั้นไปและรอความสำเร็จตัวแรก
+
+ไม่ว่าจะเป็น `all`, `race`, `allSettled` หรือ `any` ล้วน**ยกเลิก**งานที่แพ้ไม่ได้ด้วยตัวเอง — `setTimeout` หรือ `fetch` ที่กำลังทำงานอยู่จะทำงานต่อไปเรื่อย ๆ เว้นแต่มีอะไรบอกให้มันหยุดชัดเจน นั่นคือหน้าที่ของ `AbortController`: ส่ง `signal` ของมันเข้าไปในสิ่งที่รองรับการยกเลิก (`fetch`, `fs` promises หรือโค้ดของคุณเองผ่าน listener `'abort'`) แล้วเรียก `controller.abort()` เมื่อไม่สนใจผลลัพธ์แล้ว:
+
+export const abortRaceCode = `function slowOperation(signal) {
+  return new Promise(function (resolve, reject) {
+    const t = setTimeout(function () { resolve('operation finished'); }, 100);
+    signal.addEventListener('abort', function () {
+      clearTimeout(t);
+      reject(new Error('aborted: ' + signal.reason));
+    });
+  });
+}
+
+const controller = new AbortController();
+setTimeout(function () { controller.abort('client gave up after 20ms'); }, 20);
+
+slowOperation(controller.signal)
+  .then(function (v) { console.log('resolved:', v); })
+  .catch(function (err) { console.log('rejected:', err.message); });
+`;
+
+export const abortRaceOut = `rejected: aborted: client gave up after 20ms`;
+
+<NodeRunner client:visible code={abortRaceCode} node expected={abortRaceOut} />
+
+การ abort ที่ 20 ms มาก่อน timer 100 ms และ `clearTimeout` ก็หยุดงานที่ค้างอยู่ได้จริง (ต่างจากตัวอย่าง `Promise.all` ข้างบน) Promise จึง reject ด้วยเหตุผลของการ abort แทนที่จะ resolve เลย
+
+## Anti-pattern ของ new Promise
+
+`new Promise(executor)` มีไว้เพื่อห่อ API ที่**ยังไม่ใช่** Promise อยู่แล้ว — API แบบ callback, event, timer ถ้าสิ่งที่อยู่ใน executor return Promise อยู่แล้ว การห่อมันอีกชั้นไม่ได้เพิ่มอะไรนอกจากความเสี่ยง (ลืม `reject`, กลืน rejection):
+
+```js
+// Needed: fs.readFile is callback-based, not Promise-based
+function readFileAsPromise(path) {
+  return new Promise(function (resolve, reject) {
+    require('node:fs').readFile(path, 'utf8', function (err, data) {
+      if (err) reject(err); else resolve(data);
+    });
+  });
+}
+
+// Not needed: fetch already returns a Promise — this just adds risk
+function getJson(url) {
+  return new Promise(function (resolve, reject) {
+    fetch(url).then(resolve, reject); // just: return fetch(url)
+  });
+}
+```
+
+## Mental Model
+
+Promise คือใบเสร็จของค่าที่ยังไม่พร้อม โดยมีหนึ่งในสามสถานะเขียนอยู่บนมันตลอดไปเมื่อ settle แล้ว Combinator ไม่ได้เปลี่ยนวิธีที่ Promise แต่ละตัว settle — มันแค่อธิบาย**เมื่อไหร่จะหยุดรอแล้วดูใบเสร็จ**: `all` หยุดที่ rejection ตัวแรก `allSettled` รอทุกใบเสร็จไม่ว่าผลจะเป็นอย่างไร `race` หยุดที่การ settle ตัวแรกไม่ว่าแบบไหน `any` หยุดที่ความสำเร็จตัวแรก ไม่มีตัวไหนย้อนกลับไปยกเลิกงานที่ Promise นั้นแทนอยู่ได้ มีแต่ `AbortController` (หรือกลไกการยกเลิกที่ API นั้นรองรับเองจริง ๆ) เท่านั้นที่ทำได้
+
+## Trade-offs
+
+`Promise.all` คือค่าเริ่มต้นที่ถูกต้องเมื่อต้องการทุกผลลัพธ์และความล้มเหลวจุดไหนก็ควรหยุดงานทั้งหมด — แต่มันทิ้งข้อมูลความสำเร็จบางส่วน (ตัวไหนทำสำเร็จจริง) และไม่ปล่อย resource ที่ตัวแพ้ใช้อยู่ `allSettled` เก็บข้อมูลนั้นไว้ได้ แต่ต้องแลกกับการรอ input ที่ช้าที่สุดเสมอ แม้จะรู้อยู่แล้วว่ามันจะพัง `AbortController` เพิ่มการยกเลิกจริง แต่ใช้ได้เฉพาะโค้ดที่เขียนมาให้เคารพมันเท่านั้น — การใส่ signal ผ่าน `fetch` ทำง่าย แต่การร้อยมันผ่านฟังก์ชันที่ทำงานนานของคุณเองต้องมีวินัยทุกจุดที่มี `await` หรือ timer
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"Promise.all reject แปลว่างานอื่นหยุดแล้ว"** มันไม่ได้หยุด — แค่ไม่มีใครฟังผลลัพธ์แล้ว side effect ของมัน (การเขียนไฟล์, การเรียกเก็บเงิน, log line) ยังเกิดขึ้นอยู่ดี
+- **"Promise.race เลือกผลลัพธ์ที่สำเร็จเร็วที่สุด"** มันเลือกสิ่งที่ settle ก่อน ไม่ว่าจะสำเร็จหรือล้มเหลว — การ reject ที่เร็วชนะการ resolve ที่ช้าทุกครั้ง
+- **"การห่อค่าด้วย new Promise(...) เป็นวิธีทำให้อะไรก็ตาม async-friendly เสมอ"** ใช้ได้แค่ตอนที่สิ่งที่ห่ออยู่ยังไม่ใช่ Promise การห่อ Promise ด้วย Promise อีกชั้นซ้ำซ้อนและเป็นจุดที่มักทำ error handling หายไปโดยไม่ตั้งใจ
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างมักยิง `Promise.all` (หรือฟังก์ชันที่ return Promise ตรง ๆ) โดยไม่มี `.catch()` ที่ไหนใน chain เลย แล้วผู้เรียกก็ไม่ await มันใน `try/catch` ด้วย — ซึ่งเป็นรูปแบบเดียวกับที่ทำให้เกิด crash ตามที่อธิบายใน Callout ด้านบนเป๊ะ ๆ
+
+<SpotTheBug code={`function loadAllUsers(ids) {
+  return Promise.all(ids.map(function (id) { return fetchUser(id); }));
+  // no .catch() here...
+}
+
+loadAllUsers([1, 2, 3]);
+// ...and the caller doesn't await it or attach .catch() either
+`}>
+ถ้า `fetchUser(id)` ตัวไหน reject `Promise.all` ก็ reject ด้วย — และไม่มีที่ไหนในไฟล์นี้เลยที่แนบ rejection handler ไว้ บน Node 15+ นี่คือ **unhandled rejection** ซึ่งทำให้โปรเซส crash โดยค่าเริ่มต้น (`--unhandled-rejections=throw`) ไม่ใช่แค่ error ที่ถูกเพิกเฉยเงียบ ๆ วิธีแก้คือแนบ `.catch()` ตรงจุดที่สร้าง Promise หรือให้ผู้เรียก `await` มันใน `try/catch` — อย่าปล่อยให้ Promise chain ไม่มี rejection handler อยู่ตรงไหนเลยตลอดทาง
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Combinator แค่ตัดสินใจว่าเมื่อไหร่จะหยุดรอ ไม่เคยตัดสินว่างานที่อยู่ข้างล่างจะหยุดหรือไม่ — ใช้ AbortController เมื่อต้องการการยกเลิกจริง ๆ และอย่าปล่อยให้ Promise chain ไม่มี `.catch()` หรือ `try/catch` ล้อมอยู่
+</Callout>
+
 export const promisesQuiz = [
   {
     q: 'สถานะใดของ Promise หมายถึงงานสำเร็จเรียบร้อย?',
@@ -93,6 +248,7 @@ export const promisesQuiz = [
       'Settled',
     ],
     answer: 2,
+    explain: 'Fulfilled แปลว่างานสำเร็จและ Promise ถือค่าไว้แล้ว ส่วน "settled" คือคำรวมที่ครอบทั้ง fulfilled และ rejected',
   },
   {
     q: 'Promise.all ทำอะไรเมื่อ Promise ตัวหนึ่งในอินพุต reject?',
@@ -103,6 +259,7 @@ export const promisesQuiz = [
       'ลองทำ Promise ที่ reject ใหม่',
     ],
     answer: 1,
+    explain: 'Promise.all reject ทันทีที่ input ตัวใดตัวหนึ่ง reject โดยไม่รอตัวอื่นให้ settle',
   },
   {
     q: 'combinator ใด resolve เมื่อ Promise อินพุตทุกตัว settle และไม่เคย reject?',
@@ -113,6 +270,40 @@ export const promisesQuiz = [
       'Promise.allSettled',
     ],
     answer: 3,
+    explain: 'allSettled รอทุก input ทำงานเสร็จ แล้วรายงานแต่ละผลลัพธ์แยกกัน — มันไม่เคย reject เอง',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n```js\nvar fast = Promise.reject(new Error(\'fast rejection\'));\nvar slow = new Promise(function (resolve) {\n  setTimeout(function () { resolve(\'slow fulfillment\'); }, 20);\n});\nPromise.any([fast, slow]).then(function (v) { console.log(v); });\n```',
+    options: [
+      'มันจะ throw ทันทีเพราะมี input ตัวหนึ่ง reject',
+      '"slow fulfillment" — Promise.any ข้ามการ reject ไปและ resolve ด้วยความสำเร็จตัวแรก',
+      '"fast rejection"',
+      'ไม่พิมพ์อะไรเลย — Promise.any ต้องการให้ทุก input สำเร็จ',
+    ],
+    answer: 1,
+    explain: 'Promise.any เพิกเฉยต่อการ reject ตราบใดที่มี input อย่างน้อยหนึ่งตัวสำเร็จในที่สุด มันจะ reject (ด้วย AggregateError) ก็ต่อเมื่อทุก input reject เท่านั้น',
+  },
+  {
+    q: 'ฟังก์ชันหนึ่ง return Promise.all(ids.map(fetchUser)); โดยไม่มี .catch() และผู้เรียกก็ไม่ await ผลลัพธ์ด้วย ถ้า fetchUser ตัวหนึ่ง reject จะเกิดอะไรขึ้น?',
+    options: [
+      'ไม่มีอะไรเกิดขึ้น — rejection ถูกเพิกเฉยเงียบ ๆ',
+      'มัน log deprecation warning แต่ยังทำงานต่อ',
+      'โปรเซส crash โดยค่าเริ่มต้น เพราะไม่มีอะไรจัดการ rejection นั้นเลย',
+      'มัน retry การเรียก fetchUser ที่ล้มเหลวอัตโนมัติ',
+    ],
+    answer: 2,
+    explain: 'Unhandled Promise rejection ทำให้โปรเซส Node หยุดทำงานโดยค่าเริ่มต้น (--unhandled-rejections=throw) — ไม่มีตาข่ายนิรภัยแอบแฝงให้ Promise chain ที่ขาด .catch()',
+  },
+  {
+    q: 'ทำไมการห่อ fetch(url) ด้วย new Promise((resolve, reject) => fetch(url).then(resolve, reject)) ถึงนับเป็น anti-pattern?',
+    options: [
+      'ใช้ fetch ข้างในฟังก์ชัน executor ไม่ได้',
+      'fetch return Promise อยู่แล้ว wrapper จึงซ้ำซ้อนและเพิ่มจุดที่ error handling อาจหายไปโดยไม่ตั้งใจ',
+      'มันเปลี่ยนชนิดของค่าที่ resolve จาก object เป็น string',
+      'ไม่ใช่ anti-pattern — นี่คือวิธีมาตรฐานในการเรียก fetch',
+    ],
+    answer: 1,
+    explain: 'wrapper แบบ new Promise จำเป็นเฉพาะกับ API ที่ยังไม่ใช่ Promise (callback, event, timer) เท่านั้น การห่อสิ่งที่เป็น async อยู่แล้วมีแต่เพิ่มชั้นซ้ำซ้อนและจุดที่ลืม reject ได้ง่าย',
   },
 ];
 

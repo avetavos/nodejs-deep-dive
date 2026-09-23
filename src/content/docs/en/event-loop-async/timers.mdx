@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## setTimeout
 
@@ -80,6 +81,67 @@ Output is always: `Promise ran first`, then `Timer ran second`.
 `setTimeout(fn, 100)` means the callback runs no sooner than 100 ms, but if the call stack is busy or other microtasks are running, it may run later. Never rely on exact timer precision for correctness.
 </Callout>
 
+## Promise-based timers: timers/promises and AbortSignal.timeout
+
+`node:timers/promises` gives you a Promise-returning `setTimeout` — no callback, so it composes naturally with `await`, `Promise.race`, and an `AbortSignal`. Passing `{ signal }` lets you cancel the wait early instead of letting it run to completion:
+
+export const timersPromisesCode = `import { setTimeout as delay } from 'node:timers/promises';
+
+console.log('waiting 30ms with timers/promises...');
+await delay(30);
+console.log('done waiting');
+
+try {
+  await delay(1000, undefined, { signal: AbortSignal.timeout(20) });
+  console.log('this never prints');
+} catch (err) {
+  console.log('aborted:', err.name);
+}
+`;
+
+export const timersPromisesOut = `waiting 30ms with timers/promises...
+done waiting
+aborted: AbortError`;
+
+<NodeRunner client:visible code={timersPromisesCode} node expected={timersPromisesOut} />
+
+`AbortSignal.timeout(ms)` returns a signal that aborts itself after `ms` — a compact way to say "give up after this long" without wiring your own `setTimeout` + `AbortController` pair by hand. It works anywhere a signal is accepted: `timers/promises`, `fetch`, and any of your own code that checks `signal.aborted` or listens for `'abort'`.
+
+## Mental Model
+
+Every timer API is a promise about a *minimum* wait, never an exact one: `setTimeout`/`setInterval` hand a callback to libuv's timer phase, which only runs once the call stack is empty and every microtask has drained — the delay you pass is a floor, not a schedule. `timers/promises`' `setTimeout` is the same underlying timer with a Promise wrapped around it instead of a callback, which is precisely why it can be cancelled with a signal (a callback has no way to say "never mind," but a Promise can reject) — `AbortSignal.timeout(ms)` is just a pre-built signal that fires its own abort after `ms`, so you do not have to construct an `AbortController` and its own `setTimeout` by hand every time you need a deadline.
+
+## Trade-offs
+
+The callback-based timers (`setTimeout`, `setInterval`) have no built-in way to say "give up waiting" — you track the ID yourself and call `clearTimeout`/`clearInterval`, and there is no equivalent for "stop waiting for this to resolve" once a callback has fired. The Promise-based `timers/promises` API costs one extra import and a signal object, but buys real cancellation and composes directly with `Promise.race`/`Promise.all` — worth it for anything with a real deadline (an upstream call, a job that must not run forever) and unnecessary overhead for a plain "run this later" callback that never needs to change its mind.
+
+## Common Misconceptions
+
+- **"setTimeout(fn, 0) runs before anything else queued."** It runs before the *next macrotask*, but strictly after every pending microtask (`process.nextTick`, Promise reactions, `queueMicrotask`) — see the demo above, where the Promise always logs first.
+- **"setTimeout(fn, 0) is basically the same as process.nextTick(fn)."** They are in different queues entirely: `nextTick` (and microtasks) drain completely after every single callback; `setTimeout(fn, 0)` waits for the next full pass through the timers phase, which can be many callbacks later under load.
+- **"A 0 or negative delay means the callback runs synchronously."** It never does — even `setTimeout(fn, -100)` is clamped to Node's ~1 ms floor and still yields to the event loop first; nothing scheduled with `setTimeout` ever runs on the current stack frame.
+
+## Reading AI-generated code
+
+AI-generated code sometimes uses `setTimeout(fn, 0)` as an informal substitute for "the next tick" or "right after this async operation finishes" — treating it as a synchronization primitive it was never designed to be.
+
+<SpotTheBug code={`function loadUserThenGreet(fetchUser) {
+  let user = null;
+  fetchUser().then(function (u) { user = u; });
+
+  setTimeout(function () {
+    // AI comment: "setTimeout(fn, 0) runs on the next tick, right after the fetch above"
+    console.log('Hello, ' + user.name);
+  }, 0);
+}
+`}>
+`setTimeout(fn, 0)` is a **macrotask** with roughly a 1 ms floor — it has no relationship to how long `fetchUser()` actually takes. If `fetchUser()` does real I/O (a network call, a database query), `user` is almost certainly still `null` when the timeout fires, and `user.name` throws a `TypeError`. Even calling this "the next tick" is a misnomer: `process.nextTick` and Promise microtasks are a separate, earlier-draining queue that has nothing to do with `setTimeout`'s macrotask queue. The fix is to react to the actual Promise instead of guessing a delay: `fetchUser().then(function (u) { console.log('Hello, ' + u.name); })`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A timer's delay is a floor, not a promise about relative timing to anything else in your program — never use setTimeout(fn, 0) as a stand-in for "after this Promise resolves"; await or .then() the actual Promise instead.
+</Callout>
+
 export const timersQuiz = [
   {
     q: 'Is setTimeout(fn, 0) guaranteed to run fn immediately after the current synchronous code?',
@@ -90,6 +152,7 @@ export const timersQuiz = [
       'No — setTimeout always waits at least 4 ms regardless of the delay argument',
     ],
     answer: 1,
+    explain: 'setTimeout always schedules a macrotask, and Node drains process.nextTick plus the entire microtask queue before running the next macrotask — 4 ms is a browser-specific nested-timer clamp, not Node\'s floor.',
   },
   {
     q: 'How do you stop a setInterval from firing again?',
@@ -100,6 +163,7 @@ export const timersQuiz = [
       'Return false from inside the interval callback',
     ],
     answer: 2,
+    explain: 'setInterval and setTimeout use separate cancellation functions in Node\'s public API — clearInterval for setInterval, clearTimeout for setTimeout.',
   },
   {
     q: 'Which function schedules a callback in the microtask queue (not a timer queue)?',
@@ -110,6 +174,29 @@ export const timersQuiz = [
       'queueMicrotask(fn)',
     ],
     answer: 3,
+    explain: 'queueMicrotask schedules directly on the microtask queue, the same queue Promise reactions use — the other three are all macrotask-based timers.',
+  },
+  {
+    q: 'What does this print?\n```js\nimport { setTimeout as delay } from \'node:timers/promises\';\ntry {\n  await delay(1000, undefined, { signal: AbortSignal.timeout(10) });\n  console.log(\'finished\');\n} catch (err) {\n  console.log(\'caught:\', err.name);\n}\n```',
+    options: [
+      'finished (after 1000ms)',
+      'caught: AbortError (after about 10ms)',
+      'A TypeError is thrown synchronously before the try block even runs',
+      'Nothing prints — AbortSignal.timeout is browser-only and undefined in Node',
+    ],
+    answer: 1,
+    explain: 'AbortSignal.timeout(10) aborts the signal after ~10ms, long before the 1000ms delay would resolve — timers/promises\' setTimeout rejects with an AbortError when its signal aborts, which the try/catch catches.',
+  },
+  {
+    q: 'An AI-written function does `setTimeout(() => console.log(user.name), 0)` right after calling `fetchUser().then(u => user = u)`, with the comment "runs on the next tick, right after the fetch." What is wrong with this reasoning?',
+    options: [
+      'Nothing — setTimeout(fn, 0) is defined to run immediately after any pending Promise resolves',
+      'setTimeout(fn, 0) has a roughly 1ms floor with no relation to how long the real fetch takes — user is likely still null when it fires',
+      'setTimeout only works with delays of 100ms or more',
+      'The bug is that .then() should have been awaited instead',
+    ],
+    answer: 1,
+    explain: 'setTimeout(fn, 0) is a macrotask scheduled independently of any specific Promise; it does not wait for fetchUser() to resolve, so a real (non-instant) fetch almost certainly has not finished by the time the ~1ms timer fires.',
   },
 ];
 

@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Call stack คืออะไร?
 
@@ -87,6 +88,98 @@ console.log('Finally unblocked');
 งาน synchronous ที่ยาวนานบน call stack ขัดขวางไม่ให้ callback ของ I/O, timer หรือ event อื่น ๆ ถูกประมวลผล จงทำให้ handler แบบ synchronous สั้นเข้าไว้
 </Callout>
 
+## วัด lag แทนการเดา
+
+"ทำให้ handler แบบ synchronous สั้นเข้าไว้" พูดง่ายแต่บังคับใช้ยากถ้าไม่มีตัวเลข `perf_hooks.monitorEventLoopDelay()` ของ Node สุ่มตัวอย่างว่า loop ใช้เวลานานแค่ไหนกว่าจะกลับไปเช็ก timer ทำให้คุณวัด lag ได้แทนที่จะเดา เดโมด้านล่างตั้งเวลาให้ busy-loop แบบ synchronous ยาว 200 ms เริ่มที่ 50 ms แล้วรายงาน delay ที่แย่ที่สุดที่สังเกตได้:
+
+export const eventLoopLagCode = `import { monitorEventLoopDelay } from 'node:perf_hooks';
+
+const h = monitorEventLoopDelay();
+h.enable();
+
+setTimeout(function () {
+  const maxMs = h.max / 1e6;
+  const bucket = Math.round(maxMs / 100) * 100;
+  console.log('busy loop finished');
+  console.log('max event loop delay (rounded): ~' + bucket + 'ms');
+  h.disable();
+}, 300);
+
+setTimeout(function () {
+  const start = Date.now();
+  while (Date.now() - start < 200) {
+    // synchronous CPU work — the event loop cannot process anything else
+  }
+}, 50);
+`;
+
+export const eventLoopLagOut = `busy loop finished
+max event loop delay (rounded): ~200ms`;
+
+<NodeRunner client:visible code={eventLoopLagCode} node expected={eventLoopLagOut} />
+
+ตัวเลขถูกปัดเศษเป็นหลักร้อย ms เพื่อให้เดโมนี้พิมพ์ผลเดิมทุกเครื่อง ส่วน API จริงคืนค่าละเอียดระดับ nanosecond ทั้ง `h.min`, `h.max`, `h.mean` และ percentile (`h.percentile(99)`) — พอจะเอาไปทำ metric "loop lag" ใส่ health check ได้
+
+## process.exit() ไม่รอใครทั้งนั้น
+
+`process.exit()` ยุติโปรเซสทันที แบบ synchronous กลางคำสั่ง มันไม่รัน `finally` ที่ค้างอยู่ ไม่ระบาย `process.nextTick` และไม่ยิง timer หรือ I/O callback ที่ต่อคิวไว้:
+
+export const exitSkipsQueueCode = `console.log('before exit');
+
+setTimeout(function () {
+  console.log('this timer never fires');
+}, 0);
+
+process.nextTick(function () {
+  console.log('this nextTick never fires either');
+});
+
+try {
+  process.exit(0);
+} finally {
+  console.log('finally never runs');
+}
+`;
+
+export const exitSkipsQueueOut = `before exit`;
+
+<NodeRunner client:visible code={exitSkipsQueueCode} node expected={exitSkipsQueueOut} />
+
+มีแค่ `before exit` ที่พิมพ์ออกมา ทั้ง `finally`, `nextTick` และ timer ยังอยู่บน stack หรือในคิวตอนที่ image ของโปรเซสถูกทำลาย — ไม่มีตัวไหนได้ทำงานเลย
+
+## Mental Model
+
+ให้นึกภาพ call stack เป็นโต๊ะเดียวที่มีคนงานคนเดียวและถาดงานเข้าถาดเดียว ทุก statement แบบ synchronous — ของคุณเอง, ของ callback, หรือของ Promise reaction — ต้องอยู่บนโต๊ะนั้นจนกว่าจะเสร็จ ไม่มีอะไรบนโต๊ะขยับได้ระหว่างนั้น `monitorEventLoopDelay` คือนาฬิกาจับเวลาที่ติดไว้บนโต๊ะนั้น — มันบอกว่าคนงานจมอยู่กับงานหนึ่งชิ้นนานแค่ไหนแทนที่จะเช็กถาดงานเข้า ส่วน `process.exit()` คือคนงานลุกเดินออกกลางประโยค — อะไรที่ต่อคิวไว้ข้างหลังเขา รวมถึง `finally` ของตัวเขาเอง จะไม่มีวันได้พูดจนจบ
+
+## Trade-offs
+
+Call stack เดียวแปลว่าไม่ต้องใช้ lock ล้อมรอบ state ของ JavaScript ของคุณเอง — แต่ก็แปลว่าไม่มีที่ว่างให้กับงาน synchronous ที่ยาวนานเลย: `JSON.parse` ที่ช้าหรือ crypto call เดียวทำให้ request อื่นทุกตัวในโปรเซสค้าง ไม่ใช่แค่ตัวที่ทริกเกอร์มัน การวัด lag ด้วย `monitorEventLoopDelay` แทบไม่มีต้นทุนและคุ้มที่จะต่อเข้ากับ health check หรือ endpoint `/metrics` ไว้ก่อนที่จะต้องใช้มันตอนเกิดเหตุจริง `process.exit()` แลกการปิดระบบแบบสง่างามที่รอให้ทุกอย่างระบายก่อน กับการปิดแบบทันทีทื่อ ๆ — เหมาะกับสคริปต์ CLI ที่เขียนทุกอย่างที่ต้องเขียนเสร็จแล้ว แต่อันตรายในโปรเซสเซิร์ฟเวอร์ที่อาจยังมี response, log line หรือการเขียนฐานข้อมูลค้างอยู่
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ลูป `while` ที่เสร็จในไม่ถึงวินาทีก็โอเค"** โอเคเทียบกับอะไร? การบล็อกแบบ synchronous 200 ms ทำให้ request, timer และ I/O callback อื่นที่ค้างอยู่ทุกตัวในโปรเซสช้าไป 200 ms — บนเซิร์ฟเวอร์ที่ยุ่งนั่นถือว่าพลาด SLA ได้ง่าย ๆ ทั้งที่ไม่มีอะไร "ค้าง" ในความหมายทั่วไป
+- **"ผม log ผลลัพธ์แล้ว ดังนั้น `process.exit()` ต่อท้ายคือการ cleanup ที่ปลอดภัย"** ปลอดภัยแค่บางครั้ง `process.exit()` ไม่รอสิ่งที่ต่อคิวไว้เลย — ไม่รอ `finally`, ไม่รอ `nextTick` และ (ดู SpotTheBug ด้านล่าง) ไม่จำเป็นต้องรอแม้แต่ `console.log` ที่คุณเพิ่งเรียก
+- **"Call stack กับ event loop เป็นสิ่งเดียวกัน"** สองอย่างนี้เกี่ยวข้องกันแต่ไม่ใช่สิ่งเดียวกัน: call stack คือที่ที่เฟรม synchronous ทำงานทีละเฟรม ส่วน event loop คือกลไกที่ตัดสินใจว่าอะไรจะถูก push ขึ้น stack ต่อไป จากคิวไหน ตามลำดับใด
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างมักเรียก `process.exit()` ทันทีหลัง `console.log` สุดท้าย โดยคิดว่ามันคือ "พิมพ์ผลลัพธ์ แล้ว cleanup ทันที" นั่นปลอดภัยเมื่อ output ไปที่ terminal (การเขียนที่นั่นเป็น synchronous) แต่สคริปต์เดียวกันเมื่อถูก pipe ไปไฟล์หรือโปรเซสอื่น (`node report.js > out.txt`, หรือรันภายใต้ process manager, Docker, หรือ CI ที่ stdout เป็น pipe) อาจทำให้ output สุดท้ายหายไปเงียบ ๆ เพราะการเขียนไปยัง stdout ที่ไม่ใช่ TTY อาจเป็นแบบ asynchronous — และ `process.exit()` ไม่รอให้การเขียนที่ค้างอยู่เสร็จ
+
+<SpotTheBug code={`function main() {
+  const report = generateReport(); // a large string
+  console.log(report); // AI comment: "print the report, then exit cleanly"
+  process.exit(0);
+}
+
+main();
+`}>
+โค้ดนี้ดูถูกต้องเมื่อรันใน terminal ที่การเขียน `stdout` เป็น synchronous แต่พอ pipe สคริปต์เดียวกันไปไฟล์หรือ process อื่น (`node report.js > out.txt`, `node report.js | gzip > out.gz`, log driver ของ Docker, CI runner) `stdout` จะกลายเป็นแบบ non-blocking — การเขียนอาจยังค้างอยู่ตอนที่ `process.exit()` ทำลายโปรเซส ทำให้ `report` บางส่วนหรือทั้งหมดหายไปเงียบ ๆ วิธีแก้คือไม่ต้องเรียก `process.exit()` ตรงนี้เลย — ตั้ง `process.exitCode = 0` แล้วปล่อยให้สคริปต์ return ตามปกติ เพื่อให้ Node รอ event loop (และการเขียนที่ค้างอยู่) ระบายก่อนที่จะออกเอง
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Call stack รันเฟรม synchronous ทีละเฟรมให้ทุกคนที่แชร์โปรเซสเดียวกัน — วัดว่าคุณครอบครองมันนานแค่ไหนด้วย `monitorEventLoopDelay` และอย่าคิดว่า `process.exit()` จะรอสิ่งที่ต่อคิวไว้ข้างหลังมัน รวมถึง `console.log` ตัวสุดท้ายของคุณเอง
+</Callout>
+
 export const callStackQuiz = [
   {
     q: 'โครงสร้างข้อมูลแบบใดอธิบายวิธีที่ call stack ประมวลผลการเรียกฟังก์ชัน?',
@@ -97,6 +190,7 @@ export const callStackQuiz = [
       'Circular buffer',
     ],
     answer: 1,
+    explain: 'เฟรมที่ push ล่าสุดจะเป็นเฟรมถัดไปที่ทำงานและถูก pop ก่อนเสมอ — Last In, First Out',
   },
   {
     q: 'callback ของ setTimeout เกิดอะไรขึ้นขณะที่ลูป synchronous ที่ยาวนานกำลังทำงาน?',
@@ -107,6 +201,7 @@ export const callStackQuiz = [
       'ทำงานทันทีหลังลูปเริ่ม',
     ],
     answer: 2,
+    explain: 'Timer เป็น macrotask; callback ของ macrotask เริ่มทำงานไม่ได้จนกว่า call stack จะว่าง ไม่ว่าจะใช้เวลานานแค่ไหนก็ตาม',
   },
   {
     q: 'เฟรมของฟังก์ชันถูกนำออกจาก call stack เมื่อใด?',
@@ -117,6 +212,40 @@ export const callStackQuiz = [
       'ตอนจบของแต่ละรอบ event loop',
     ],
     answer: 1,
+    explain: 'เฟรมอยู่บน stack ตลอดการทำงานของฟังก์ชันนั้น และจะถูก pop ก็ต่อเมื่อ return ค่าหรือ exception unwind ผ่านมันเท่านั้น',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n```js\nfunction a() { throw new Error(\'boom\'); }\nfunction b() { a(); }\nfunction c() {\n  try { b(); } catch (e) { console.log(\'caught:\', e.message); }\n}\nc();\nconsole.log(\'after\');\n```',
+    options: [
+      'caught: boom, แล้วตามด้วย after',
+      'โปรเซส crash ก่อนที่จะพิมพ์อะไรเลย',
+      'after, แล้วตามด้วย caught: boom',
+      'ไม่พิมพ์อะไรเลย — error ถูกกลืนไปเงียบ ๆ',
+    ],
+    answer: 0,
+    explain: 'Exception unwind stack จาก a() ผ่าน b() ไปจนถึง try/catch ใน c() ซึ่งจัดการมันและปล่อยให้โค้ดทำงานต่อตามปกติในบรรทัดถัดไป',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n```js\nconsole.log(\'before exit\');\nprocess.nextTick(function () { console.log(\'nextTick\'); });\ntry {\n  process.exit(0);\n} finally {\n  console.log(\'finally\');\n}\n```',
+    options: [
+      'before exit, finally, nextTick',
+      'before exit, nextTick, finally',
+      'before exit',
+      'finally, before exit, nextTick',
+    ],
+    answer: 2,
+    explain: 'process.exit() ทำลายโปรเซสทันทีแบบ synchronous — มันไม่เคยคืนการควบคุมให้รัน finally และ callback ของ nextTick ยังอยู่ในคิวตอนที่ image ของโปรเซสหายไปแล้ว',
+  },
+  {
+    q: 'ทำไม output จาก console.log บรรทัดสุดท้ายของสคริปต์อาจหายไปเมื่อ pipe ไปไฟล์ แต่ไม่เคยหายเมื่อรันตรงใน terminal?',
+    options: [
+      'console.log ถูกปิดอัตโนมัติเมื่อ stdout ไม่ใช่ TTY',
+      'การเขียนไปยัง stdout ที่ไม่ใช่ TTY อาจเป็นแบบ asynchronous และ process.exit() ต่อท้ายไม่รอให้เขียนเสร็จ',
+      'Pipe มี buffer เล็กกว่า terminal เสมอจึงตัดข้อความยาวทิ้ง',
+      'เรื่องแบบนี้เกิดขึ้นไม่ได้จริงบนแพลตฟอร์มไหนเลย',
+    ],
+    answer: 1,
+    explain: 'การเขียน stdout เป็น synchronous เมื่อเป็น TTY แต่อาจเป็น asynchronous เมื่อเป็นไฟล์ pipe หรือปลายทางที่ไม่ใช่ TTY อื่น ๆ การเรียก process.exit() ทันทีหลังเขียนจึงไม่รับประกันว่าการเขียนนั้นเสร็จแล้ว',
   },
 ];
 

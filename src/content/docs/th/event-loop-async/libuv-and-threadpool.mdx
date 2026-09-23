@@ -1,0 +1,216 @@
+---
+title: 'libuv & the Threadpool'
+description: '6 phase ของ libuv event loop และการวัด threadpool ขนาดคงที่ด้วยตัวเลขจริง'
+sidebar:
+  order: 8
+---
+
+import NodeRunner from '../../../../components/NodeRunner.tsx';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## 6 phase ของ event loop
+
+ทุกอย่างที่โมดูลนี้ครอบคลุมมาจนถึงตอนนี้ — timer, microtask, `setImmediate` — เกิดขึ้นข้างใน library ภาษา C ที่ชื่อ **libuv** ซึ่ง Node process ทุกตัวรันอยู่หนึ่ง instance การวนแต่ละรอบของ loop ใน libuv จะผ่าน 6 phase เรียงตามลำดับเดิมเสมอ:
+
+<Mermaid title="Phase ของ libuv event loop" code={`flowchart LR
+  Timers["timers\nexpired setTimeout/setInterval callbacks"] --> Pending["pending callbacks\nsome deferred system callbacks (e.g. certain TCP errors)"]
+  Pending --> Idle["idle, prepare\ninternal libuv bookkeeping"]
+  Idle --> Poll["poll\nfetch new I/O events; run I/O callbacks (e.g. fs, sockets)"]
+  Poll --> Check["check\nsetImmediate callbacks"]
+  Check --> Close["close callbacks\nsocket.on('close'), etc."]
+  Close --> Timers
+`} />
+
+phase **poll** คือตัวที่รอจริง ๆ: ถ้าไม่มีอะไรต้องทำ มันจะบล็อกจนกว่า I/O event จะมาถึงหรือ timer ถึงกำหนด นี่คือเหตุผลที่ `setImmediate` กับ `setTimeout(fn, 0)` ทำงานต่างกันขึ้นอยู่กับว่าถูกจัดคิวจากที่ไหน — ข้างใน I/O callback (ซึ่งอยู่ใน poll phase อยู่แล้ว) `check` คือ phase ถัดไปทันที ดังนั้น `setImmediate` จึงยิงก่อน timer เสมอ (ดูบท *Microtasks & Macrotasks* สำหรับการพิสูจน์ที่รันได้จริง)
+
+## อะไรใช้ threadpool จริง ๆ
+
+libuv เก็บ pool ของ worker thread ขนาดคงที่และเล็ก (ค่าเริ่มต้น **4** ควบคุมด้วย environment variable `UV_THREADPOOL_SIZE` ซึ่งต้องตั้งก่อนที่ pool จะถูกใช้ครั้งแรก) สำหรับงานที่ทำด้วย async I/O ของ OS kernel ตรง ๆ ไม่ได้:
+
+| ใช้ threadpool | ใช้ async I/O ของ kernel โดยตรง (ไม่ใช้ threadpool) |
+|---|---|
+| method แบบ async ของ `fs` (`fs.readFile`, `fs.stat`, ...) | TCP/UDP socket, server/client ของ `net`/`http` |
+| `crypto.pbkdf2`, `crypto.scrypt`, `crypto.randomBytes` (แบบ async) | `setTimeout`/`setInterval`/`setImmediate` |
+| `dns.lookup` (ไม่ใช่ `dns.resolve*` ซึ่งใช้ c-ares โดยตรง) | `dns.resolve*` ส่วนใหญ่ |
+| method แบบ async ของ `zlib` | — |
+
+การแบ่งแบบนี้สำคัญเพราะ threadpool คือทรัพยากรที่จำกัดจริง ๆ และแชร์กัน — มีแค่ 4 อย่างจาก*คอลัมน์ซ้ายไหนก็ได้*เท่านั้นที่รันแบบ parallel จริงบนฮาร์ดแวร์ได้พร้อมกัน ไม่ว่าจะ `await` พร้อมกันกี่ตัวก็ตาม ในขณะที่คอลัมน์ขวาสเกลไปตาม I/O multiplexing ของ OS เอง (epoll/kqueue/IOCP) ซึ่งจัดการ socket พร้อมกันได้เป็นพันตัวบนเธรดเดียวสบาย ๆ
+
+## วัด pool ด้วยตัวเลขจริง
+
+`crypto.pbkdf2` ผูกกับ threadpool ดังนั้นการรันมันพร้อมกันมากกว่าจำนวนเธรดใน pool ควรทำให้ตัวที่ช้าที่สุดใช้เวลานานขึ้นชัดเจน เดโมด้านล่างจับเวลา `pbkdf2` หนึ่งครั้ง แล้วรัน 4 ครั้งพร้อมกัน แล้ว 8 ครั้ง (สองเท่าของขนาด pool เริ่มต้น) แล้วรายงานตัวที่ช้าที่สุดของแต่ละ batch เทียบกับ baseline ของครั้งเดียว:
+
+export const threadpoolSizeCode = `import { pbkdf2 } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+
+function hashOnce() {
+  return new Promise(function (resolve) {
+    const start = performance.now();
+    pbkdf2('password', 'salt', 200000, 64, 'sha512', function () {
+      resolve(performance.now() - start);
+    });
+  });
+}
+
+function runBatch(n) {
+  return Promise.all(Array.from({ length: n }, hashOnce)).then(function (durations) {
+    return Math.max.apply(null, durations);
+  });
+}
+
+function bucket(ms, baseline) {
+  const ratio = ms / baseline;
+  if (ratio < 1.7) return '~1x a single hash (all fit in the pool at once)';
+  return '~2x a single hash (some calls queued behind the rest)';
+}
+
+const single = await hashOnce();
+console.log('1 pbkdf2 call: baseline');
+console.log('4 concurrent pbkdf2 calls:', bucket(await runBatch(4), single));
+console.log('8 concurrent pbkdf2 calls (default UV_THREADPOOL_SIZE=4):', bucket(await runBatch(8), single));
+`;
+
+export const threadpoolSizeOut = `1 pbkdf2 call: baseline
+4 concurrent pbkdf2 calls: ~1x a single hash (all fit in the pool at once)
+8 concurrent pbkdf2 calls (default UV_THREADPOOL_SIZE=4): ~2x a single hash (some calls queued behind the rest)`;
+
+<NodeRunner client:visible code={threadpoolSizeCode} node expected={threadpoolSizeOut} />
+
+การเรียก 4 ครั้งพร้อมกันเข้า pool ได้พอดีและเสร็จในเวลาประมาณครั้งเดียว ส่วน 8 ครั้งพร้อมกันต้องใช้ 2 รอบเต็มผ่าน 4 เธรด ตัวที่ช้าที่สุดจึงใช้เวลาประมาณสองเท่า — batch ของ 8 จริง ๆ แล้วคือ batch ของ 4 สองรอบ รอบหนึ่งต่อคิวอยู่หลังอีกรอบ `UV_THREADPOOL_SIZE` ถูกอ่านครั้งเดียวตอนที่ libuv สร้าง pool ครั้งแรก — ตั้งค่ามัน (เป็น environment variable จริง หรือผ่าน `process.env.UV_THREADPOOL_SIZE` *ก่อน*ที่จะมีการเรียกที่ใช้ threadpool ตัวไหนเลย) แล้วการเรียก 8 ครั้งพร้อมกันแบบเดิมก็จะไม่ต้องต่อคิวอีก:
+
+export const threadpoolResizeCode = `process.env.UV_THREADPOOL_SIZE = '8'; // must be set before the first threadpool-using call
+
+import { pbkdf2 } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+
+function hashOnce() {
+  return new Promise(function (resolve) {
+    const start = performance.now();
+    pbkdf2('password', 'salt', 200000, 64, 'sha512', function () {
+      resolve(performance.now() - start);
+    });
+  });
+}
+
+function runBatch(n) {
+  return Promise.all(Array.from({ length: n }, hashOnce)).then(function (durations) {
+    return Math.max.apply(null, durations);
+  });
+}
+
+function bucket(ms, baseline) {
+  const ratio = ms / baseline;
+  if (ratio < 1.7) return '~1x a single hash';
+  return '~2x a single hash (some calls queued behind the rest)';
+}
+
+const single = await hashOnce();
+console.log('UV_THREADPOOL_SIZE=8, 8 concurrent pbkdf2 calls:', bucket(await runBatch(8), single));
+`;
+
+export const threadpoolResizeOut = `UV_THREADPOOL_SIZE=8, 8 concurrent pbkdf2 calls: ~1x a single hash`;
+
+<NodeRunner client:visible code={threadpoolResizeCode} node expected={threadpoolResizeOut} />
+
+ไม่มีขนาด pool ที่ "ถูกต้อง" ตายตัว — pool ที่ใหญ่กว่าแปลว่า parallelism จริงมากกว่าสำหรับงานที่ผูกกับ threadpool แลกมาด้วย OS thread ที่มากขึ้น (memory, context-switching) ที่แย่งงาน CPU-bound กับเธรด JS หลักของคุณเองบนเครื่องที่งานหนัก
+
+## Mental Model
+
+ให้นึกภาพโต๊ะทำงานสี่โต๊ะในห้องหลังร้าน (threadpool) หลังเคาน์เตอร์หน้าร้านหนึ่งตัว (เธรด JS) คนที่เคาน์เตอร์ (โค้ด JS ของคุณ) ส่งงานบางประเภทได้ — hash รหัสผ่าน, อ่านไฟล์, DNS lookup — ไปที่โต๊ะไหนก็ได้ที่ว่าง แล้วได้รับแจ้งเตือน (ผ่าน callback) เมื่อเสร็จ แต่มีแค่สี่โต๊ะ: งานที่ห้าต้องรอโต๊ะว่าง ไม่ว่าจะมีลูกค้ารอที่เคาน์เตอร์กี่คนก็ตาม ในขณะเดียวกัน socket กับ timer ไม่ได้ถูกจัดการที่โต๊ะเลย — หน้าร้านมีสายตรงไปยังระบบสาธารณูปโภคของตึก (OS kernel) ซึ่งจัดการ connection ที่ยังเปิดอยู่เป็นพันตัวได้โดยไม่ต้องมีโต๊ะต่อ connection
+
+## Trade-offs
+
+Threadpool ขนาดคงที่ที่แชร์กันแปลว่าการใช้ resource คาดเดาได้ — Node จะไม่สร้าง OS thread ไม่จำกัดไม่ว่าคุณจะยัดงาน `fs`/`crypto`/`dns.lookup`/`zlib` เข้าไปมากแค่ไหน — แต่ก็แปลว่างานทั้งหมดนั้นแย่งช่องเดียวกันสี่ช่อง ไม่ว่าการเรียกเหล่านั้นจะเกี่ยวข้องกันในเชิงตรรกะหรือไม่ การเพิ่ม `UV_THREADPOOL_SIZE` แลก memory และ overhead การสลับ thread ของ OS เพื่อ parallelism จริงที่มากขึ้น มันเป็นปุ่มปรับระดับทั้งโปรเซสแบบหยาบ ๆ ไม่ใช่อะไรที่ scope ให้เฉพาะ "operation หนักตัวนี้ตัวเดียว" ได้ สำหรับงาน CPU-bound จริง ๆ ที่ไม่อยู่ในรายการ operation ที่ threadpool รองรับ (การคำนวณ synchronous ของคุณเอง ไม่ใช่ `fs`/`crypto`/`dns`/`zlib`) `worker_threads` คือเครื่องมือที่ถูกต้อง — มันไม่แชร์ libuv threadpool เลย
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"threadpool ของ Node จัดการงาน async ทั้งหมด"** มันจัดการแค่ operation เฉพาะในคอลัมน์ซ้ายด้านบนเท่านั้น Socket, HTTP และ timer ไม่แตะมันเลย — พวกมันเป็น async I/O ของ OS kernel ซึ่งเป็นกลไกแยกต่างหากที่ไม่มีจำนวนเธรดตายตัวให้หมด
+- **"await Promise หลายตัวพร้อมกันแปลว่าทุกตัวรันเร็วเท่า parallel จริง"** รันได้ถึงแค่ขนาดของ threadpool (ค่าเริ่มต้น 4) สำหรับ operation ที่ผูกกับ threadpool เท่านั้น `Promise.all` เริ่ม operation ข้างใต้พร้อมกันทั้งหมดก็จริง แต่ตัว pool เองยังคง serialize อะไรก็ตามที่เกิน 4 ตัวในเวลาเดียวกัน
+- **"การเพิ่ม UV_THREADPOOL_SIZE ไม่มีข้อเสียเลย"** เธรดที่มากขึ้นแปลว่า context-switching ระดับ OS และ memory ที่มากขึ้น และบนเครื่องที่มีงาน JS แบบ CPU-bound รันอยู่ด้วย ก็จะแย่ง CPU core จริงมากขึ้น — มันคือ trade-off ไม่ใช่ของฟรี
+
+## อ่านโค้ดที่ AI เขียน
+
+โค้ดที่ AI สร้างที่ hash รหัสผ่านหรืออ่านไฟล์หลายไฟล์ "พร้อมกัน" ด้วย `Promise.all` มักสมมติว่า concurrency ของ Node ไม่จำกัด — ซึ่งไม่จริงเลยสำหรับอะไรก็ตามที่ผ่าน threadpool และการผสมงานที่กิน threadpool หนัก ๆ กับ I/O อื่นที่ไม่เกี่ยวข้องอาจทำให้ I/O นั้นอดตายได้
+
+<SpotTheBug code={`// AI-written password check middleware, called on every login request
+async function checkPassword(candidate, storedHash) {
+  return new Promise(function (resolve, reject) {
+    crypto.pbkdf2(candidate, 'salt', 200000, 64, 'sha512', function (err, derivedKey) {
+      if (err) reject(err); else resolve(derivedKey.toString('hex') === storedHash);
+    });
+  });
+}
+// Comment left by the AI: "async, so this scales to as many concurrent logins as needed"
+`}>
+`crypto.pbkdf2` รันบน threadpool ของ libuv ซึ่งมีแค่ 4 เธรดโดยค่าเริ่มต้น — มัน**ไม่**สเกลไปตาม "จำนวน login พร้อมกันเท่าที่ต้องการ" เลย เมื่อมี login พร้อมกันเป็น burst การเรียก `checkPassword` ตัวที่ 5 เป็นต้นไปจะต่อคิวอยู่หลัง 4 ตัวแรก เพิ่ม latency จริง ที่แย่กว่านั้นคือถ้าโปรเซสเดียวกันมีการอ่าน `fs` แบบ async, `dns.lookup` หรือการบีบอัด `zlib` ที่อื่นในแอปด้วย สิ่งเหล่านั้นแชร์เธรดสี่ตัวเดียวกันเป๊ะ ๆ — burst ของการเช็ก login สามารถทำให้ file operation หรือ DNS operation ที่ไม่เกี่ยวข้องกันเลยที่อื่นในแอปช้าลงอย่างวัดได้จริง วิธีแก้ไม่ใช่การแก้โค้ดฟังก์ชันนี้เท่าไหร่ แต่เป็นการวางแผนกำลัง (capacity): เพิ่ม `UV_THREADPOOL_SIZE` ถ้า workload คุ้ม, จำกัด rate ของการ hash พร้อมกัน หรือย้ายไป `worker_threads` ถ้าต้องแยกออกจาก threadpool consumer อื่น
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+มีแค่ fs, crypto บางฟังก์ชัน, dns.lookup และ zlib เท่านั้นที่แชร์ thread pool ขนาด 4 ของ Node — socket กับ timer ใช้ async I/O ของ kernel เองแทน — ดังนั้น "async" ไม่ได้แปลว่า "concurrency ไม่จำกัด" สำหรับอะไรก็ตามในกลุ่มแรก
+</Callout>
+
+export const libuvQuiz = [
+  {
+    q: 'Phase ใดของ libuv event loop รัน callback ของ setImmediate?',
+    options: [
+      'timers',
+      'poll',
+      'check',
+      'close callbacks',
+    ],
+    answer: 2,
+    explain: 'callback ของ setImmediate ถูกระบุไว้ชัดเจนว่ารันใน check phase ซึ่งมาทันทีหลัง poll',
+  },
+  {
+    q: 'ขนาดเริ่มต้นของ threadpool ใน libuv คือเท่าไร?',
+    options: [
+      '1 (single-threaded)',
+      '4',
+      'หนึ่งตัวต่อ CPU core',
+      'ไม่จำกัด — โตตามความต้องการ',
+    ],
+    answer: 1,
+    explain: 'ค่าเริ่มต้นคือ 4 เธรด ปรับได้ผ่าน environment variable UV_THREADPOOL_SIZE ซึ่งต้องตั้งก่อนที่ pool จะถูกสร้าง',
+  },
+  {
+    q: 'ข้อใดต่อไปนี้ไม่ได้ใช้ threadpool ของ libuv?',
+    options: [
+      'fs.readFile',
+      'crypto.pbkdf2',
+      'การเชื่อมต่อ TCP socket',
+      'zlib.gzip (แบบ async)',
+    ],
+    answer: 2,
+    explain: 'TCP/UDP socket ถูกจัดการด้วย async I/O ของ OS kernel โดยตรง (epoll/kqueue/IOCP) — ไม่เกี่ยวกับ threadpool เลย ส่วน fs, crypto บางฟังก์ชัน และ method แบบ async ของ zlib ใช้ threadpool จริง',
+  },
+  {
+    q: 'โค้ดนี้วัดอะไร และควรคาดหวังผลอย่างไร?\n```js\nconst t0 = performance.now();\nawait Promise.all(Array.from({ length: 8 }, () => hashOnce()));\nconsole.log(performance.now() - t0);\n```\nเมื่อ hashOnce() คือการเรียก crypto.pbkdf2 ที่ผูกกับ threadpool และ pool ถูกปล่อยไว้ที่ขนาดเริ่มต้น',
+    options: [
+      'ทั้ง 8 การเรียกรันด้วยความเร็ว parallel จริง — เวลารวมพอ ๆ กับ 1 การเรียก',
+      'การเรียก 8 ครั้งรันเป็นสองระลอกของ 4 (pool มีแค่ 4 เธรด) — เวลารวมประมาณสองเท่าของการเรียกครั้งเดียว',
+      'มัน throw — Promise.all ใช้กับ threadpool operation เกิน 4 ตัวไม่ได้',
+      '4 การเรียกจะล้มเหลวเงียบ ๆ พอดี',
+    ],
+    answer: 1,
+    explain: 'ด้วย UV_THREADPOOL_SIZE เริ่มต้นที่ 4 มีแค่ 4 การเรียก pbkdf2 เท่านั้นที่รัน parallel จริงได้ อีก 4 ตัวรอเธรดว่าง ทำให้ตัวที่ช้าที่สุดใช้เวลาประมาณสองเท่าเทียบกับ batch ของ 4 หรือน้อยกว่า',
+  },
+  {
+    q: 'comment ของ AI อ้างว่าการเช็ก password ด้วย pbkdf2 นั้น "async ดังนั้นสเกลไปตามจำนวน login พร้อมกันเท่าที่ต้องการ" ทำไมถึงผิด?',
+    options: [
+      'pbkdf2 จริง ๆ แล้วเป็น synchronous ทั้งที่มี API แบบ callback',
+      'crypto.pbkdf2 รันบน threadpool ของ libuv ที่มี 4 เธรดตายตัว แชร์กับ fs/dns.lookup/zlib — เกิน 4 การเรียกพร้อมกัน งานจะต่อคิวและอาจทำให้ I/O อื่นช้าลงด้วย',
+      'Node รัน pbkdf2 ได้แค่ครั้งเดียวต่อโปรเซส',
+      'จริง ๆ แล้วถูกต้อง — operation แบบ async ใน Node ไม่มีข้อจำกัดเรื่อง concurrency',
+    ],
+    answer: 1,
+    explain: 'การเป็น async แปลว่าไม่บล็อกเธรด JS เท่านั้น ไม่ได้แปลว่า parallelism ทางฮาร์ดแวร์ไม่จำกัด pbkdf2 แย่งช่อง threadpool 4 ช่องเดียวกันกับงาน fs/crypto/dns.lookup/zlib อื่นในโปรเซส',
+  },
+];
+
+<Quiz client:visible id="event-loop-async/libuv-and-threadpool" questions={libuvQuiz} />
+
+<ProgressTracker client:visible id="event-loop-async/libuv-and-threadpool" />

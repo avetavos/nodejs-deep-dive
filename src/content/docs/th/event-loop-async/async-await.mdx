@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## async function
 
@@ -70,22 +71,123 @@ function fetchB() { return Promise.resolve('B'); }
 var [a, b] = await Promise.all([fetchA(), fetchB()]);
 ```
 
-## ส่ง context ข้าม await: AsyncLocalStorage
+## forEach(async ...) ไม่ได้ทำอย่างที่หน้าตามันดูเลย
 
-request ID ที่ตั้งไว้ตอนต้น handler จะหายไปเมื่อ `await` ชั้นในกลับมาทำงานต่อ — เว้นแต่คุณเก็บมันไว้ใน `AsyncLocalStorage` Node 24 สร้างมันใหม่บน **AsyncContextFrame** ซึ่งส่ง store ต่อผ่านทุก `await`, timer และ callback โดยมี overhead น้อยกว่า implementation แบบ async-hooks เดิมมาก:
+`Array.prototype.forEach` ถูกออกแบบมาสำหรับ callback แบบ synchronous — มันไม่สนใจว่า callback คืนอะไร และไม่รออะไรเลย การส่งฟังก์ชัน `async` ให้มันไม่ได้เปลี่ยนสิ่งนั้น: `forEach` ยิง callback ทั้งหมด เพิกเฉยต่อ Promise ที่แต่ละตัวคืนมา แล้วทำงานต่อทันที
 
-```js
-import { AsyncLocalStorage } from 'node:async_hooks';
-
-const requestContext = new AsyncLocalStorage();
-
-async function handle(req) {
-  await requestContext.run({ id: req.id }, async function() {
-    await save(req);                        // any depth of awaits…
-    console.log(requestContext.getStore()); // …still sees { id: req.id }
+export const forEachAsyncCode = `function fakeSave(item) {
+  return new Promise(function (resolve) {
+    setTimeout(function () { resolve('saved ' + item); }, 0);
   });
 }
-```
+
+var items = ['a', 'b', 'c'];
+
+console.log('forEach(async ...) starting');
+items.forEach(async function (item) {
+  var result = await fakeSave(item);
+  console.log('forEach saw:', result);
+});
+console.log('forEach(async ...) already "finished" — none of the awaits above have resolved yet');
+`;
+
+<NodeRunner client:visible code={forEachAsyncCode} />
+
+บรรทัด "finished" พิมพ์**ก่อน**บรรทัด `forEach saw:` ใด ๆ ทั้งนั้น — `forEach` เอง return แบบ synchronous ทันทีที่ยิง callback ครบทั้งสามตัว นานก่อนที่ `await` ตัวไหนจะ settle เลย ทีนี้ลองดูว่าเกิดอะไรขึ้นเมื่อ Promise ที่ถูกเพิกเฉยตัวหนึ่ง reject:
+
+export const forEachAsyncBugCode = `// @expect-throw
+function fakeSave(item) {
+  return new Promise(function (resolve, reject) {
+    setTimeout(function () {
+      if (item === 'bad') reject(new Error('save failed: ' + item));
+      else resolve('saved ' + item);
+    }, 0);
+  });
+}
+
+var items = ['a', 'bad', 'c'];
+
+console.log('forEach(async ...) starting');
+items.forEach(async function (item) {
+  var result = await fakeSave(item);
+  console.log('forEach saw:', result);
+});
+console.log('forEach(async ...) already "finished" — none of the awaits above have resolved yet');
+`;
+
+<NodeRunner client:visible code={forEachAsyncBugCode} />
+
+กด Run: ในแท็บ browser sandbox นี้ การ reject จะถูกกลืนไปเงียบ ๆ — คุณจะเห็น `saved a` แล้วไม่มีอะไรสำหรับ `bad` เลย และแท็บก็ยังทำงานต่อไป (browser จริงจะยิง event `unhandledrejection` แบบเงียบ ๆ ที่คุณจะเห็นก็ต่อเมื่อเปิด devtools) รันโค้ดชุดเดียวกันนี้เป็นสคริปต์ Node ธรรมดา ผลลัพธ์ต่างออกไปมากและโหดกว่า: unhandled rejection ทำให้โปรเซส crash โดยค่าเริ่มต้น ก่อนที่ `item === 'c'` จะมีโอกาสได้ทำงานด้วยซ้ำ — item เสียตัวเดียวทำให้ทั้ง batch ล่ม ไม่ใช่แค่ iteration ของมันเอง
+
+เทียบกับ `for...of` ที่ใช้ `await` ซึ่งรอทีละขั้น (เรียงลำดับ และ error ส่งต่อผ่าน `try/catch` ปกติได้) กับ `Promise.all(items.map(fn))` ที่รันทุกอย่างพร้อมกันและรอจริง ๆ จนครบ:
+
+export const forOfVsAllCode = `function fakeSave(item) {
+  return new Promise(function (resolve) {
+    setTimeout(function () { resolve('saved ' + item); }, 0);
+  });
+}
+
+async function runSequential(items) {
+  console.log('for...of starting');
+  for (const item of items) {
+    var result = await fakeSave(item);
+    console.log('for...of saw:', result);
+  }
+  console.log('for...of really finished — every item is saved');
+}
+
+async function runConcurrent(items) {
+  console.log('Promise.all(map) starting');
+  var results = await Promise.all(items.map(fakeSave));
+  console.log('Promise.all(map) really finished:', results.join(', '));
+}
+
+async function main() {
+  await runSequential(['a', 'b']);
+  await runConcurrent(['a', 'b']);
+}
+
+main();
+`;
+
+<NodeRunner client:visible code={forOfVsAllCode} />
+
+ทั้ง `for...of` และ `Promise.all(map)` รอจริง ๆ — บรรทัด "really finished" พิมพ์ก็ต่อเมื่อทุก item เสร็จแล้วเท่านั้น และการ reject ข้างในทั้งสองแบบเป็น rejection ปกติที่ catch ได้ ไม่ใช่ถูกเพิกเฉยเงียบ ๆ
+
+## ส่ง context ข้าม await: AsyncLocalStorage
+
+request ID ที่ตั้งไว้ตอนต้น handler จะหายไปเมื่อ `await` ชั้นในกลับมาทำงานต่อ — เว้นแต่คุณเก็บมันไว้ใน `AsyncLocalStorage` Node 24 สร้างมันใหม่บน **AsyncContextFrame** ซึ่งส่ง store ต่อผ่านทุก `await`, timer และ callback โดยมี overhead น้อยกว่า implementation แบบ async-hooks เดิมมาก เดโมด้านล่างรัน "request" พร้อมกันสองตัวที่มี id และ delay ต่างกัน แล้วยืนยันว่าไม่มีตัวไหนเห็น context ของอีกตัวเลย:
+
+export const asyncLocalStorageCode = `import { AsyncLocalStorage } from 'node:async_hooks';
+
+const als = new AsyncLocalStorage();
+
+function log(msg) {
+  const store = als.getStore();
+  console.log('[' + (store ? store.id : 'no-context') + ']', msg);
+}
+
+async function handleRequest(id, delayMs) {
+  await als.run({ id: id }, async function () {
+    log('start');
+    await new Promise(function (resolve) { setTimeout(resolve, delayMs); });
+    log('after await, still has the right id');
+  });
+}
+
+await Promise.all([handleRequest('req-1', 20), handleRequest('req-2', 5)]);
+console.log('all requests finished');
+`;
+
+export const asyncLocalStorageOut = `[req-1] start
+[req-2] start
+[req-2] after await, still has the right id
+[req-1] after await, still has the right id
+all requests finished`;
+
+<NodeRunner client:visible code={asyncLocalStorageCode} node expected={asyncLocalStorageOut} />
+
+แม้ callback ของ `req-2` จะกลับมาทำงานก่อน (timer 5 ms ของมันยิงก่อน timer 20 ms ของ `req-1`) `getStore()` ของแต่ละ request ก็ยังคืน `{ id }` ของตัวเองเสมอ — context เดินตามสาย `await` ที่มันเริ่มไว้ ไม่ใช่ตามลำดับที่ callback บังเอิญยิง
 
 ## เดโมที่รันได้
 
@@ -125,6 +227,37 @@ main();
 การใช้ `await` ในลูป `for` ทำให้แต่ละรอบทำงานทีละอัน หากต้องการรันงานพร้อมกัน ให้รวบรวม Promise ไว้ในอาร์เรย์แล้วส่งให้ `Promise.all`
 </Callout>
 
+## Mental Model
+
+`async`/`await` คือ syntax sugar บน Promise ไม่ใช่กลไกใหม่ — `await expr` แปลว่า "หยุดฟังก์ชันนี้ตรงนี้ กลับมาทำงานต่อด้วยค่าที่ resolve ของ expr เมื่อมัน settle แล้ว และปล่อยให้ทุกอย่างอื่นทำงานระหว่างนั้น" เพราะข้างใต้ยังเป็น Promise อยู่ อะไรก็ตามที่คาดหวัง callback แบบ Promise (`.then`, `Array.prototype.forEach`, `.map` ที่ไม่ตามด้วย `Promise.all`) ยังได้รับ Promise จาก async function อยู่ดี และจะไม่รอมันให้อัตโนมัติ — `await` หยุดแค่ฟังก์ชันที่มันอยู่ข้างในเท่านั้น ไม่เคยหยุดผู้เรียกฟังก์ชันที่ลืมส่ง Promise กลับไปให้
+
+## Trade-offs
+
+`async`/`await` ทำให้โค้ด async อ่านจากบนลงล่างเหมือนโค้ด synchronous ซึ่งเป็นเหตุผลเดียวกับที่มันซ่อนสองเรื่องที่คุณต้องเติมกลับเข้าไปเอง: concurrency (การ `await` เรียงลำดับอ่านง่ายแต่ช้า — ต้องเลือกใช้ `Promise.all` เองถึงจะเร็ว) และรูปแบบการวนซ้ำ (ลูป `for...of` อ่านเหมือนเดิมไม่ว่า body จะเป็น async หรือไม่ จึงไม่มีสัญญาณเตือนสายตาเลยว่า `items.forEach(async fn)` ทำลายสมมติฐานนั้นแบบเงียบ ๆ) ความอ่านง่ายที่ได้มาเป็นของจริง แต่มันย้ายภาระ "โค้ดนี้รอจริงไหม" ไปที่การอ่าน iteration method แทนที่จะเป็นคีย์เวิร์ด `await`
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"ถ้าฟังก์ชันเป็น async การเรียกมันจะรอจนเสร็จเสมอ"** รอก็ต่อเมื่อผู้เรียก `await` การเรียกนั้น (หรือ chain `.then`) เท่านั้น การเรียก async function โดยไม่ `await` แค่เริ่มมันแล้วทำงานต่อทันที — เหมือนกับการเรียกฟังก์ชันอื่นที่ return Promise ทุกประการ
+- **"`forEach` ก็แค่ for loop เฉย ๆ ดังนั้น await ข้างในทำงานแบบเดียวกัน"** ไม่จริง — `forEach` ไม่เคยดูว่า callback ของมัน return อะไร ดังนั้น Promise ของ callback แบบ async (และ rejection ข้างในมัน) จึงตัดขาดจากการเรียก `forEach` เองโดยสิ้นเชิง
+- **"AsyncLocalStorage เป็น global state ดังนั้น request ที่รันพร้อมกันอาจรั่วเข้าหากันได้"** ตรงข้ามเลย โดยการออกแบบ — การเรียก `als.run(store, fn)` แต่ละครั้งสร้าง context ที่แยกจากกัน ตามสาย `await` ของตัวเองเท่านั้น ซึ่งเป็นสิ่งที่เดโมด้านบนพิสูจน์ให้เห็นสำหรับสอง request ที่รันพร้อมกัน
+
+## อ่านโค้ดที่ AI เขียน
+
+bug ที่พบบ่อยที่สุดในโค้ด async ที่ AI สร้างคือการลืม `await` การเรียกที่ return Promise — โค้ดยังทำงานได้ (ไม่มีอะไร throw ตรงจุดเรียก) แค่ไม่รอผลลัพธ์ ทำให้ bug โผล่ทีหลังเป็น "ข้อมูลยังไม่ถูกบันทึก" หรือ "response กลับมาว่างเปล่า" ซึ่งไกลจากคีย์เวิร์ดที่หายไปมาก
+
+<SpotTheBug code={`async function saveUser(user) {
+  validateUser(user); // synchronous, fine
+  db.save(user);      // BUG: db.save returns a Promise — this call is not awaited
+  return { ok: true };
+}
+`}>
+`db.save(user)` return Promise แต่ไม่มีอะไร await หรือ return มันเลย `saveUser` return `{ ok: true }` ทันที — อาจจะก่อนที่การบันทึกจะไปถึงฐานข้อมูลด้วยซ้ำ และแน่นอนว่าก่อนที่คุณจะรู้ว่ามันล้มเหลวหรือไม่ เพราะการ reject จาก `db.save` จะกลายเป็น unhandled rejection แทนที่จะเป็น error ที่ถูก catch วิธีแก้คือ `await db.save(user);` (หรือ `return db.save(user).then(() => ({ ok: true }))` ถ้าต้องการให้ฟังก์ชันไม่เป็น async) — อะไรก็ตามที่ return Promise และสำคัญต่อความถูกต้อง ต้องถูก await หรือ return เสมอ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+async/await คือ Promise ที่มี syntax ดีขึ้น ไม่ใช่การรอแบบใหม่ — `await` หยุดแค่ฟังก์ชันที่มันเขียนอยู่ข้างในเท่านั้น ดังนั้นอะไรก็ตามที่เพิกเฉยต่อ Promise ที่ callback แบบ async คืนมา (forEach, การเรียกที่ไม่ await) จะไม่รอมันเช่นกัน ไม่ว่าโค้ดจะอ่านดูเหมือนรอแค่ไหนก็ตาม
+</Callout>
+
 export const asyncAwaitQuiz = [
   {
     q: 'async function คืนค่าอะไรเสมอ?',
@@ -135,6 +268,7 @@ export const asyncAwaitQuiz = [
       'undefined',
     ],
     answer: 1,
+    explain: 'แม้แต่ค่าธรรมดาที่ return ก็ถูกห่อด้วย Promise ที่ resolve แล้วโดยอัตโนมัติ — async function ไม่เคย return ค่าดิบตรง ๆ',
   },
   {
     q: 'วิธีที่ถูกต้องในการจัดการการ reject จาก Promise ที่ await คือข้อใด?',
@@ -145,6 +279,7 @@ export const asyncAwaitQuiz = [
       'ใช้ if/else หลัง await',
     ],
     answer: 2,
+    explain: 'Promise ที่ await แล้ว reject จะ throw ตรง expression await นั้น ดังนั้น try/catch ที่ล้อมรอบคือวิธีมาตรฐานในการจัดการมันภายใน async function',
   },
   {
     q: 'รูปแบบใดรันสองงาน async พร้อมกันแทนที่จะเรียงลำดับ?',
@@ -155,6 +290,29 @@ export const asyncAwaitQuiz = [
       'fetchA().then(function() { return fetchB(); });',
     ],
     answer: 1,
+    explain: 'การเริ่ม Promise ทั้งสองก่อน (เรียก fetchA() และ fetchB() ก่อน await) ทำให้มันรันพร้อมกันได้ แล้ว Promise.all ค่อยรอทั้งคู่พร้อมกัน',
+  },
+  {
+    q: 'โค้ดนี้พิมพ์อะไร?\n```js\nfunction fakeSave(item) {\n  return new Promise(function (resolve) {\n    setTimeout(function () { resolve(item); }, 0);\n  });\n}\nconsole.log(\'start\');\n[\'a\', \'b\'].forEach(async function (item) {\n  var r = await fakeSave(item);\n  console.log(\'saved\', r);\n});\nconsole.log(\'end\');\n```',
+    options: [
+      'start, saved a, saved b, end',
+      'start, end, saved a, saved b',
+      'saved a, saved b, start, end',
+      'start, end — callback ของ forEach ไม่ทำงานเลยเพราะ forEach ไม่รองรับ async',
+    ],
+    answer: 1,
+    explain: 'forEach ยิง callback แบบ async ทั้งสองตัวแล้ว return ทันทีโดยไม่รอตัวไหนเลย — "end" พิมพ์แบบ synchronous ทันทีหลังจากนั้น ส่วนบรรทัด "saved" จะปรากฏก็ต่อเมื่อ Promise ที่ await resolve ในรอบถัดไปเท่านั้น',
+  },
+  {
+    q: 'ฟังก์ชันหนึ่งเรียก `db.save(user);` โดยไม่ await แล้ว return `{ ok: true };` ทันที ถ้า db.save เกิด reject ในที่สุด จะเกิดอะไรขึ้น?',
+    options: [
+      'saveUser throw rejection แบบ synchronous ทำให้ try/catch ของผู้เรียกจัดการได้',
+      'rejection กลายเป็น unhandled rejection ที่ตัดขาดจากสิ่งที่ผู้เรียก catch ได้ — ในขณะที่ { ok: true } ถูก return ไปแล้ว',
+      'JavaScript retry db.save() ให้อัตโนมัติหนึ่งครั้ง',
+      'ไม่มีอะไรเกิดขึ้น — Promise ที่ไม่ถูก await จะ reject ไม่ได้เลย',
+    ],
+    answer: 1,
+    explain: 'ถ้าไม่มี await หรือไม่ return Promise saveUser จะไม่มีการเชื่อมโยงกับผลลัพธ์สุดท้ายของ db.save เลย — rejection ของมันโผล่มาทีหลังเป็น unhandled rejection ในขณะที่ผู้เรียกเชื่อไปแล้วว่าการบันทึกสำเร็จ',
   },
 ];
 

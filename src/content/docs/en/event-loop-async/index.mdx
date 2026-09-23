@@ -9,6 +9,8 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import Mermaid from '../../../../components/Mermaid.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is the Event Loop?
 
@@ -30,8 +32,9 @@ The loop runs continuously: run a phase's callbacks one at a time, and after **e
 | Callbacks | The original async pattern and Node's error-first convention |
 | Promises | States, chaining, and combinators |
 | Async/Await | Reading async code like synchronous code |
+| Timers | `setTimeout`, `setInterval`, and the `timers/promises` API |
 | Microtasks & Macrotasks | Queue priorities and drain order |
-| Timers | `setTimeout`, `setInterval`, and timer precision |
+| libuv & the Threadpool | What actually runs where, underneath the JavaScript |
 
 ## A first async demo
 
@@ -56,8 +59,62 @@ setTimeout(function() { console.log('C — macrotask (setTimeout)'); }, 0);
 
 The output is always `A`, then `B`, then `C` — the event loop guarantees this ordering.
 
-<Callout title="Single thread, non-blocking">
-Node.js runs your JavaScript on a single thread. It stays responsive by delegating I/O to the OS and processing results asynchronously.
+## What runs where
+
+"Async" does not mean "runs on another thread." Different async operations are handled by completely different mechanisms, and knowing which one you are looking at explains a lot of surprising benchmarks later in this module:
+
+| Operation | Where it actually runs |
+|---|---|
+| `Promise`, `async`/`await`, `queueMicrotask` | JS microtask queue — still the **one** JS thread |
+| `setTimeout`, `setImmediate`, network sockets | libuv event loop, backed by the OS kernel's async I/O (epoll/kqueue/IOCP) — no extra thread |
+| `fs.readFile`, `crypto.pbkdf2`/`scrypt`/`randomBytes`, `dns.lookup`, `zlib` | libuv's fixed-size **threadpool** (4 threads by default) |
+| A synchronous loop, `JSON.parse` on a huge string, `fs.readFileSync` | The call stack — blocks everything, including the loop itself |
+
+<Mermaid title="Where an async call actually goes" code={`flowchart LR
+  Code["Your JS code"] --> Stack["Call stack (one thread)"]
+  Stack -->|Promise / await| Micro["Microtask queue"]
+  Stack -->|fs, crypto, dns.lookup, zlib| Pool["libuv threadpool (4 threads)"]
+  Stack -->|sockets, timers, signals| Kernel["OS kernel async I/O"]
+  Pool --> Loop["Event loop"]
+  Kernel --> Loop
+  Micro --> Loop
+  Loop --> Stack
+`} />
+
+The *libuv & the Threadpool* lesson at the end of this module measures the threadpool with real numbers and walks through libuv's six phases in detail.
+
+## Mental Model
+
+Think of the event loop as a single worker (the JS thread) with two inboxes it checks between every task: a **microtask inbox** (always emptied completely, first) and a **macrotask inbox** (one phase's worth of items per pass). Work that the worker itself cannot do without blocking — reading a file, hashing a password, resolving a DNS name — gets handed off to either a small pool of helper threads (libuv's threadpool) or directly to the OS kernel (sockets), and comes back as a queued callback when it is done.
+
+## Trade-offs
+
+A single JS thread means no data races in your own code — you never need locks around shared JavaScript state. The cost is that **any** synchronous CPU-bound work (a big loop, `JSON.parse` on megabytes of text, synchronous crypto) blocks every other request in the process. Node is a poor fit for CPU-heavy work unless you move that work off the main thread (`worker_threads`, a queue, a separate service) — it excels at I/O-heavy work with many concurrent, mostly-idle connections.
+
+## Common Misconceptions
+
+- **"Node is single-threaded, so it can't handle concurrent I/O."** Wrong — the single thread is only for *your JavaScript*. The kernel and libuv's threadpool do the actual waiting concurrently; your JS thread just gets notified when each one finishes.
+- **"Async means it runs on another CPU core."** Not for `Promise`/`await` — those never leave the JS thread. Only threadpool and kernel-backed operations use anything other than the JS thread.
+- **"One event loop iteration processes one macrotask."** Node processes an entire phase's due callbacks per iteration (see the *Microtasks & Macrotasks* lesson for a runnable proof).
+
+## Reading AI-generated code
+
+AI-generated Node.js snippets often label a function `async` and assume that alone makes any code inside it non-blocking. It does not — `async` only changes what the function *returns* (a Promise); the synchronous statements inside it still run on the call stack and still block everything else until they finish.
+
+<SpotTheBug code={`async function computeReport(rows) {
+  // "It's async, so this won't block other requests" — comment left by the AI
+  let total = 0;
+  for (let i = 0; i < rows.length; i++) {
+    total += heavySyncTransform(rows[i]); // synchronous, CPU-bound, no await anywhere
+  }
+  return total;
+}
+`}>
+Marking a function `async` does not move its body off the call stack. `heavySyncTransform` runs synchronously for every row with no `await` in sight, so the entire loop blocks the event loop — every other request, timer, and I/O callback waits until it finishes. `async` only means "this function returns a Promise"; it says nothing about *how* the code inside runs. The fix is to actually yield (chunk the work with `setImmediate`/await between batches) or move it to a `worker_thread`.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Node.js runs your JavaScript on one thread and delegates I/O to the kernel and a small threadpool — but any synchronous code you write still blocks that one thread completely.
 </Callout>
 
 export const indexQuiz = [
@@ -70,6 +127,7 @@ export const indexQuiz = [
       'Microtasks and macrotasks alternate one by one',
     ],
     answer: 1,
+    explain: 'After every callback, Node drains process.nextTick and then the whole microtask queue before it moves on to the next macrotask.',
   },
   {
     q: 'Which of the following is placed in the microtask queue?',
@@ -80,6 +138,40 @@ export const indexQuiz = [
       'A DOM click event handler',
     ],
     answer: 2,
+    explain: 'Promise reactions (.then/.catch/.finally) and queueMicrotask callbacks are microtasks; timers are macrotasks.',
+  },
+  {
+    q: 'Which of these never leaves the single JS thread, even though it looks async?',
+    options: [
+      'fs.readFile',
+      'crypto.pbkdf2',
+      'await Promise.resolve(1)',
+      'dns.lookup',
+    ],
+    answer: 2,
+    explain: 'Promises and await are pure JS-thread microtasks. fs.readFile, crypto.pbkdf2, and dns.lookup are handed off to libuv\'s threadpool.',
+  },
+  {
+    q: 'What does this print?\n```js\nasync function work() {\n  for (let i = 0; i < 3e8; i++) {} // no await\n  console.log(\'done\');\n}\nconsole.log(\'before\');\nwork();\nconsole.log(\'after\');\n```',
+    options: [
+      'before, after, done — the loop yields because work() is async',
+      'before, done, after',
+      'before, after — then a long pause, then done',
+      'done, before, after',
+    ],
+    answer: 2,
+    explain: 'Marking work() async does not make the synchronous loop non-blocking. "before" logs, then work() blocks the thread for the whole loop, then "after" and "done" both print once the call stack is free — "after" first because it is still the synchronous script, printed right after work() returns control (a Promise, not a value).',
+  },
+  {
+    q: 'What is wrong with this reasoning: "I put my file hashing inside an async function, so it will not block other requests"?',
+    options: [
+      'Nothing — async functions always run off the main thread',
+      'async only wraps the return value in a Promise; a synchronous loop inside still blocks the call stack',
+      'It is correct as long as you use crypto.pbkdf2 instead of a loop',
+      'It is only a problem if the function is exported',
+    ],
+    answer: 1,
+    explain: 'async/await controls how a function\'s result is delivered (as a Promise) and where it can pause (at an await). It does not move any synchronous code inside it to another thread.',
   },
 ];
 

@@ -9,6 +9,7 @@ import NodeRunner from '../../../../components/NodeRunner.tsx';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## What is a Promise?
 
@@ -83,6 +84,160 @@ The output is always: `Fetched: data-A`, then `All done: data-A and data-B`, the
 Since Node 15, an unhandled promise rejection **terminates the process by default** (`--unhandled-rejections=throw`). The old warn-only behavior is deprecated (DEP0018). Always chain `.catch()` or use try/catch with async/await.
 </Callout>
 
+You can dial that behavior with the `--unhandled-rejections` flag if you need to, though `throw` (the default) is almost always the right choice in new code:
+
+| Mode | Behavior |
+|---|---|
+| `throw` (default since Node 15) | Raises an uncaught exception and crashes the process |
+| `strict` | Same as `throw`, plus rejections that happen during process shutdown also crash |
+| `warn` | Logs a warning to stderr, does not crash — the old pre-15 default, now discouraged |
+| `none` | Silences the warning entirely |
+
+## Promise.all does not cancel its siblings
+
+When one Promise passed to `Promise.all` rejects, `Promise.all` itself settles (rejects) immediately — but it does **not** cancel or stop the work behind the other Promises. Their underlying operations (a timer, a fetch, a database query) keep running to completion; they just have no one left listening for the result by the time they finish:
+
+export const noCancelCode = `function slowTask(label, ms) {
+  return new Promise(function (resolve) {
+    setTimeout(function () {
+      console.log(label + ' finished — still ran after Promise.all had already rejected');
+      resolve(label);
+    }, ms);
+  });
+}
+
+var fast = Promise.reject(new Error('fast task failed'));
+var slow = slowTask('slow task', 30);
+
+Promise.all([fast, slow]).catch(function (err) {
+  console.log('Promise.all rejected immediately:', err.message);
+});
+`;
+
+export const noCancelOut = `Promise.all rejected immediately: fast task failed
+slow task finished — still ran after Promise.all had already rejected`;
+
+<NodeRunner client:visible code={noCancelCode} node expected={noCancelOut} />
+
+`Promise.all` rejects the instant the first input rejects, but `slowTask`'s `setTimeout` was already scheduled — it fires 30 ms later regardless, and its `resolve` call has no effect on anything (the combined Promise already settled). If you need every result **and** every outcome instead of an early exit, use `Promise.allSettled`, which never rejects and gives you a `{ status, value }` or `{ status, reason }` object per input, once all of them have finished:
+
+```js
+// @skip-verify illustrative — taskA/taskB/taskC are placeholders for your own Promise-returning functions
+Promise.allSettled([taskA(), taskB(), taskC()]).then(function (results) {
+  results.forEach(function (r) {
+    if (r.status === 'fulfilled') console.log('ok:', r.value);
+    else console.log('failed:', r.reason.message);
+  });
+});
+```
+
+## race vs any, and cancelling with AbortController
+
+`Promise.race` settles — fulfilled or rejected — with whichever input settles first. `Promise.any` ignores rejections and resolves with the first **fulfillment**, only rejecting if every input rejects:
+
+export const raceAnyCode = `var fast = Promise.reject(new Error('fast rejection'));
+var slow = new Promise(function (resolve) {
+  setTimeout(function () { resolve('slow fulfillment'); }, 20);
+});
+
+Promise.race([fast, slow]).then(
+  function (v) { console.log('race resolved:', v); },
+  function (err) { console.log('race rejected:', err.message); }
+);
+
+Promise.any([fast, slow]).then(function (v) {
+  console.log('any resolved:', v);
+});
+`;
+
+export const raceAnyOut = `race rejected: fast rejection
+any resolved: slow fulfillment`;
+
+<NodeRunner client:visible code={raceAnyCode} node expected={raceAnyOut} />
+
+`race` settles with whatever finishes first — here, the already-rejected `fast` — even though a fulfillment was on the way. `any` skips past that rejection and waits for the first success.
+
+None of `all`, `race`, `allSettled`, or `any` can actually **cancel** the losing operations on their own — a `setTimeout` or an in-flight `fetch` keeps running unless something explicitly tells it to stop. That is what `AbortController` is for: pass its `signal` into whatever supports cancellation (`fetch`, `fs` promises, or your own code via an `'abort'` listener), and call `controller.abort()` when you no longer care about the result:
+
+export const abortRaceCode = `function slowOperation(signal) {
+  return new Promise(function (resolve, reject) {
+    const t = setTimeout(function () { resolve('operation finished'); }, 100);
+    signal.addEventListener('abort', function () {
+      clearTimeout(t);
+      reject(new Error('aborted: ' + signal.reason));
+    });
+  });
+}
+
+const controller = new AbortController();
+setTimeout(function () { controller.abort('client gave up after 20ms'); }, 20);
+
+slowOperation(controller.signal)
+  .then(function (v) { console.log('resolved:', v); })
+  .catch(function (err) { console.log('rejected:', err.message); });
+`;
+
+export const abortRaceOut = `rejected: aborted: client gave up after 20ms`;
+
+<NodeRunner client:visible code={abortRaceCode} node expected={abortRaceOut} />
+
+The abort at 20 ms beats the 100 ms timer, `clearTimeout` actually stops the pending work this time (unlike the `Promise.all` example above), and the Promise rejects with the abort reason instead of ever resolving.
+
+## The new Promise anti-pattern
+
+`new Promise(executor)` exists to wrap APIs that are **not** already Promise-based — a callback API, an event, a timer. If the thing inside the executor already returns a Promise, wrapping it again adds nothing but risk (a forgotten `reject`, a swallowed rejection):
+
+```js
+// Needed: fs.readFile is callback-based, not Promise-based
+function readFileAsPromise(path) {
+  return new Promise(function (resolve, reject) {
+    require('node:fs').readFile(path, 'utf8', function (err, data) {
+      if (err) reject(err); else resolve(data);
+    });
+  });
+}
+
+// Not needed: fetch already returns a Promise — this just adds risk
+function getJson(url) {
+  return new Promise(function (resolve, reject) {
+    fetch(url).then(resolve, reject); // just: return fetch(url)
+  });
+}
+```
+
+## Mental Model
+
+A Promise is a receipt for a value that is not ready yet, with exactly one of three states written on it forever once it settles. Combinators do not change how any individual Promise settles — they only describe **when to stop waiting and look at the receipts**: `all` stops at the first rejection, `allSettled` waits for every receipt regardless of outcome, `race` stops at the first settlement of any kind, `any` stops at the first success. None of them reach back and cancel the work a Promise represents; only `AbortController` (or a cancellation mechanism the underlying API itself supports) can do that.
+
+## Trade-offs
+
+`Promise.all` is the right default when you need every result and a failure anywhere should stop the whole operation — but it throws away partial success information (which ones actually worked) and does not free any resources the losers were using. `allSettled` keeps that information at the cost of always waiting for the slowest input, even a doomed one. `AbortController` adds real cancellation, but only for code written to respect it — sprinkling a signal through `fetch` calls is easy; threading it through your own long-running functions takes discipline everywhere you write an `await` or a timer.
+
+## Common Misconceptions
+
+- **"`Promise.all` rejecting means the other tasks stopped."** They did not stop — they simply lost their audience. Their side effects (a write, a charge, a log line) still happen.
+- **"`Promise.race` picks the fastest successful result."** It picks whichever settles first, success or failure — a fast rejection beats a slow success every time.
+- **"Wrapping a value in `new Promise(...)` is always the way to make something async-friendly."** Only when the thing you are wrapping is not already a Promise. Wrapping a Promise in another Promise is redundant and a common place to accidentally drop error handling.
+
+## Reading AI-generated code
+
+AI-generated code frequently fires off a `Promise.all` (or a bare Promise-returning call) without a `.catch()` anywhere in the chain and without the caller awaiting it in a `try/catch` either — which is exactly the shape that triggers the crash described in the Callout above.
+
+<SpotTheBug code={`function loadAllUsers(ids) {
+  return Promise.all(ids.map(function (id) { return fetchUser(id); }));
+  // no .catch() here...
+}
+
+loadAllUsers([1, 2, 3]);
+// ...and the caller doesn't await it or attach .catch() either
+`}>
+If any `fetchUser(id)` rejects, `Promise.all` rejects too — and nothing in this file ever attaches a rejection handler to it. On Node 15+, that is an **unhandled rejection**, which crashes the process by default (`--unhandled-rejections=throw`), not just a silently ignored error. The fix is to attach `.catch()` where the Promise is created, or have the caller `await` it inside a `try/catch` — never leave a Promise chain with no rejection handler anywhere along it.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A combinator only decides when to stop waiting, never whether the underlying work stops — reach for AbortController when you actually need cancellation, and never leave a Promise chain without a `.catch()` or a surrounding `try/catch`.
+</Callout>
+
 export const promisesQuiz = [
   {
     q: 'Which Promise state means the operation completed successfully?',
@@ -93,6 +248,7 @@ export const promisesQuiz = [
       'Settled',
     ],
     answer: 2,
+    explain: 'Fulfilled means the operation succeeded and the Promise now holds a value; "settled" is the umbrella term covering both fulfilled and rejected.',
   },
   {
     q: 'What does Promise.all do when one of the input Promises rejects?',
@@ -103,6 +259,7 @@ export const promisesQuiz = [
       'It retries the rejected Promise',
     ],
     answer: 1,
+    explain: 'Promise.all rejects as soon as any single input rejects, without waiting for the others to settle.',
   },
   {
     q: 'Which combinator resolves when ALL input Promises settle, and never rejects?',
@@ -113,6 +270,40 @@ export const promisesQuiz = [
       'Promise.allSettled',
     ],
     answer: 3,
+    explain: 'allSettled waits for every input to finish, then reports each outcome individually — it never itself rejects.',
+  },
+  {
+    q: 'What does this print?\n```js\nvar fast = Promise.reject(new Error(\'fast rejection\'));\nvar slow = new Promise(function (resolve) {\n  setTimeout(function () { resolve(\'slow fulfillment\'); }, 20);\n});\nPromise.any([fast, slow]).then(function (v) { console.log(v); });\n```',
+    options: [
+      'It throws immediately because one input rejected',
+      '"slow fulfillment" — Promise.any skips the rejection and resolves with the first success',
+      '"fast rejection"',
+      'Nothing prints — Promise.any requires all inputs to succeed',
+    ],
+    answer: 1,
+    explain: 'Promise.any ignores rejections as long as at least one input eventually fulfills; it only rejects (with an AggregateError) if every input rejects.',
+  },
+  {
+    q: 'A function does `return Promise.all(ids.map(fetchUser));` with no `.catch()`, and the caller never awaits the result either. What happens if one fetchUser call rejects?',
+    options: [
+      'Nothing — the rejection is silently discarded',
+      'It logs a deprecation warning but keeps running',
+      'It crashes the process by default, since nothing ever handles the rejection',
+      'It automatically retries the failed fetchUser call',
+    ],
+    answer: 2,
+    explain: 'An unhandled Promise rejection terminates the Node process by default (--unhandled-rejections=throw) — there is no implicit safety net for a Promise chain missing a .catch().',
+  },
+  {
+    q: 'Why does wrapping fetch(url) in new Promise((resolve, reject) => fetch(url).then(resolve, reject)) count as an anti-pattern?',
+    options: [
+      'fetch cannot be used inside an executor function',
+      'fetch already returns a Promise, so the wrapper is redundant and adds a place to accidentally lose error handling',
+      'It changes the resolved value type from an object to a string',
+      'It is not an anti-pattern — this is the standard way to call fetch',
+    ],
+    answer: 1,
+    explain: 'The new Promise wrapper is only needed for APIs that are not already Promise-based (callbacks, events, timers). Wrapping something already async just adds a redundant layer and a spot where reject can be forgotten.',
   },
 ];
 
