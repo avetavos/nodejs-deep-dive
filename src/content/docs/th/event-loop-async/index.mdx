@@ -18,9 +18,9 @@ JavaScript ใน Node.js ทำงานบน **เธรดเดียว** 
 
 - **Call stack** — ที่ที่โค้ดแบบ synchronous ทำงาน ทีละเฟรม
 - **Microtask queue** — เก็บ callback ของ Promise และ `queueMicrotask` ระบายจนหมดหลังจากทุก task
-- **Macrotask queue** (task queue) — เก็บ callback ของ `setTimeout`/`setInterval` ประมวลผลทีละหนึ่ง macrotask ต่อรอบ event loop
+- **Macrotask queue** (task queue) — เก็บ callback ของ `setTimeout`/`setInterval` จัดกลุ่มเป็น phase Node รันทั้ง phase ต่อหนึ่งรอบ event loop (เช่น timer ที่หมดอายุทุกตัว) — ไม่ใช่แค่ macrotask เดียว
 
-ลูปทำงานต่อเนื่อง: หยิบ macrotask → รัน → ระบาย microtask ทั้งหมด → หยิบ macrotask ถัดไป
+ลูปทำงานต่อเนื่อง: รัน callback ใน phase ทีละตัว แล้วหลังจาก**ทุก callback** จะระบาย `process.nextTick` แล้วตามด้วย microtask queue ก่อนไปยัง callback ถัดไปหรือ phase ถัดไป
 
 ## สิ่งที่โมดูลนี้ครอบคลุม
 
@@ -46,7 +46,7 @@ setTimeout(() => console.log('C — macrotask (setTimeout)'), 0);
 
 ลองรันเพื่อยืนยันลำดับ:
 
-export const indexDemoCode = `
+export const indexDemoCode = `// @browser
 console.log('A — sync');
 Promise.resolve().then(function() { console.log('B — microtask (Promise)'); });
 setTimeout(function() { console.log('C — macrotask (setTimeout)'); }, 0);

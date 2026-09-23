@@ -14,6 +14,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 `setTimeout(fn, delay)` schedules `fn` to run as a **macrotask** after at least `delay` milliseconds. The delay is a **minimum** — not a guarantee. If the call stack is busy when the timer fires, the callback waits until the stack is clear.
 
+Node clamps any delay below 1 ms up to **1 ms** — a delay of `0` or a negative number both end up firing after about 1 ms (a negative delay also logs a `TimeoutNegativeWarning`). The commonly cited "4 ms minimum" figure is a **browser** rule for timers nested 5+ levels deep — it does not apply to Node's `setTimeout`.
+
 ```js
 var id = setTimeout(function() {
   console.log('Runs after at least 100 ms');
@@ -60,7 +62,7 @@ queueMicrotask(function() {
 
 This demo shows that `setTimeout(fn, 0)` still runs **after** a resolved Promise `.then`, because the timer callback is a macrotask and microtasks drain first.
 
-export const timersCode = `
+export const timersCode = `// @browser
 setTimeout(function() {
   console.log('Timer ran second');
 }, 0);

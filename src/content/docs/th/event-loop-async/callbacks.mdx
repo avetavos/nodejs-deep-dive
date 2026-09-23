@@ -27,6 +27,10 @@ setTimeout(function() {
 API ในตัวของ Node ใช้ signature ที่สม่ำเสมอสำหรับ callback:
 
 ```js
+const fs = require('node:fs');
+
+fs.writeFileSync('data.txt', 'hello from data.txt');
+
 fs.readFile('data.txt', 'utf8', function(err, data) {
   if (err) {
     console.error('Read failed:', err.message);
@@ -35,6 +39,8 @@ fs.readFile('data.txt', 'utf8', function(err, data) {
   console.log('File contents:', data);
 });
 ```
+
+prefix `node:` ระบุชัดว่าเป็น built-in module — ใช้แทน `require('fs')` ได้ทุกที่ และเป็น**ข้อบังคับ** (ไม่ใช่แค่แนะนำ) สำหรับ built-in ใหม่บางตัวอย่าง `node:test` กับ `node:sqlite`
 
 รูปแบบคือ `(err, data)` — error มาก่อนเสมอ ผลลัพธ์มาทีหลัง ถ้างานสำเร็จ `err` จะเป็น `null` ถ้าล้มเหลว `err` จะเป็นออบเจ็กต์ `Error` และ `data` จะเป็น undefined
 
@@ -45,6 +51,19 @@ fs.readFile('data.txt', 'utf8', function(err, data) {
 เมื่องาน async หนึ่งขึ้นอยู่กับผลของอีกงานหนึ่ง คุณต้องซ้อน callback:
 
 ```js
+function step1(callback) {
+  setTimeout(function() { callback(null, 'A'); }, 0);
+}
+function step2(input, callback) {
+  setTimeout(function() { callback(null, 'B'); }, 0);
+}
+function step3(input, callback) {
+  setTimeout(function() { callback(null, 'C'); }, 0);
+}
+function handleError(err) {
+  console.error('Error:', err.message);
+}
+
 step1(function(err, resultA) {
   if (err) return handleError(err);
   step2(resultA, function(err, resultB) {
@@ -63,7 +82,7 @@ step1(function(err, resultA) {
 
 สนิปเป็ตด้านล่างจำลองสองขั้นตอน async ด้วย `setTimeout` แต่ละขั้นใช้รูปแบบ callback แบบ error-first ลองรันเพื่อดูลำดับผลลัพธ์
 
-export const callbacksCode = `
+export const callbacksCode = `// @browser
 function step1(callback) {
   setTimeout(function() {
     callback(null, 'result-A');

@@ -32,8 +32,15 @@ var p = new Promise(function(resolve, reject) {
 `.then(onFulfilled)` คืน Promise ใหม่ ทำให้ chain ขั้นตอนต่อกันได้ `.catch(onRejected)` จัดการการ reject `.finally(fn)` ทำงานไม่ว่าผลจะเป็นอย่างไร — มีประโยชน์สำหรับการ cleanup
 
 ```js
+function fetchData() {
+  return Promise.resolve({ id: 1 });
+}
+function transform(data) {
+  return { ...data, done: true };
+}
+
 fetchData()
-  .then(function(data) { return process(data); })
+  .then(function(data) { return transform(data); })
   .then(function(result) { console.log('Done:', result); })
   .catch(function(err) { console.error('Failed:', err.message); })
   .finally(function() { console.log('Cleanup'); });
@@ -52,7 +59,7 @@ fetchData()
 
 สนิปเป็ตสร้าง Promise สองตัวที่ resolve ทันทีด้วยค่าคงที่ chain ด้วย `.then` ใช้ `Promise.all` และเพิ่ม `.finally` สำหรับ cleanup
 
-export const promisesCode = `
+export const promisesCode = `// @browser
 var p1 = Promise.resolve('data-A');
 var p2 = Promise.resolve('data-B');
 
@@ -73,7 +80,7 @@ p1.then(function(data) {
 ผลลัพธ์จะเป็นเสมอ: `Fetched: data-A`, แล้ว `All done: data-A and data-B`, แล้ว `Finally: cleanup`
 
 <Callout title="แนบ catch เสมอ">
-unhandled promise rejection สามารถทำให้โปรเซส Node ล่ม (หรือ log คำเตือนใน Node เวอร์ชันใหม่) จง chain `.catch()` หรือใช้ try/catch กับ async/await เสมอ
+ตั้งแต่ Node 15 unhandled promise rejection จะ**ทำให้โปรเซสหยุดทำงานทันทีโดยค่าเริ่มต้น** (`--unhandled-rejections=throw`) พฤติกรรมแบบเดิมที่แค่ log คำเตือนถูก deprecate แล้ว (DEP0018) จง chain `.catch()` หรือใช้ try/catch กับ async/await เสมอ
 </Callout>
 
 export const promisesQuiz = [

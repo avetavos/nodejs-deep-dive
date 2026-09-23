@@ -53,7 +53,7 @@ Each recursive call pushes a new frame. The output is completely deterministic: 
 
 Run it:
 
-export const callStackCode = `
+export const callStackCode = `// @browser
 function countdown(n) {
   if (n <= 0) {
     console.log('done');

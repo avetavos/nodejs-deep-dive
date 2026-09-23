@@ -18,9 +18,9 @@ At its core, the runtime has three key structures:
 
 - **Call stack** — where synchronous code executes, one frame at a time.
 - **Microtask queue** — holds Promise callbacks and `queueMicrotask` callbacks. Drains completely after every task.
-- **Macrotask queue** (task queue) — holds `setTimeout`/`setInterval` callbacks. One macrotask is processed per event loop iteration.
+- **Macrotask queue** (task queue) — holds `setTimeout`/`setInterval` callbacks, grouped into phases. Node runs a whole phase per event loop iteration (for example, every timer that has expired) — not just one macrotask.
 
-The loop runs continuously: pick a macrotask → execute it → drain all microtasks → pick the next macrotask.
+The loop runs continuously: run a phase's callbacks one at a time, and after **every single callback** drain `process.nextTick` then the microtask queue — before moving on to the next callback or the next phase.
 
 ## What this module covers
 
@@ -46,7 +46,7 @@ setTimeout(() => console.log('C — macrotask (setTimeout)'), 0);
 
 Run it to confirm the order:
 
-export const indexDemoCode = `
+export const indexDemoCode = `// @browser
 console.log('A — sync');
 Promise.resolve().then(function() { console.log('B — microtask (Promise)'); });
 setTimeout(function() { console.log('C — macrotask (setTimeout)'); }, 0);

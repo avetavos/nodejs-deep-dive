@@ -18,30 +18,31 @@ The event loop processes async callbacks from two distinct queues with different
 - Promise `.then` / `.catch` / `.finally` callbacks
 - `queueMicrotask(fn)`
 
-**Macrotask queue** (also called the task queue) — one task is processed per event loop turn. Sources:
+**Macrotask queue** (also called the task queue) — grouped into phases (timers, I/O, check, ...). Node runs a whole phase's due callbacks per event loop iteration (for example, every timer that has expired) — not just one task. Sources:
 - `setTimeout` callbacks
 - `setInterval` callbacks
 - I/O callbacks (network, file system)
 
-The rule is simple: after each macrotask completes, the engine drains the **entire** microtask queue before picking up the next macrotask.
+The rule is simple: after **every individual callback** — not just once per phase — Node drains `process.nextTick` and then the **entire** microtask queue before running the next callback.
 
 ## The drain order
 
 ```
 ┌─────────────────────────────┐
-│  Execute one macrotask      │
+│  Run one callback           │
 │  (or the initial script)    │
 └──────────────┬──────────────┘
                │
                ▼
 ┌─────────────────────────────┐
-│  Drain all microtasks       │◄──┐
-│  (including newly added)    │   │ new microtasks
+│  Drain nextTick, then all   │◄──┐
+│  microtasks (incl. new ones)│   │ new microtasks
 └──────────────┬──────────────┘───┘
                │
                ▼
 ┌─────────────────────────────┐
-│  Pick next macrotask        │
+│  Next callback in this      │
+│  phase, or next phase       │
 └─────────────────────────────┘
 ```
 
@@ -62,6 +63,34 @@ setImmediate(function() {
 
 `process.nextTick` callbacks are drained before the microtask queue. `setImmediate` fires in the check phase of Node's event loop. Because these require the Node runtime, they are not available in the in-browser runner below — run them locally or in StackBlitz.
 
+### Proof: the timers phase runs multiple callbacks, draining after each one
+
+Two `setTimeout(..., 0)` calls both land in the same **timers phase** — but Node still drains `process.nextTick` and the microtask queue **between them**, before the second timer's callback runs:
+
+```js
+setTimeout(function() {
+  console.log('timer 1');
+  process.nextTick(function() {
+    console.log('  nextTick inside timer 1');
+  });
+  Promise.resolve().then(function() {
+    console.log('  promise inside timer 1');
+  });
+}, 0);
+
+setTimeout(function() {
+  console.log('timer 2');
+}, 0);
+
+// Output (verified on Node 24.13, x3):
+// timer 1
+//   nextTick inside timer 1
+//   promise inside timer 1
+// timer 2
+```
+
+If "one macrotask per iteration" were true, `timer 2` would already be queued for a *later* iteration and could not observe anything queued inside `timer 1`. Instead, both timers run in the **same** timers-phase pass, and the drain happens after every callback — not once per phase.
+
 ## Runnable ordering demo
 
 This demo prints four lines. Predict the order before running:
@@ -73,7 +102,7 @@ This demo prints four lines. Predict the order before running:
 
 After the synchronous script finishes, all microtasks drain in order, then the macrotask fires.
 
-export const microMacroCode = `
+export const microMacroCode = `// @browser
 console.log('1 sync');
 
 setTimeout(function() {
@@ -97,8 +126,8 @@ The output is always in this order:
 - `3 microtask (queueMicrotask)` — second microtask queued
 - `4 macrotask` — runs only after the microtask queue is empty
 
-<Callout title="Microtasks drain before the next macrotask">
-After each task completes, the engine drains the entire microtask queue — including any new microtasks added during draining — before it picks up the next macrotask.
+<Callout title="Microtasks drain after every callback">
+After **every individual callback** completes — not just once per phase — Node drains `process.nextTick` and then the entire microtask queue, including any new microtasks added during draining, before running the next callback.
 </Callout>
 
 export const microMacroQuiz = [

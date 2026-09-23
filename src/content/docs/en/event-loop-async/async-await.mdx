@@ -54,6 +54,9 @@ async function run() {
 Two sequential `await` calls run one after the other — the second starts only after the first completes:
 
 ```js
+function fetchA() { return Promise.resolve('A'); }
+function fetchB() { return Promise.resolve('B'); }
+
 var a = await fetchA();  // waits
 var b = await fetchB();  // then waits again
 ```
@@ -61,6 +64,9 @@ var b = await fetchB();  // then waits again
 To run both concurrently, start the Promises first and await them together:
 
 ```js
+function fetchA() { return Promise.resolve('A'); }
+function fetchB() { return Promise.resolve('B'); }
+
 var [a, b] = await Promise.all([fetchA(), fetchB()]);
 ```
 
@@ -85,7 +91,7 @@ async function handle(req) {
 
 The snippet below uses a `fakeFetch` helper (setTimeout-based) to simulate async calls. It first fetches sequentially, then fetches both in parallel with `Promise.all`.
 
-export const asyncAwaitCode = `
+export const asyncAwaitCode = `// @browser
 function fakeFetch(label) {
   return new Promise(function(resolve) {
     setTimeout(function() { resolve(label); }, 0);

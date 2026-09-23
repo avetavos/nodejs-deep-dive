@@ -18,30 +18,31 @@ event loop ประมวลผล callback แบบ async จากสอง�
 - callback ของ Promise `.then` / `.catch` / `.finally`
 - `queueMicrotask(fn)`
 
-**Macrotask queue** (หรือเรียก task queue) — ประมวลผลทีละหนึ่ง task ต่อรอบ event loop แหล่งที่มา:
+**Macrotask queue** (หรือเรียก task queue) — จัดกลุ่มเป็น phase (timers, I/O, check, ...) Node รัน callback ที่ถึงกำหนดทั้ง phase ต่อหนึ่งรอบ event loop (เช่น timer ที่หมดอายุทุกตัว) — ไม่ใช่แค่ task เดียว แหล่งที่มา:
 - callback ของ `setTimeout`
 - callback ของ `setInterval`
 - callback ของ I/O (network, file system)
 
-กฎง่าย ๆ: หลังแต่ละ macrotask ทำเสร็จ เอนจินจะระบาย microtask queue **ทั้งหมด** ก่อนจะหยิบ macrotask ถัดไป
+กฎง่าย ๆ: หลัง**ทุก callback แต่ละตัว** — ไม่ใช่แค่ครั้งเดียวต่อ phase — Node จะระบาย `process.nextTick` แล้วตามด้วย microtask queue **ทั้งหมด** ก่อนจะรัน callback ถัดไป
 
 ## ลำดับการระบาย
 
 ```
 ┌─────────────────────────────┐
-│  Execute one macrotask      │
+│  Run one callback           │
 │  (or the initial script)    │
 └──────────────┬──────────────┘
                │
                ▼
 ┌─────────────────────────────┐
-│  Drain all microtasks       │◄──┐
-│  (including newly added)    │   │ new microtasks
+│  Drain nextTick, then all   │◄──┐
+│  microtasks (incl. new ones)│   │ new microtasks
 └──────────────┬──────────────┘───┘
                │
                ▼
 ┌─────────────────────────────┐
-│  Pick next macrotask        │
+│  Next callback in this      │
+│  phase, or next phase       │
 └─────────────────────────────┘
 ```
 
@@ -62,6 +63,34 @@ setImmediate(function() {
 
 callback ของ `process.nextTick` ถูกระบายก่อน microtask queue ส่วน `setImmediate` ทำงานในเฟส check ของ event loop ของ Node เนื่องจากทั้งสองต้องใช้ Node runtime จึงใช้ไม่ได้ในตัวรันใน browser ด้านล่าง — ให้รันในเครื่องหรือใน StackBlitz
 
+### หลักฐาน: timers phase รันได้หลาย callback โดยระบายหลังแต่ละตัว
+
+`setTimeout(..., 0)` สองตัวตกลงใน **timers phase** เดียวกัน — แต่ Node ก็ยังระบาย `process.nextTick` กับ microtask queue **ระหว่างสองตัวนี้** ก่อนที่ callback ของ timer ตัวที่สองจะรัน:
+
+```js
+setTimeout(function() {
+  console.log('timer 1');
+  process.nextTick(function() {
+    console.log('  nextTick inside timer 1');
+  });
+  Promise.resolve().then(function() {
+    console.log('  promise inside timer 1');
+  });
+}, 0);
+
+setTimeout(function() {
+  console.log('timer 2');
+}, 0);
+
+// Output (verified on Node 24.13, x3):
+// timer 1
+//   nextTick inside timer 1
+//   promise inside timer 1
+// timer 2
+```
+
+ถ้า "หนึ่ง macrotask ต่อหนึ่งรอบ" เป็นจริง `timer 2` จะถูกจัดคิวไว้สำหรับรอบ**ถัดไป**และไม่ควรเห็นอะไรที่จัดคิวไว้ข้างใน `timer 1` แต่ในความเป็นจริง timer ทั้งสองตัวรันใน pass ของ timers-phase **เดียวกัน** และการระบายเกิดขึ้นหลังทุก callback — ไม่ใช่แค่ครั้งเดียวต่อ phase
+
 ## เดโมจัดลำดับที่รันได้
 
 เดโมนี้พิมพ์สี่บรรทัด ลองทายลำดับก่อนรัน:
@@ -73,7 +102,7 @@ callback ของ `process.nextTick` ถูกระบายก่อน micro
 
 หลังสคริปต์ synchronous ทำเสร็จ microtask ทั้งหมดจะระบายตามลำดับ แล้ว macrotask ค่อยทำงาน
 
-export const microMacroCode = `
+export const microMacroCode = `// @browser
 console.log('1 sync');
 
 setTimeout(function() {
@@ -97,8 +126,8 @@ queueMicrotask(function() {
 - `3 microtask (queueMicrotask)` — microtask ตัวที่สองที่จัดคิว
 - `4 macrotask` — ทำงานหลังจาก microtask queue ว่างแล้วเท่านั้น
 
-<Callout title="microtask ระบายก่อน macrotask ถัดไป">
-หลังแต่ละ task ทำเสร็จ เอนจินจะระบาย microtask queue ทั้งหมด — รวมถึง microtask ใหม่ที่เพิ่มเข้ามาระหว่างการระบาย — ก่อนจะหยิบ macrotask ถัดไป
+<Callout title="microtask ระบายหลังทุก callback">
+หลัง**ทุก callback แต่ละตัว** ทำเสร็จ — ไม่ใช่แค่ครั้งเดียวต่อ phase — Node จะระบาย `process.nextTick` แล้วตามด้วย microtask queue ทั้งหมด รวมถึง microtask ใหม่ที่เพิ่มเข้ามาระหว่างการระบาย ก่อนจะรัน callback ถัดไป
 </Callout>
 
 export const microMacroQuiz = [

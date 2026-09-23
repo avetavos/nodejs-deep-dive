@@ -32,8 +32,15 @@ var p = new Promise(function(resolve, reject) {
 `.then(onFulfilled)` returns a new Promise, allowing you to chain steps. `.catch(onRejected)` handles rejections. `.finally(fn)` runs regardless of outcome — useful for cleanup.
 
 ```js
+function fetchData() {
+  return Promise.resolve({ id: 1 });
+}
+function transform(data) {
+  return { ...data, done: true };
+}
+
 fetchData()
-  .then(function(data) { return process(data); })
+  .then(function(data) { return transform(data); })
   .then(function(result) { console.log('Done:', result); })
   .catch(function(err) { console.error('Failed:', err.message); })
   .finally(function() { console.log('Cleanup'); });
@@ -52,7 +59,7 @@ fetchData()
 
 The snippet creates two Promises that resolve immediately with fixed values, chains `.then`, uses `Promise.all`, and adds `.finally` for cleanup.
 
-export const promisesCode = `
+export const promisesCode = `// @browser
 var p1 = Promise.resolve('data-A');
 var p2 = Promise.resolve('data-B');
 
@@ -73,7 +80,7 @@ p1.then(function(data) {
 The output is always: `Fetched: data-A`, then `All done: data-A and data-B`, then `Finally: cleanup`.
 
 <Callout title="Always attach a catch">
-An unhandled promise rejection can crash a Node process (or log a warning in newer versions). Always chain `.catch()` or use try/catch with async/await.
+Since Node 15, an unhandled promise rejection **terminates the process by default** (`--unhandled-rejections=throw`). The old warn-only behavior is deprecated (DEP0018). Always chain `.catch()` or use try/catch with async/await.
 </Callout>
 
 export const promisesQuiz = [

@@ -27,6 +27,10 @@ The second argument to `setTimeout` is a callback. You hand control to the runti
 Node's built-in APIs use a consistent signature for callbacks:
 
 ```js
+const fs = require('node:fs');
+
+fs.writeFileSync('data.txt', 'hello from data.txt');
+
 fs.readFile('data.txt', 'utf8', function(err, data) {
   if (err) {
     console.error('Read failed:', err.message);
@@ -35,6 +39,8 @@ fs.readFile('data.txt', 'utf8', function(err, data) {
   console.log('File contents:', data);
 });
 ```
+
+The `node:` prefix marks a built-in module explicitly — it works everywhere `require('fs')` does, and is required (not just preferred) for a few newer built-ins like `node:test` and `node:sqlite`.
 
 The pattern is `(err, data)` — error always first, result second. If the operation succeeded, `err` is `null`. If it failed, `err` is an `Error` object and `data` is undefined.
 
@@ -45,6 +51,19 @@ The pattern is `(err, data)` — error always first, result second. If the opera
 When one async operation depends on the result of another, you nest callbacks:
 
 ```js
+function step1(callback) {
+  setTimeout(function() { callback(null, 'A'); }, 0);
+}
+function step2(input, callback) {
+  setTimeout(function() { callback(null, 'B'); }, 0);
+}
+function step3(input, callback) {
+  setTimeout(function() { callback(null, 'C'); }, 0);
+}
+function handleError(err) {
+  console.error('Error:', err.message);
+}
+
 step1(function(err, resultA) {
   if (err) return handleError(err);
   step2(resultA, function(err, resultB) {
@@ -63,7 +82,7 @@ This deep nesting — sometimes called **callback hell** or the **pyramid of doo
 
 The snippet below simulates two async steps using `setTimeout`. Each step uses the error-first callback pattern. Run it to see the output order.
 
-export const callbacksCode = `
+export const callbacksCode = `// @browser
 function step1(callback) {
   setTimeout(function() {
     callback(null, 'result-A');

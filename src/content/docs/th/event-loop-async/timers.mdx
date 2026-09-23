@@ -14,6 +14,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 `setTimeout(fn, delay)` จัดคิวให้ `fn` ทำงานเป็น **macrotask** หลังจากผ่านไปอย่างน้อย `delay` มิลลิวินาที ค่า delay เป็น **ค่าต่ำสุด** — ไม่ใช่การรับประกัน ถ้า call stack ไม่ว่างตอน timer ทำงาน callback จะรอจนกว่า stack จะว่าง
 
+Node จะปัดค่า delay ที่ต่ำกว่า 1 ms ขึ้นเป็น **1 ms** เสมอ — ไม่ว่าจะใส่ `0` หรือค่าติดลบ ก็จะทำงานหลังจากประมาณ 1 ms ทั้งคู่ (ค่าติดลบยังขึ้น `TimeoutNegativeWarning` ด้วย) ตัวเลข "ขั้นต่ำ 4 ms" ที่มักอ้างถึงเป็นกฎของ **เบราว์เซอร์** สำหรับ timer ที่ซ้อนลึกตั้งแต่ 5 ชั้นขึ้นไป — ไม่ใช้กับ `setTimeout` ของ Node
+
 ```js
 var id = setTimeout(function() {
   console.log('Runs after at least 100 ms');
@@ -60,7 +62,7 @@ queueMicrotask(function() {
 
 เดโมนี้แสดงว่า `setTimeout(fn, 0)` ยังทำงาน **หลัง** `.then` ของ Promise ที่ resolve แล้ว เพราะ callback ของ timer เป็น macrotask และ microtask ระบายก่อน
 
-export const timersCode = `
+export const timersCode = `// @browser
 setTimeout(function() {
   console.log('Timer ran second');
 }, 0);
