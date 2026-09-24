@@ -32,13 +32,13 @@ export const runnerDecisionMermaid = `flowchart TB
 Node ลบ type annotations ตอนโหลดไฟล์แล้วรัน JavaScript ที่เหลือ ไม่ต้องติดตั้ง ไม่ต้องตั้งค่า — แต่ **ไม่ได้ตรวจสอบ type** และไม่อ่าน `tsconfig.json`:
 
 ```bash
-# Node 22.18+ / 24 / 26 — รันไฟล์ได้เลย
+# Node 22.18+ / 24 / 26 — just run the file
 node src/app.ts
 
-# Node 22.x รุ่นเก่ากว่านั้นต้องใส่ flag
+# Older 22.x releases needed the flag
 node --experimental-strip-types src/app.ts
 
-# แยกการตรวจ type ไว้เป็นอีกขั้น (CI, pre-commit)
+# Keep type-checking as a separate step (CI, pre-commit)
 npx tsc --noEmit
 ```
 
@@ -79,13 +79,13 @@ Type stripping **เปิดเป็นค่าเริ่มต้นบน
 `tsx` เป็น wrapper เบา ๆ รอบ esbuild รองรับ TypeScript ทุกฟีเจอร์และเริ่มในเวลามิลลิวินาที:
 
 ```bash
-# รันครั้งเดียว
+# Run once
 npx tsx src/app.ts
 
-# Watch mode — auto-restart เมื่อไฟล์เปลี่ยน
+# Watch mode — auto-restart on changes
 npx tsx watch src/app.ts
 
-# ติดตั้งเป็น dev dependency
+# Install as a dev dependency
 npm install --save-dev tsx
 ```
 
@@ -96,10 +96,10 @@ npm install --save-dev tsx
 ```bash
 npm install --save-dev ts-node typescript
 
-# รันไฟล์
+# Run a file
 npx ts-node src/app.ts
 
-# ESM mode (tsconfig ต้องมี "module": "NodeNext")
+# ESM mode (tsconfig must have "module": "NodeNext")
 npx ts-node --esm src/app.ts
 ```
 
@@ -108,14 +108,14 @@ npx ts-node --esm src/app.ts
 ### ESLint — ตรวจจับ logic errors และบังคับใช้ style rules
 
 ```bash
-# ติดตั้ง ESLint พร้อม TypeScript support
+# Install ESLint with TypeScript support
 npm install --save-dev eslint @eslint/js typescript-eslint
 
-# สร้าง flat config (eslint.config.mjs)
-# จากนั้นรัน:
+# Create a flat config (eslint.config.mjs)
+# then run:
 npx eslint src/
 
-# Auto-fix ปัญหาที่แก้ได้อัตโนมัติ
+# Auto-fix fixable issues
 npx eslint --fix src/
 ```
 
@@ -167,10 +167,10 @@ bad.js
 ```bash
 npm install --save-dev prettier
 
-# Format ไฟล์ทั้งหมด
+# Format all files
 npx prettier --write .
 
-# ตรวจสอบ formatting โดยไม่เปลี่ยนไฟล์ (สำหรับ CI)
+# Check formatting without changing files (for CI)
 npx prettier --check .
 ```
 
@@ -184,7 +184,7 @@ Biome แทนที่ ESLint + Prettier ด้วยเครื่องม�
 npm install --save-dev @biomejs/biome
 npx biome init
 
-# Lint และ format ในรอบเดียว
+# Lint and format in one pass
 npx biome check --apply src/
 ```
 
@@ -193,10 +193,10 @@ npx biome check --apply src/
 ### Node built-in watch (stable ตั้งแต่ Node 22)
 
 ```bash
-# Restart เมื่อไฟล์เปลี่ยน — ไม่ต้องติดตั้งอะไร
+# Restart on any file change — no install required
 node --watch src/app.js
 
-# Watch ไฟล์เฉพาะ
+# Watch specific files
 node --watch-path=src src/app.js
 ```
 
@@ -205,10 +205,10 @@ node --watch-path=src src/app.js
 ```bash
 npm install --save-dev nodemon
 
-# ใช้งานพื้นฐาน
+# Basic usage
 npx nodemon src/app.js
 
-# กับ TypeScript ผ่าน tsx
+# With TypeScript via tsx
 npx nodemon --exec "npx tsx" src/app.ts
 
 # nodemon.json config
@@ -227,10 +227,10 @@ npx nodemon --exec "npx tsx" src/app.ts
 ### Native .env loading (stable ตั้งแต่ 22.21 / 24.10)
 
 ```bash
-# โหลด .env โดยไม่ต้องใช้ dotenv
+# Load a .env file without dotenv
 node --env-file=.env src/app.js
 
-# โหลด env files หลายไฟล์ (ไฟล์หลังจะ override ไฟล์ก่อน)
+# Load multiple env files (later files override earlier)
 node --env-file=.env --env-file=.env.local src/app.js
 ```
 
@@ -271,16 +271,16 @@ console.log(process.env.DATABASE_URL); // from .env
 ### best practices สำหรับ env files
 
 ```bash
-# .env — ค่า default, commit ใน git (ไม่มี secrets)
+# .env — default values, committed to git (no secrets)
 NODE_ENV=development
 PORT=3000
 LOG_LEVEL=info
 
-# .env.local — overrides เฉพาะเครื่อง, ไม่ commit (ใน .gitignore)
+# .env.local — local overrides, NOT committed (in .gitignore)
 DATABASE_URL=postgres://localhost:5432/mydb
 SECRET_KEY=dev-only-secret
 
-# .env.example — template แสดง vars ที่ต้องการ, commit ไว้
+# .env.example — template showing required vars, committed
 DATABASE_URL=
 SECRET_KEY=
 ```
@@ -292,7 +292,7 @@ SECRET_KEY=
 `node --run <script>` รัน script ใน `package.json` โดยไม่ผ่าน npm — เริ่มเร็วกว่าและไม่ inject environment ของ npm เข้ามา:
 
 ```bash
-node --run dev        # เหมือน `npm run dev` แต่ไม่เสียเวลา startup ของ npm
+node --run dev        # same as `npm run dev`, minus npm's startup cost
 node --run test
 ```
 

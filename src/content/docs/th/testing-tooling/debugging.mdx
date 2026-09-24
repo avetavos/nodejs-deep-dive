@@ -17,10 +17,10 @@ import SpotTheBug from '../../../../components/SpotTheBug.astro';
 Node มี inspector ในตัวที่อิงจาก Chrome DevTools Protocol เริ่มใช้งานด้วย flag `--inspect` แล้วเชื่อมต่อด้วย debugger ที่รองรับ CDP ได้ทุกตัว — Chrome DevTools, VS Code, หรือ WebStorm
 
 ```bash
-# เริ่มพร้อม inspector (process ยังทำงานต่อ เชื่อมต่อได้ตามต้องการ)
+# Start with inspector (process continues running, connects on demand)
 node --inspect src/app.js
 
-# เริ่มและหยุด (pause) ที่บรรทัดแรกของโค้ด
+# Start AND pause on the very first line of your code
 node --inspect-brk src/app.js
 ```
 
@@ -309,27 +309,27 @@ callback ของ interval ที่ throw ตอน `counter === 2` ไม่�
 ## ขั้นตอนการดีบักที่ใช้งานจริง
 
 ```bash
-# 1. เพิ่ม --inspect-brk เพื่อหยุดก่อนที่โค้ดจะรัน
+# 1. Add --inspect-brk to pause before any code runs
 node --inspect-brk src/server.js
 
-# 2. เปิด chrome://inspect → คลิก target ของคุณ
+# 2. Open chrome://inspect → click your target
 
-# 3. ตั้ง breakpoints ใน Sources panel หรือรอที่ debugger statement
+# 3. Set breakpoints in the Sources panel, or hit the existing debugger statement
 
 # 4. Step through: F10 (step over), F11 (step into), F8 (resume)
 
-# 5. ตรวจสอบตัวแปรใน Scope panel หรือ hover ดู
+# 5. Inspect variables in the Scope panel or hover over them
 
-# 6. ใช้ Console panel เพื่อรัน expression ใน scope ปัจจุบัน
+# 6. Use the Console panel to run expressions in the current scope
 ```
 
 ## การดีบักกับ nodemon (watch + inspect)
 
 ```bash
-# Auto-restart และเปิด inspector ไว้เมื่อไฟล์เปลี่ยน
+# Auto-restart AND keep inspector open on changes
 npx nodemon --inspect src/app.js
 
-# กับ ts-node สำหรับ TypeScript
+# With ts-node for TypeScript
 npx nodemon --exec "node --inspect --loader ts-node/esm" src/app.ts
 ```
 

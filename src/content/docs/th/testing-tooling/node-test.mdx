@@ -681,16 +681,16 @@ test('notifyUser sends an email', async () => {
 ## ฟีเจอร์เพิ่มเติม
 
 ```bash
-# รันเฉพาะ test ที่ตรงกับ pattern
+# Only run tests matching a pattern
 node --test --test-name-pattern "Array"
 
-# Watch mode — รัน test ใหม่เมื่อไฟล์เปลี่ยน (stable ไม่มี warning)
+# Watch mode — re-runs on file change (stable, no warning)
 node --test --watch
 
-# Code coverage — flag ยังเป็น --experimental-test-coverage ใน Node 24 / 26
+# Code coverage — the flag is still --experimental-test-coverage in Node 24 / 26
 node --test --experimental-test-coverage
 
-# รัน test files แบบ parallel (ค่าเริ่มต้น); จำกัดจำนวน worker
+# Parallel test files (the default); cap the workers
 node --test --test-concurrency=4
 ```
 

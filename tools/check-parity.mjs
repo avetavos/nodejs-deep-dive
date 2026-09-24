@@ -52,11 +52,30 @@ function countHeadings(src) {
   return (stripFrontmatter(src).match(/^## .*/gm) || []).length;
 }
 
-// Fenced code blocks tagged ```js — the only fence language this course
+// Every fence except text/mermaid/markdown counts as code and must be byte-identical EN/TH.
+// Untagged fences count as code too — tag prose-like listings ```text explicitly.
+// (historical note:) Fenced code blocks tagged ```js — the only fence language this course
 // guarantees stays English (```text fences are used for Thai-captioned
 // ASCII diagrams and are intentionally not checked here).
+const NON_CODE = new Set(['text', 'txt', 'plain', 'mermaid', 'md', 'markdown']);
+// Quiz arrays (`export const x = [ ... ];`) are removed first: a q string that
+// embeds a fence on one physical line (\n escapes) would otherwise pair with a
+// later fence and produce phantom diffs. Quiz content is checked separately.
+function stripQuizArrays(src) {
+  let out = '';
+  let i = 0;
+  const re = /export\s+const\s+\w+\s*=\s*\[/g;
+  let m;
+  while ((m = re.exec(src))) {
+    if (m.index < i) continue;
+    out += src.slice(i, m.index);
+    i = scanBalanced(src, m.index + m[0].length, '[', ']');
+    re.lastIndex = i;
+  }
+  return out + src.slice(i);
+}
 function fencedJsBlocks(src) {
-  return [...src.matchAll(/```js\n([\s\S]*?)```/g)].map((m) => m[1]);
+  return [...stripQuizArrays(src).matchAll(/```(\w*)[^\n]*\n([\s\S]*?)```/g)].filter((m) => !NON_CODE.has(m[1])).map((m) => m[2]);
 }
 
 // Parse a quoted string literal (', ", or `) starting at index i.
@@ -316,23 +335,23 @@ for (const enPath of files) {
     });
   }
 
-  // 7. every fenced ```js block is byte-identical EN vs TH (fences ARE the
+  // 7. every fenced code block is byte-identical EN vs TH (fences ARE the
   //    code in this course; TS Playground/verify-fences run the EN copy only)
   {
     const enF = fencedJsBlocks(enSrc), thF = fencedJsBlocks(thSrc);
     if (enF.length !== thF.length) {
-      report(`${enPath}: js fence count EN=${enF.length} TH=${thF.length}`);
+      report(`${enPath}: code fence count EN=${enF.length} TH=${thF.length}`);
     } else {
-      enF.forEach((b, i) => { if (b !== thF[i]) report(`${enPath}: js fence #${i} differs EN vs TH`); });
+      enF.forEach((b, i) => { if (b !== thF[i]) report(`${enPath}: code fence #${i} differs EN vs TH`); });
     }
   }
 
-  // 6. no Thai characters inside a fenced ```js block or code literal in TH file
+  // 6. no Thai characters inside a fenced code block or code literal in TH file
   {
     const enFences = fencedJsBlocks(enSrc);
     fencedJsBlocks(thSrc).forEach((block, i) => {
       if (THAI_RE.test(block) && block !== enFences[i]) {
-        report(`${thPath}: Thai characters inside fenced \`\`\`js block #${i}`);
+        report(`${thPath}: Thai characters inside fenced code block #${i}`);
       }
     });
   }

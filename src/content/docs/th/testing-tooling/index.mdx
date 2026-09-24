@@ -63,19 +63,19 @@ export const toolchainDiagram = `flowchart TB
 Built-in ของ Node ครอบคลุมความต้องการพื้นฐานได้เกือบทั้งหมด นี่คือแนวทางการตัดสินใจเบื้องต้น:
 
 ```bash
-# ไม่ต้องติดตั้ง dependency — ใช้ built-in runner
+# Zero dependencies — use the built-in runner
 node --test src/**/*.test.js
 
-# TypeScript โดยไม่ต้อง build (Node 22.18+ / 24 — type stripping เปิดเป็นค่าเริ่มต้น)
+# TypeScript without a build step (Node 22.18+ / 24 — type stripping is on by default)
 node src/app.ts
 
-# รัน script ใน package.json โดยไม่ผ่าน npm (Node 22+)
+# Run a package.json script without npm (Node 22+)
 node --run dev
 
-# HMR + watch mode ที่เร็วกว่า
+# Faster HMR + watch mode
 npx tsx watch src/app.ts
 
-# Lint + format ในเครื่องมือเดียว (zero config)
+# Lint + format in one tool (zero config)
 npx biome check --apply src/
 ```
 

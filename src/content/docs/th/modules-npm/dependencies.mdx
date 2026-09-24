@@ -18,54 +18,53 @@ import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 `dependencies` คือ package ที่โค้ดของคุณต้องการเมื่อ **ทำงานจริง** เมื่อผู้ใช้ติดตั้ง package ของคุณ npm จะ install `dependencies` เหล่านี้ไปด้วย
 
+```bash
+npm install express
+```
+
+คำสั่งนี้เพิ่ม `express` เข้าไปในส่วน `"dependencies"` ของ `package.json`:
+
 ```json
 {
   "dependencies": {
-    "express": "^4.18.2",
-    "zod": "^3.22.0"
+    "express": "^4.18.2"
   }
 }
-```
-
-ติดตั้ง dependency ใหม่:
-
-```bash
-npm install express
 ```
 
 ## devDependencies
 
 `devDependencies` คือ package ที่ต้องใช้เฉพาะระหว่าง **การพัฒนา** เช่น test runner, linter, bundler หรือ type definitions ไม่ถูก install เมื่อผู้ใช้ติดตั้ง package ของคุณ และไม่ถูก install ใน environment production เมื่อรัน `npm ci --omit=dev`
 
+```bash
+npm install --save-dev eslint vitest typescript
+```
+
 ```json
 {
   "devDependencies": {
-    "vitest": "^1.2.0",
     "eslint": "^8.57.0",
-    "@types/node": "^20.11.0"
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
   }
 }
-```
-
-ติดตั้ง dev dependency:
-
-```bash
-npm install --save-dev vitest
 ```
 
 ## peerDependencies
 
-`peerDependencies` ระบุ package ที่ **ผู้ใช้ต้องจัดหาเอง** วิธีนี้ป้องกันไม่ให้มี instance ซ้ำซ้อนของ library ที่ใช้ state ร่วมกัน เช่น React หรือ webpack
+`peerDependencies` ระบุ package ที่ **ผู้ใช้ต้องจัดหาเอง** นี่คือรูปแบบที่ถูกต้องสำหรับ plugin, framework integration และ shared library ที่ไม่ควรถูก bundle แยกไว้ในทุก package ที่ใช้มัน
 
 ```json
 {
+  "name": "eslint-plugin-my-rules",
+  "version": "1.0.0",
   "peerDependencies": {
-    "react": ">=17.0.0"
+    "eslint": ">=8.0.0"
   }
 }
 ```
 
-npm 7 ขึ้นไปจะ install peer dependencies โดยอัตโนมัติ แต่จะแจ้งเตือนหาก version ไม่ตรงกัน
+ตั้งแต่ npm 7 เป็นต้นมา `npm install` จะ **ติดตั้งให้อัตโนมัติ** เมื่อ peer dependency ที่ขาดไปสามารถ resolve version ที่ตรงกับ range ได้ — ไม่ต้องมีขั้นตอนหรือ flag เพิ่มเติม npm จะแจ้งเตือน peer dependency ก็ต่อเมื่อไม่สามารถ resolve ได้อัตโนมัติเท่านั้น (เช่น version ที่ติดตั้งอยู่แล้วขัดกับ range ที่ต้องการ) ตัว plugin เองไม่เคยรวมสำเนา `eslint` ของตัวเองมาด้วย — มันใช้ตัวที่อยู่ในโปรเจกต์ของผู้ใช้
 
 ## Lockfiles
 
@@ -73,15 +72,10 @@ npm สร้าง `package-lock.json` เมื่อรัน `npm install` �
 
 ```json
 {
-  "name": "my-app",
-  "lockfileVersion": 3,
-  "requires": true,
-  "packages": {
-    "node_modules/express": {
-      "version": "4.18.2",
-      "resolved": "https://registry.npmjs.org/express/-/express-4.18.2.tgz",
-      "integrity": "sha512-..."
-    }
+  "node_modules/ms": {
+    "version": "2.1.3",
+    "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+    "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTg=="
   }
 }
 ```
@@ -115,11 +109,11 @@ tampered matches lockfile: false`;
 ## npm install เทียบกับ npm ci
 
 ```bash
-# npm install — อัปเดต lockfile หากไม่ตรงกับ package.json
+# npm install — resolves and potentially updates the lockfile
 npm install
 
-# npm ci — ใช้ lockfile ทุกอย่างตามตัวอักษร; ล้ม node_modules เก่าก่อนเสมอ
-# จะ fail หาก package-lock.json ไม่ sync กับ package.json
+# npm ci — installs exactly what is in the lockfile; fails if package.json
+# and package-lock.json are out of sync; always starts with a clean slate
 npm ci
 ```
 
